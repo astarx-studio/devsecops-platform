@@ -1,5 +1,7 @@
 # Maintainer Reference
 
+← [Back to docs home](../index.md)
+
 **Audience:** Platform engineers and contributors who maintain, extend, or debug this DevOps platform.
 
 This section is intentionally dense and technical. It is not written for end users or developers using the platform—those audiences have their own sections (`01_infra`, `02_admin`, `03_devs`). Everything here assumes you have already read those sections and now need to understand the internals.

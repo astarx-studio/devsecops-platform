@@ -1,5 +1,7 @@
 # Management API Internals
 
+← [Back to Maintainer Guide](index.md)
+
 The Management API is a NestJS 11 application located at `api/`. It is the orchestration layer of the platform — the only service that directly talks to GitLab, Kong, Vault, and Cloudflare on behalf of operators and CI/CD automation.
 
 ---

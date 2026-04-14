@@ -1,5 +1,7 @@
 # Contributing
 
+← [Back to Maintainer Guide](index.md)
+
 This document covers how to set up a local development environment, run the test suite, add new services to the platform, and extend the Management API.
 
 ---
@@ -40,7 +42,7 @@ You will need to adjust your `.env` to use `localhost` + host-exposed ports for 
 | `GITLAB_URL` | `http://gitlab` | `http://localhost` (or the public URL) |
 | `KONG_ADMIN_URL` | `http://kong:8001` | `http://localhost:18001` |
 | `VAULT_URL` | `http://vault:8200` | `http://localhost:18200` |
-| `OIDC_JWKS_URL` | `http://keycloak:8080/realms/devops/...` | `http://localhost:18081/realms/devops/...` (if keycloak is exposed) |
+| `OIDC_JWKS_URL` | `http://keycloak:8080/realms/devops/...` | Use the public URL (`https://auth.devops.yourdomain.com/realms/devops/protocol/openid-connect/certs`) — Keycloak has no host-exposed port |
 
 ### Building
 

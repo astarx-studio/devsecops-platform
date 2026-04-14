@@ -42,7 +42,7 @@ Every time you push commits to GitLab, a CI/CD pipeline starts automatically. Th
 
 The default template configuration runs these stages in order:
 
-- **test** — Runs your test suite and any linting. If this fails, the pipeline stops.
+- **lint** — Runs your linter. If this fails, the pipeline stops.
 - **build** — Builds a Docker image and pushes it to the container registry. The image tag matches the commit SHA so you always know which build produced which image.
 - **deploy** — Runs deployment steps. In the default template, this is set as a manual step — you trigger it by clicking the play button in the pipeline view.
 

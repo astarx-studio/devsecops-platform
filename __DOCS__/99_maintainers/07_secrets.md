@@ -1,5 +1,7 @@
 # Secrets Management
 
+← [Back to Maintainer Guide](index.md)
+
 This document covers Vault's configuration, the KV v2 secret path structure, the OIDC auth method setup, Keycloak client configuration for secrets-accessing services, and operational procedures.
 
 ---
@@ -110,7 +112,7 @@ vault write auth/oidc/config \
   default_role="default"
 ```
 
-`KEYCLOAK_ISSUER_URL` is the **internal** Keycloak URL: `http://keycloak:8080/realms/devops`. Vault uses this to fetch the discovery document (`.well-known/openid-configuration`) and the JWKS endpoint.
+`KEYCLOAK_ISSUER_URL` is sourced from `${OIDC_ISSUER_URL}` in `.env`, which is the **external** public Keycloak URL (e.g. `https://auth.devops.yourdomain.com/realms/devops`). This resolves correctly inside the Docker network because Traefik is aliased to all `*.devops.<DOMAIN>` hostnames on `devops-network`, so internal DNS resolution of `auth.devops.yourdomain.com` routes to Traefik → Keycloak without leaving the host. Vault uses this URL to fetch the discovery document (`.well-known/openid-configuration`) and the JWKS endpoint.
 
 ### 3. Create default role
 
@@ -269,28 +271,10 @@ docker exec vault vault operator unseal <key>
 
 ## Secret access from CI/CD
 
-Project secrets stored in Vault are not automatically injected into GitLab CI jobs. There are two patterns for accessing them:
+Project secrets stored in Vault are not automatically injected into GitLab CI jobs. In v1, the supported pattern is:
 
-### Pattern A: Manual fetch in CI (recommended for sensitive data)
+### GitLab CI masked variables
 
-```yaml
-# In .gitlab-ci.yml
-before_script:
-  - |
-    # Authenticate to Vault using OIDC
-    VAULT_TOKEN=$(vault write -field=token auth/oidc/login \
-      role=default \
-      jwt=${CI_JOB_JWT})
-    # Read secrets
-    PROJECT_SECRET=$(vault kv get -field=MY_SECRET secret/projects/${CLIENT}/${PROJECT})
-```
+An operator reads the secrets from Vault and manually adds them as masked CI/CD variables in the GitLab project settings (**Settings → CI/CD → Variables**). Mark each variable as **Masked** so its value is redacted from job logs.
 
-Requires the runner to have `vault` CLI available, or use `hvac` (Python) or `node-vault` (Node.js).
-
-### Pattern B: GitLab Vault integration (native)
-
-GitLab has native JWT-based Vault integration. Configure it in GitLab's project settings → CI/CD → Variables, using the `vault` keyword in `.gitlab-ci.yml`. This requires a Vault JWT auth method configured with the GitLab JWKS endpoint.
-
-### Pattern C: GitLab CI masked variables
-
-For the simplest case, an operator can read the secrets from Vault and manually add them as masked CI/CD variables in the GitLab project. This is the least automated approach but requires no additional configuration.
+This is the only pattern that works out of the box with the current v1 Vault setup (OIDC auth method configured against Keycloak, not GitLab). Automated Vault-in-CI patterns (e.g., using GitLab ID tokens against a Vault JWT auth method) require additional Vault configuration not included in v1.

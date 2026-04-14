@@ -1,5 +1,7 @@
 # Architecture
 
+← [Back to Maintainer Guide](index.md)
+
 This document describes the structural design of the platform from multiple viewpoints: system context, container layout, component relationships, and key design decisions.
 
 ---
@@ -63,6 +65,8 @@ graph LR
         mgmtapi["NestJS API\nProject provisioning\nTemplate/Config CRUD"]
     end
 
+    CFAPI["Cloudflare API\n(cloud — api.cloudflare.com)"]
+
     cloudflared -->|"forwards traffic"| traefik
     traefik -->|"kong-catchall rule"| kong
     traefik -->|"ForwardAuth check"| oauth2proxy
@@ -80,7 +84,7 @@ graph LR
     mgmtapi -->|"REST API"| gitlab
     mgmtapi -->|"REST API"| kong
     mgmtapi -->|"REST API"| vault
-    mgmtapi -->|"REST API"| cloudflared
+    mgmtapi -->|"REST API (DNS records)"| CFAPI
     runner -->|"pull/push images"| gitlab
     runner -->|"run jobs"| gitlab
 ```

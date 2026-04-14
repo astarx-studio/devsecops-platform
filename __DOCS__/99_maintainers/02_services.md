@@ -1,5 +1,7 @@
 # Services Reference
 
+← [Back to Maintainer Guide](index.md)
+
 Each service in the Docker Compose stack is documented here with its image, host-exposed ports, volumes, critical environment variables, health check logic, and known operational notes.
 
 All services share the `devops-network` Docker bridge network. The network name is driven by `${DOCKER_NETWORK}` (default: `devops-network`).
@@ -106,7 +108,7 @@ Runs `kong migrations bootstrap` once. Exits with code 0 on success or if migrat
 | `KONG_PROXY_ERROR_LOG` / `KONG_ADMIN_ERROR_LOG` | Error log targets (`/dev/stderr`) |
 | `KONG_ADMIN_LISTEN` | `0.0.0.0:8001` |
 
-**Health check:** `kong health` CLI. Interval 10s, timeout 5s, 5 retries, 30s start period.
+**Health check:** `kong health` CLI. Interval 15s, timeout 5s, 5 retries, 30s start period.
 
 **Traefik Docker labels (defined in `docker-compose.yml`):**
 - Routes `${KONG_ADMIN_DOMAIN}` → port `8001`.

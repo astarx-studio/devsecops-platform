@@ -1,5 +1,7 @@
 # Data Flows
 
+← [Back to Maintainer Guide](index.md)
+
 This document traces the key runtime flows through the platform using sequence diagrams. Each flow shows the exact services involved, the protocol used, and what happens at each step.
 
 ---

@@ -1,5 +1,7 @@
 # CI/CD Internals
 
+← [Back to Maintainer Guide](index.md)
+
 This document covers the GitLab Runner setup, shared CI/CD config repository architecture, pipeline template anatomy, and how project pipelines are composed.
 
 ---
@@ -105,7 +107,14 @@ The `.node-publish` job writes a `.npmrc` at job runtime:
 
 ### `configs/docker-pipeline`
 
-Provides Docker image build and push jobs (image name: `$CI_REGISTRY_IMAGE:latest`). Details are in `configs/docker-pipeline/.gitlab-ci.yml`.
+Provides two Docker image build and push hidden jobs:
+
+| Job | Stage | Trigger | Description |
+|---|---|---|---|
+| `.docker-build` | `build` | Default branch only | Builds and pushes `$CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA` + `$CI_REGISTRY_IMAGE:latest`. Uses `--cache-from latest` for layer caching. |
+| `.docker-build-tagged` | `build` | Tag `v*.*.*` | Extends `.docker-build` but tags as `$CI_REGISTRY_IMAGE:$CI_COMMIT_TAG` instead of `latest`. |
+
+Both jobs use `docker:dind` as a service and require `DOCKER_TLS_CERTDIR="/certs"` for DinD TLS communication.
 
 ### `configs/deploy-compose`
 

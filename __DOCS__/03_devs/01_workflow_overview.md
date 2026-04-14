@@ -49,7 +49,7 @@ Every push to the repository automatically triggers a CI/CD pipeline. You can wa
 
 The default template pipeline runs in stages:
 
-1. **Lint / test** — Checks code quality and runs automated tests. If this fails, later stages don't run.
+1. **Lint** — Checks code quality and runs automated tests. If this fails, later stages don't run.
 2. **Build** — Builds a Docker image from your `Dockerfile` and pushes it to the container registry.
 3. **Deploy** — Deploys the built image. In v1, this stage may be configured as a manual trigger (you click a button) rather than running automatically.
 

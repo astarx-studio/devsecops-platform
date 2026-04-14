@@ -1,5 +1,7 @@
 # Networking
 
+← [Back to Maintainer Guide](index.md)
+
 This document covers the Docker network topology, Traefik static and dynamic configuration, Kong declarative routing, and the DNS/domain strategy.
 
 ---

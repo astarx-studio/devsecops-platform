@@ -31,7 +31,7 @@ DOMAIN=yourdomain.com
 APPS_DOMAIN=apps.yourdomain.com
 ```
 
-Replace `skaraam.net` (the default in the template) with your own domain. `DOMAIN` is your base domain. `APPS_DOMAIN` is the domain used for applications that developers deploy through the platform.
+Set `DOMAIN` to your base domain. Set `APPS_DOMAIN` to the domain used for applications that developers deploy through the platform.
 
 The remaining `*_DOMAIN` variables (`TRAEFIK_DOMAIN`, `KEYCLOAK_DOMAIN`, etc.) are already pre-filled with the correct subdomains based on the platform's naming convention. You only need to change them if you want to use different subdomain names.
 
@@ -41,12 +41,11 @@ The remaining `*_DOMAIN` variables (`TRAEFIK_DOMAIN`, `KEYCLOAK_DOMAIN`, etc.) a
 
 ```
 TRAEFIK_ACME_EMAIL=your-email@example.com
-TRAEFIK_DASHBOARD_ENABLED=true
 ```
 
 `TRAEFIK_ACME_EMAIL` — Replace this with your real email address. Let's Encrypt will use it to notify you about certificate expiry or important issues. It's not displayed publicly — it's just for Let's Encrypt's records.
 
-`TRAEFIK_DASHBOARD_ENABLED` controls whether Traefik's built-in monitoring dashboard is accessible at `https://traefik.devops.yourdomain.com`. Set it to `true` to enable it (protected by oauth2-proxy/Keycloak login) or `false` to disable it entirely. Leave it as `true` unless you have a specific reason to hide the dashboard.
+The Traefik dashboard is always enabled and accessible at `https://traefik.devops.yourdomain.com`, protected by the oauth2-proxy/Keycloak login. To disable it, remove or comment out the `traefik-dashboard` router labels from the `traefik` service in `docker-compose.yml`.
 
 ---
 
@@ -205,13 +204,12 @@ CORS_CREDENTIALS=false
 ```
 KC_CLIENT_SECRET_GITLAB=CHANGE-ME-GITLAB-CLIENT-SECRET
 KC_CLIENT_SECRET_VAULT=CHANGE-ME-VAULT-CLIENT-SECRET
-KC_CLIENT_SECRET_API=CHANGE-ME-API-CLIENT-SECRET
 KC_CLIENT_SECRET_OAUTH2_PROXY=CHANGE-ME-OAUTH2-PROXY-CLIENT-SECRET
 ```
 
 These are shared secrets between each service and Keycloak. They're used during the login handshake to verify that a service is who it claims to be. The values you put here must match the values inside `keycloak/realm-export.json`.
 
-The defaults in `sample.env` and `realm-export.json` are intentionally placeholder strings — change all four of them to unique random strings (e.g., run `openssl rand -hex 32` four times and use those). Make sure the values are identical in both `.env` and `realm-export.json`.
+The defaults in `sample.env` and `realm-export.json` are intentionally placeholder strings — change all three of them to unique random strings (e.g., run `openssl rand -hex 32` three times and use those). Make sure the values are identical in both `.env` and `realm-export.json`.
 
 ---
 
@@ -221,10 +219,10 @@ The defaults in `sample.env` and `realm-export.json` are intentionally placehold
 OAUTH2_PROXY_COOKIE_SECRET=change-me-32-byte-cookie-secret!
 ```
 
-This is used to sign browser cookies for services that use oauth2-proxy for authentication (the Traefik dashboard and Kong admin panel). It must be exactly 32 characters. Generate a safe value with:
+This is used to sign browser cookies for services that use oauth2-proxy for authentication (the Traefik dashboard and Kong admin panel). It must be exactly 32 bytes. Generate a safe value with:
 
 ```bash
-openssl rand -base64 24
+openssl rand -base64 32 | head -c 32
 ```
 
 ---
