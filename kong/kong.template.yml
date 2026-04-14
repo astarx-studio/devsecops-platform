@@ -1,0 +1,129 @@
+# ==========================================================================
+# Kong Gateway — decK Declarative Configuration Template
+# ==========================================================================
+# Platform service routes synced into Kong's database via decK.
+# This file uses ${VAR} placeholders substituted at runtime by envsubst
+# in the kong-deck-sync container before syncing.
+#
+# To re-sync manually:
+#   docker compose run --rm kong-deck-sync
+#
+# To dump current Kong state:
+#   docker run --rm --network devops-network kong/deck \
+#     gateway dump --kong-addr http://kong:8001
+# ==========================================================================
+
+_format_version: "3.0"
+
+services:
+  - name: keycloak-service
+    url: http://keycloak:8080
+    connect_timeout: 10000
+    read_timeout: 60000
+    write_timeout: 60000
+    retries: 3
+    routes:
+      - name: keycloak-route
+        hosts:
+          - ${KEYCLOAK_DOMAIN}
+        protocols:
+          - http
+          - https
+        strip_path: false
+        preserve_host: true
+
+  - name: vault-service
+    url: http://vault:8200
+    connect_timeout: 10000
+    read_timeout: 60000
+    write_timeout: 60000
+    retries: 3
+    routes:
+      - name: vault-route
+        hosts:
+          - ${VAULT_DOMAIN}
+        protocols:
+          - http
+          - https
+        strip_path: false
+        preserve_host: true
+
+  - name: kong-proxy-service
+    url: http://kong:8001
+    connect_timeout: 10000
+    read_timeout: 60000
+    write_timeout: 60000
+    retries: 1
+    routes:
+      - name: kong-proxy-route
+        hosts:
+          - ${KONG_DOMAIN}
+        protocols:
+          - http
+          - https
+        strip_path: false
+        preserve_host: true
+
+  - name: gitlab-service
+    url: http://gitlab:80
+    connect_timeout: 10000
+    read_timeout: 300000
+    write_timeout: 300000
+    retries: 3
+    routes:
+      - name: gitlab-route
+        hosts:
+          - ${GITLAB_DOMAIN}
+        protocols:
+          - http
+          - https
+        strip_path: false
+        preserve_host: true
+
+  - name: gitlab-registry-service
+    url: http://gitlab:5000
+    connect_timeout: 10000
+    read_timeout: 600000
+    write_timeout: 600000
+    retries: 3
+    routes:
+      - name: gitlab-registry-route
+        hosts:
+          - ${GITLAB_REGISTRY_DOMAIN}
+        protocols:
+          - http
+          - https
+        strip_path: false
+        preserve_host: true
+
+  - name: api-service
+    url: http://api:3000
+    connect_timeout: 10000
+    read_timeout: 60000
+    write_timeout: 60000
+    retries: 3
+    routes:
+      - name: api-route
+        hosts:
+          - ${API_DOMAIN}
+        protocols:
+          - http
+          - https
+        strip_path: false
+        preserve_host: true
+
+  - name: oauth2-proxy-service
+    url: http://oauth2-proxy:4180
+    connect_timeout: 10000
+    read_timeout: 60000
+    write_timeout: 60000
+    retries: 3
+    routes:
+      - name: oauth2-proxy-route
+        hosts:
+          - ${OAUTH_DOMAIN}
+        protocols:
+          - http
+          - https
+        strip_path: false
+        preserve_host: true

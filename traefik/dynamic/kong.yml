@@ -1,0 +1,42 @@
+# ==========================================================================
+# Traefik Dynamic Configuration — Kong Catch-All + OIDC ForwardAuth
+# ==========================================================================
+# Forwards all traffic to Kong API Gateway at priority 1 (lowest).
+# Higher-priority routes (e.g. Traefik dashboard, Kong admin via labels) take
+# precedence. OIDC ForwardAuth middleware delegates auth to oauth2-proxy.
+#
+# Note: the Kong admin router (gw-admin) is defined via Docker labels on the
+# kong service in docker-compose.yml so it can reference the KONG_ADMIN_DOMAIN
+# environment variable without hardcoding a domain here.
+# ==========================================================================
+
+http:
+  routers:
+    kong-catchall:
+      rule: "PathPrefix(`/`)"
+      entryPoints:
+        - web
+        - websecure
+      service: kong-proxy
+      priority: 1
+
+  middlewares:
+    oidc-auth:
+      forwardAuth:
+        address: "http://oauth2-proxy:4180/oauth2/auth"
+        trustForwardHeader: true
+        authResponseHeaders:
+          - "X-Auth-Request-User"
+          - "X-Auth-Request-Email"
+          - "X-Auth-Request-Access-Token"
+
+  services:
+    kong-proxy:
+      loadBalancer:
+        servers:
+          - url: "http://kong:8000"
+        healthCheck:
+          path: /status
+          port: 8001
+          interval: 30s
+          timeout: 5s

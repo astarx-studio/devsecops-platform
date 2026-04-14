@@ -1,0 +1,55 @@
+# ==========================================================================
+# Shared CI Config: deploy-compose
+# ==========================================================================
+# Reusable hidden jobs for Docker Compose deployments on the devops-network.
+# Include in your .gitlab-ci.yml:
+#
+#   include:
+#     - project: "configs/deploy-compose"
+#       file: "/.gitlab-ci.yml"
+#
+# Then extend:
+#   deploy:
+#     extends: .deploy-compose
+#     when: manual
+#
+# Required CI/CD variables (set in GitLab project settings):
+#   - None by default (uses CI_REGISTRY credentials automatically)
+#
+# Optional CI/CD variables:
+#   - COMPOSE_FILE: path to docker-compose file (default: docker-compose.yml)
+#   - COMPOSE_PROJECT_NAME: override compose project name
+# ==========================================================================
+
+.deploy-compose:
+  stage: deploy
+  image: docker:latest
+  services:
+    - docker:dind
+  variables:
+    DOCKER_TLS_CERTDIR: "/certs"
+    COMPOSE_FILE: docker-compose.yml
+  before_script:
+    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+  script:
+    - |
+      echo "[INFO] Pulling latest image: $CI_REGISTRY_IMAGE:latest"
+      docker pull $CI_REGISTRY_IMAGE:latest || true
+
+      echo "[INFO] Deploying via docker compose..."
+      COMPOSE_PROJECT_NAME=${COMPOSE_PROJECT_NAME:-$CI_PROJECT_NAME}
+      export PROJECT_NAME=$CI_PROJECT_NAME
+      export IMAGE=$CI_REGISTRY_IMAGE:latest
+
+      docker compose -f $COMPOSE_FILE -p $COMPOSE_PROJECT_NAME up -d --remove-orphans
+
+      echo "[INFO] Deployment complete. Container status:"
+      docker compose -f $COMPOSE_FILE -p $COMPOSE_PROJECT_NAME ps
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      when: manual
+
+.deploy-compose-auto:
+  extends: .deploy-compose
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH

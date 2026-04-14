@@ -1,0 +1,44 @@
+# ==========================================================================
+# Shared CI Config: docker-pipeline
+# ==========================================================================
+# Reusable hidden jobs for Docker image building and pushing.
+# Include in your .gitlab-ci.yml:
+#
+#   include:
+#     - project: "configs/docker-pipeline"
+#       file: "/.gitlab-ci.yml"
+#
+# Then extend:
+#   build-image:
+#     extends: .docker-build
+# ==========================================================================
+
+.docker-build:
+  stage: build
+  image: docker:latest
+  services:
+    - docker:dind
+  variables:
+    DOCKER_TLS_CERTDIR: "/certs"
+    IMAGE_TAG: $CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA
+    IMAGE_LATEST: $CI_REGISTRY_IMAGE:latest
+  before_script:
+    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+  script:
+    - docker build
+        --cache-from $IMAGE_LATEST
+        --build-arg BUILDKIT_INLINE_CACHE=1
+        -t $IMAGE_TAG
+        -t $IMAGE_LATEST
+        .
+    - docker push $IMAGE_TAG
+    - docker push $IMAGE_LATEST
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+.docker-build-tagged:
+  extends: .docker-build
+  variables:
+    IMAGE_TAG: $CI_REGISTRY_IMAGE:$CI_COMMIT_TAG
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+/

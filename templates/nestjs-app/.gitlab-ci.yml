@@ -1,0 +1,29 @@
+# ==========================================================================
+# NestJS App Template — CI/CD Pipeline
+# ==========================================================================
+# Uses shared config repos for reusable CI stages.
+# Configs are maintained in the "configs" GitLab group.
+# ==========================================================================
+
+include:
+  - project: "configs/node-pipeline"
+    file: "/.gitlab-ci.yml"
+  - project: "configs/docker-pipeline"
+    file: "/.gitlab-ci.yml"
+  - project: "configs/deploy-compose"
+    file: "/.gitlab-ci.yml"
+
+stages:
+  - lint
+  - build
+  - deploy
+
+lint:
+  extends: .node-lint
+
+build:
+  extends: .docker-build
+
+deploy:
+  extends: .deploy-compose
+  when: manual

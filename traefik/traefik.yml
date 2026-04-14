@@ -1,0 +1,70 @@
+# ==========================================================================
+# Traefik v3 — Static Configuration
+# ==========================================================================
+# Edge reverse proxy. Terminates TLS via Let's Encrypt ACME (DNS challenge).
+# Wildcard cert for *.devops.{DOMAIN} via Cloudflare DNS provider.
+# Redirects HTTP -> HTTPS. Forwards all unmatched traffic to Kong.
+# __DOMAIN__ and __ACME_EMAIL__ placeholders are substituted at container
+# startup via sed (see docker-compose.yml traefik entrypoint).
+# ==========================================================================
+
+api:
+  dashboard: true
+  insecure: true
+
+ping:
+  entryPoint: ping
+
+entryPoints:
+  ping:
+    address: ":8082"
+  web:
+    address: ":80"
+    http:
+      redirections:
+        entryPoint:
+          to: websecure
+          scheme: https
+          permanent: true
+  websecure:
+    address: ":443"
+    http:
+      tls:
+        certResolver: letsencrypt
+        domains:
+          - main: "devops.__DOMAIN__"
+            sans:
+              - "*.devops.__DOMAIN__"
+
+certificatesResolvers:
+  letsencrypt:
+    acme:
+      email: "__ACME_EMAIL__"
+      storage: /etc/traefik/certs/acme.json
+      dnsChallenge:
+        provider: cloudflare
+        propagation:
+          delayBeforeChecks: 60
+        resolvers:
+          - "1.1.1.1:53"
+          - "1.0.0.1:53"
+
+providers:
+  docker:
+    endpoint: "unix:///var/run/docker.sock"
+    exposedByDefault: false
+    network: devops-network
+    watch: true
+  file:
+    directory: /etc/traefik/dynamic
+    watch: true
+
+log:
+  level: INFO
+  format: json
+
+accessLog:
+  format: json
+  filters:
+    statusCodes:
+      - "400-599"

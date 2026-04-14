@@ -1,0 +1,630 @@
+# ==========================================================================
+# DevOps Platform — Phase 1-4: Ingress, Auth, Secret, Exposure, Dev Tools,
+#                               Integration & Management
+# ==========================================================================
+# Containers: traefik, kong-db, kong-migration, kong, kong-deck-sync,
+#             keycloak-db, keycloak, vault, cloudflared, gitlab,
+#             gitlab-runner, api
+# Network:    devops-network (bridge)
+# ==========================================================================
+
+networks:
+  devops-network:
+    driver: bridge
+    name: ${DOCKER_NETWORK}
+
+# ==========================================================================
+# SERVICES
+# ==========================================================================
+services:
+
+  # ========================================================================
+  # TRAEFIK — Edge Reverse Proxy
+  # ========================================================================
+  traefik:
+    image: traefik:v3.6
+    container_name: traefik
+    # 1. Process traefik.yml template (replace __DOMAIN__ and __ACME_EMAIL__)
+    # 2. Fix acme.json permissions (chmod 600 doesn't persist on Windows bind mounts)
+    # 3. exec traefik with the processed config
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        sed -e "s/__DOMAIN__/$$DOMAIN/g" \
+            -e "s/__ACME_EMAIL__/$$ACME_EMAIL/g" \
+            /etc/traefik/traefik-template.yml > /etc/traefik/traefik.yml
+        touch /etc/traefik/certs/acme.json
+        chmod 600 /etc/traefik/certs/acme.json
+        exec traefik --configFile=/etc/traefik/traefik.yml
+    restart: unless-stopped
+    ports:
+      - "10080:80"
+      - "10443:443"
+      - "18080:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./traefik/traefik.yml:/etc/traefik/traefik-template.yml:ro
+      - ./traefik/dynamic:/etc/traefik/dynamic:ro
+      - ./.vols/traefik/certs:/etc/traefik/certs
+    environment:
+      DOMAIN: ${DOMAIN}
+      ACME_EMAIL: ${TRAEFIK_ACME_EMAIL}
+      CF_DNS_API_TOKEN: ${CLOUDFLARE_API_TOKEN}
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.traefik-dashboard.rule: "Host(`${TRAEFIK_DOMAIN}`)"
+      traefik.http.routers.traefik-dashboard.entrypoints: "websecure"
+      traefik.http.routers.traefik-dashboard.service: "api@internal"
+      traefik.http.routers.traefik-dashboard.priority: "100"
+      traefik.http.routers.traefik-dashboard.tls.certresolver: "letsencrypt"
+      traefik.http.routers.traefik-dashboard.middlewares: "oidc-auth@file"
+    healthcheck:
+      test: ["CMD", "traefik", "healthcheck", "--ping"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      devops-network:
+        aliases:
+          - ${KEYCLOAK_DOMAIN}
+          - ${VAULT_DOMAIN}
+          - ${GITLAB_DOMAIN}
+          - ${KONG_DOMAIN}
+          - ${API_DOMAIN}
+          - ${OAUTH_DOMAIN}
+          - ${TRAEFIK_DOMAIN}
+          - ${GITLAB_REGISTRY_DOMAIN}
+          - ${KONG_ADMIN_DOMAIN}
+
+  # ========================================================================
+  # KONG DB — PostgreSQL for Kong
+  # ========================================================================
+  kong-db:
+    image: postgres:17-alpine
+    container_name: kong-db
+    restart: unless-stopped
+    ports:
+      - "15432:5432"
+    environment:
+      POSTGRES_DB: ${KONG_PG_DATABASE}
+      POSTGRES_USER: ${KONG_PG_USER}
+      POSTGRES_PASSWORD: ${KONG_PG_PASSWORD}
+    volumes:
+      - ./.vols/kong-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${KONG_PG_USER} -d ${KONG_PG_DATABASE}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - devops-network
+
+  # ========================================================================
+  # KONG MIGRATION — One-shot database bootstrap
+  # ========================================================================
+  kong-migration:
+    image: kong:3.9
+    container_name: kong-migration
+    command: kong migrations bootstrap
+    restart: "no"
+    environment:
+      KONG_DATABASE: postgres
+      KONG_PG_HOST: ${KONG_PG_HOST}
+      KONG_PG_PORT: ${KONG_PG_PORT}
+      KONG_PG_DATABASE: ${KONG_PG_DATABASE}
+      KONG_PG_USER: ${KONG_PG_USER}
+      KONG_PG_PASSWORD: ${KONG_PG_PASSWORD}
+    depends_on:
+      kong-db:
+        condition: service_healthy
+    networks:
+      - devops-network
+
+  # ========================================================================
+  # KONG — API Gateway
+  # ========================================================================
+  kong:
+    image: kong:3.9
+    container_name: kong
+    restart: unless-stopped
+    ports:
+      - "18000:8000"
+      - "18443:8443"
+      - "18001:8001"
+    environment:
+      KONG_DATABASE: postgres
+      KONG_PG_HOST: ${KONG_PG_HOST}
+      KONG_PG_PORT: ${KONG_PG_PORT}
+      KONG_PG_DATABASE: ${KONG_PG_DATABASE}
+      KONG_PG_USER: ${KONG_PG_USER}
+      KONG_PG_PASSWORD: ${KONG_PG_PASSWORD}
+      KONG_PROXY_LISTEN: ${KONG_PROXY_LISTEN}
+      KONG_ADMIN_LISTEN: ${KONG_ADMIN_LISTEN}
+      KONG_LOG_LEVEL: ${KONG_LOG_LEVEL}
+      KONG_PROXY_ACCESS_LOG: /dev/stdout
+      KONG_ADMIN_ACCESS_LOG: /dev/stdout
+      KONG_PROXY_ERROR_LOG: /dev/stderr
+      KONG_ADMIN_ERROR_LOG: /dev/stderr
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.kong-admin.rule: "Host(`${KONG_ADMIN_DOMAIN}`)"
+      traefik.http.routers.kong-admin.entrypoints: "websecure"
+      traefik.http.routers.kong-admin.tls.certresolver: "letsencrypt"
+      traefik.http.routers.kong-admin.middlewares: "oidc-auth@file"
+      traefik.http.services.kong-admin.loadbalancer.server.port: "8001"
+    healthcheck:
+      test: ["CMD", "kong", "health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    depends_on:
+      kong-migration:
+        condition: service_completed_successfully
+    networks:
+      - devops-network
+
+  # ========================================================================
+  # KONG DECK SYNC — One-shot platform route seeding
+  # ========================================================================
+  # Substitutes ${VAR} placeholders in kong.template.yml and syncs to Kong.
+  # kong/deck is distroless (no shell), so we build a minimal image that
+  # copies the deck binary into alpine for shell-based template processing.
+  kong-deck-sync:
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM kong/deck:latest AS deck
+        FROM alpine:latest
+        COPY --from=deck /usr/local/bin/deck /usr/local/bin/deck
+    container_name: kong-deck-sync
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        sed \
+          -e "s|\$${KEYCLOAK_DOMAIN}|$$KEYCLOAK_DOMAIN|g" \
+          -e "s|\$${VAULT_DOMAIN}|$$VAULT_DOMAIN|g" \
+          -e "s|\$${KONG_DOMAIN}|$$KONG_DOMAIN|g" \
+          -e "s|\$${GITLAB_DOMAIN}|$$GITLAB_DOMAIN|g" \
+          -e "s|\$${GITLAB_REGISTRY_DOMAIN}|$$GITLAB_REGISTRY_DOMAIN|g" \
+          -e "s|\$${API_DOMAIN}|$$API_DOMAIN|g" \
+          -e "s|\$${OAUTH_DOMAIN}|$$OAUTH_DOMAIN|g" \
+          /kong/kong.template.yml > /tmp/kong.yml &&
+        echo "--- Resolved kong.yml ---" &&
+        cat /tmp/kong.yml &&
+        echo "--- Syncing to Kong ---" &&
+        deck gateway sync /tmp/kong.yml --kong-addr http://kong:8001
+    restart: "no"
+    environment:
+      KEYCLOAK_DOMAIN: ${KEYCLOAK_DOMAIN}
+      VAULT_DOMAIN: ${VAULT_DOMAIN}
+      KONG_DOMAIN: ${KONG_DOMAIN}
+      GITLAB_DOMAIN: ${GITLAB_DOMAIN}
+      GITLAB_REGISTRY_DOMAIN: ${GITLAB_REGISTRY_DOMAIN}
+      API_DOMAIN: ${API_DOMAIN}
+      OAUTH_DOMAIN: ${OAUTH_DOMAIN}
+    volumes:
+      - ./kong/kong.template.yml:/kong/kong.template.yml:ro
+    depends_on:
+      kong:
+        condition: service_healthy
+    networks:
+      - devops-network
+
+  # ========================================================================
+  # KEYCLOAK DB — PostgreSQL for Keycloak
+  # ========================================================================
+  keycloak-db:
+    image: postgres:17-alpine
+    container_name: keycloak-db
+    restart: unless-stopped
+    ports:
+      - "15433:5432"
+    environment:
+      POSTGRES_DB: ${KC_DB_NAME}
+      POSTGRES_USER: ${KC_DB_USER}
+      POSTGRES_PASSWORD: ${KC_DB_PASSWORD}
+    volumes:
+      - ./.vols/keycloak-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${KC_DB_USER} -d ${KC_DB_NAME}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - devops-network
+
+  # ========================================================================
+  # KEYCLOAK — OAuth2 / OIDC Identity Provider
+  # ========================================================================
+  # Default: start-dev (dev mode). For production, change command to "start"
+  # and ensure KC_HOSTNAME is properly configured.
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.6
+    container_name: keycloak
+    # realm-export.json contains ${VAR} placeholders that Keycloak does not
+    # natively resolve during import. We use sed to substitute them from the
+    # container environment before starting Keycloak.
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        mkdir -p /opt/keycloak/data/import
+        sed \
+          -e "s|\$${GITLAB_DOMAIN}|$$GITLAB_DOMAIN|g" \
+          -e "s|\$${VAULT_DOMAIN}|$$VAULT_DOMAIN|g" \
+          -e "s|\$${API_DOMAIN}|$$API_DOMAIN|g" \
+          -e "s|\$${OAUTH_DOMAIN}|$$OAUTH_DOMAIN|g" \
+          -e "s|\$${TRAEFIK_DOMAIN}|$$TRAEFIK_DOMAIN|g" \
+          -e "s|\$${KONG_DOMAIN}|$$KONG_DOMAIN|g" \
+          -e "s|\$${SMTP_HOST}|$$SMTP_HOST|g" \
+          -e "s|\$${SMTP_PORT}|$$SMTP_PORT|g" \
+          -e "s|\$${SMTP_FROM_EMAIL}|$$SMTP_FROM_EMAIL|g" \
+          -e "s|\$${SMTP_FROM_NAME}|$$SMTP_FROM_NAME|g" \
+          -e "s|\$${SMTP_USER}|$$SMTP_USER|g" \
+          -e "s|\$${SMTP_PASSWORD}|$$SMTP_PASSWORD|g" \
+          /opt/keycloak/data/import-template/realm-export.json \
+          > /opt/keycloak/data/import/realm-export.json
+        exec /opt/keycloak/bin/kc.sh start-dev --import-realm
+    restart: unless-stopped
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://${KC_DB_HOST}:${KC_DB_PORT}/${KC_DB_NAME}
+      KC_DB_USERNAME: ${KC_DB_USER}
+      KC_DB_PASSWORD: ${KC_DB_PASSWORD}
+      KC_HOSTNAME: https://${KC_HOSTNAME}
+      KC_HOSTNAME_STRICT: ${KC_HOSTNAME_STRICT}
+      KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "false"
+      KC_HTTP_ENABLED: ${KC_HTTP_ENABLED}
+      KC_HEALTH_ENABLED: "true"
+      KC_PROXY_HEADERS: xforwarded
+      SMTP_HOST: ${SMTP_HOST}
+      SMTP_PORT: ${SMTP_PORT}
+      SMTP_USER: ${SMTP_USER}
+      SMTP_PASSWORD: ${SMTP_PASSWORD}
+      SMTP_FROM_NAME: ${SMTP_FROM_NAME}
+      SMTP_FROM_EMAIL: ${SMTP_FROM_EMAIL}
+      SMTP_DOMAIN: ${SMTP_DOMAIN}
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
+      GITLAB_DOMAIN: ${GITLAB_DOMAIN}
+      VAULT_DOMAIN: ${VAULT_DOMAIN}
+      API_DOMAIN: ${API_DOMAIN}
+      OAUTH_DOMAIN: ${OAUTH_DOMAIN}
+      TRAEFIK_DOMAIN: ${TRAEFIK_DOMAIN}
+      KONG_DOMAIN: ${KONG_DOMAIN}
+    volumes:
+      - ./keycloak/realm-export.json:/opt/keycloak/data/import-template/realm-export.json:ro
+    healthcheck:
+      test: ["CMD-SHELL", "{ printf 'HEAD /health/ready HTTP/1.0\\r\\n\\r\\n' >&0; grep 'HTTP/1.0 200'; } 0<>/dev/tcp/localhost/9000"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    depends_on:
+      keycloak-db:
+        condition: service_healthy
+    networks:
+      - devops-network
+
+  # ========================================================================
+  # VAULT — Secrets Management
+  # ========================================================================
+  # Default: dev mode (auto-unsealed). For production, change command to
+  # "server -config=/vault/prod-config/config.hcl" and remove VAULT_DEV_* vars.
+  vault:
+    image: hashicorp/vault:1.21
+    container_name: vault
+    command: server -dev
+    restart: unless-stopped
+    ports:
+      - "18200:8200"
+    environment:
+      VAULT_DEV_ROOT_TOKEN_ID: ${VAULT_DEV_ROOT_TOKEN_ID}
+      VAULT_DEV_LISTEN_ADDRESS: "0.0.0.0:8200"
+      VAULT_ADDR: ${VAULT_ADDR}
+    cap_add:
+      - IPC_LOCK
+    volumes:
+      - ./vault/config.hcl:/vault/prod-config/config.hcl:ro
+      - ./.vols/vault:/vault/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider --quiet http://127.0.0.1:8200/v1/sys/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - devops-network
+
+  # ========================================================================
+  # CLOUDFLARED — Cloudflare Tunnel (outbound-only external access)
+  # ========================================================================
+  # Token-based tunnel: ingress routing is managed in the Cloudflare Zero
+  # Trust dashboard (Networks > Tunnels > Public Hostname).
+  # Configure: *.devops.{DOMAIN} -> HTTPS -> traefik:443 (No TLS Verify).
+  # If CLOUDFLARE_TUNNEL_TOKEN is unset, the container will fail and restart
+  # indefinitely; the rest of the platform continues to work locally.
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: cloudflared
+    profiles: ["cftunnel"]
+    command: tunnel --metrics 0.0.0.0:60123 run
+    restart: unless-stopped
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN}
+    # No health check: the image is distroless (no shell, wget, or curl).
+    # Tunnel health is observable via: docker logs cloudflared | grep "Registered"
+    # The metrics endpoint at :60123/ready is available for external monitoring.
+    # Only starts when the "cftunnel" profile is active:
+    #   docker compose --profile cftunnel up -d
+    depends_on:
+      traefik:
+        condition: service_healthy
+    networks:
+      - devops-network
+
+  # ========================================================================
+  # GITLAB CE — Source Control, CI/CD, Container & Package Registry
+  # ========================================================================
+  # Omnibus: embedded PostgreSQL, Redis, Nginx, Puma, Sidekiq.
+  # Internal Nginx listens HTTP on :80 (TLS terminated at Traefik edge).
+  # Container Registry listens on :5000 internally.
+  # First boot takes 3-5 minutes (database migrations). shm_size: 256m
+  # recommended by GitLab Docker docs to prevent shared memory issues.
+  gitlab:
+    image: gitlab/gitlab-ce:18.10.1-ce.0
+    container_name: gitlab
+    hostname: gitlab
+    restart: unless-stopped
+    ports:
+      - "12222:22"
+    shm_size: 256m
+    environment:
+      GITLAB_ROOT_PASSWORD: ${GITLAB_ROOT_PASSWORD}
+      KC_CLIENT_SECRET_GITLAB: ${KC_CLIENT_SECRET_GITLAB}
+      SMTP_HOST: ${SMTP_HOST}
+      SMTP_PORT: ${SMTP_PORT}
+      SMTP_USER: ${SMTP_USER}
+      SMTP_PASSWORD: ${SMTP_PASSWORD}
+      SMTP_FROM_NAME: ${SMTP_FROM_NAME}
+      SMTP_FROM_EMAIL: ${SMTP_FROM_EMAIL}
+      SMTP_DOMAIN: ${SMTP_DOMAIN}
+      GITLAB_OMNIBUS_CONFIG: |
+        external_url '${GITLAB_EXTERNAL_URL}'
+        nginx['listen_port'] = 80
+        nginx['listen_https'] = false
+        nginx['proxy_set_headers'] = {
+          "X-Forwarded-Proto" => "https",
+          "X-Forwarded-Ssl" => "on",
+          "Host" => "$$http_host"
+        }
+        gitlab_rails['gitlab_shell_ssh_port'] = 12222
+        gitlab_rails['initial_root_password'] = ENV['GITLAB_ROOT_PASSWORD']
+        registry_external_url '${GITLAB_REGISTRY_EXTERNAL_URL}'
+        gitlab_rails['registry_enabled'] = true
+        registry['enable'] = true
+        registry['registry_http_addr'] = "0.0.0.0:5000"
+        registry_nginx['enable'] = false
+        puma['workers'] = 2
+        puma['min_threads'] = 1
+        puma['max_threads'] = 2
+        sidekiq['concurrency'] = 5
+        prometheus_monitoring['enable'] = false
+        gitlab_rails['smtp_enable'] = true
+        gitlab_rails['smtp_address'] = ENV['SMTP_HOST']
+        gitlab_rails['smtp_port'] = ENV['SMTP_PORT'].to_i
+        gitlab_rails['smtp_user_name'] = ENV['SMTP_USER']
+        gitlab_rails['smtp_password'] = ENV['SMTP_PASSWORD']
+        gitlab_rails['smtp_domain'] = ENV['SMTP_DOMAIN']
+        gitlab_rails['smtp_authentication'] = 'login'
+        gitlab_rails['smtp_enable_starttls_auto'] = true
+        gitlab_rails['smtp_tls'] = false
+        gitlab_rails['smtp_openssl_verify_mode'] = 'peer'
+        gitlab_rails['gitlab_email_from'] = ENV['SMTP_FROM_EMAIL']
+        gitlab_rails['gitlab_email_display_name'] = ENV['SMTP_FROM_NAME']
+        gitlab_rails['gitlab_email_reply_to'] = ENV['SMTP_FROM_EMAIL']
+        gitlab_pages['enable'] = false
+        gitlab_rails['gitlab_signup_enabled'] = false
+        gitlab_rails['omniauth_enabled'] = true
+        gitlab_rails['omniauth_allow_single_sign_on'] = ['openid_connect']
+        gitlab_rails['omniauth_block_auto_created_users'] = false
+        gitlab_rails['omniauth_auto_link_user'] = ['openid_connect']
+        gitlab_rails['omniauth_providers'] = [
+          {
+            name: "openid_connect",
+            label: "Keycloak",
+            args: {
+              name: "openid_connect",
+              scope: ["openid", "profile", "email"],
+              response_type: "code",
+              issuer: "${OIDC_ISSUER_URL}",
+              client_auth_method: "query",
+              discovery: true,
+              uid_field: "preferred_username",
+              pkce: true,
+              client_options: {
+                identifier: "gitlab",
+                secret: ENV['KC_CLIENT_SECRET_GITLAB'],
+                redirect_uri: "https://${GITLAB_DOMAIN}/users/auth/openid_connect/callback"
+              }
+            }
+          }
+        ]
+    volumes:
+      - ./.vols/gitlab/config:/etc/gitlab
+      - ./.vols/gitlab/logs:/var/log/gitlab
+      - ./.vols/gitlab/data:/var/opt/gitlab
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost/-/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 300s
+    networks:
+      - devops-network
+
+  # ========================================================================
+  # GITLAB RUNNER — CI/CD Job Execution (Docker Executor)
+  # ========================================================================
+  # On first start (or when GITLAB_RUNNER_TOKEN changes), the runner
+  # registers with GitLab to exchange the glrt-xxx token for runner
+  # credentials. Config persists in .vols/gitlab-runner/config/.
+  # After setting the token in .env:
+  #   docker compose up -d gitlab-runner
+  gitlab-runner:
+    image: gitlab/gitlab-runner:latest
+    container_name: gitlab-runner
+    restart: unless-stopped
+    entrypoint: [""]
+    command:
+      - /bin/sh
+      - -c
+      - |
+        if [ "$$GITLAB_RUNNER_TOKEN" = "FILL_AFTER_STARTUP" ]; then
+          echo "GITLAB_RUNNER_TOKEN not set, waiting..."
+          sleep infinity
+        fi
+        if [ ! -f /etc/gitlab-runner/config.toml ] || ! grep -q "\[\[runners\]\]" /etc/gitlab-runner/config.toml; then
+          echo "Registering runner with GitLab..."
+          gitlab-runner register \
+            --non-interactive \
+            --url "http://gitlab" \
+            --token "$$GITLAB_RUNNER_TOKEN" \
+            --executor "docker" \
+            --docker-image "docker:latest" \
+            --docker-privileged \
+            --docker-volumes "/cache" \
+            --docker-volumes "/certs/client" \
+            --docker-network-mode "$$DOCKER_NETWORK" \
+            --name "docker-runner-1" \
+            --clone-url "http://gitlab" \
+            --request-concurrency 4
+        fi
+        sed -i 's/^concurrent = .*/concurrent = 4/' /etc/gitlab-runner/config.toml
+        grep -q 'request_concurrency' /etc/gitlab-runner/config.toml || \
+          sed -i '/^\[\[runners\]\]/a\  request_concurrency = 4' /etc/gitlab-runner/config.toml
+        exec /entrypoint run --user=gitlab-runner --working-directory=/home/gitlab-runner
+    environment:
+      GITLAB_RUNNER_TOKEN: ${GITLAB_RUNNER_TOKEN}
+      DOCKER_NETWORK: ${DOCKER_NETWORK}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./.vols/gitlab-runner/config:/etc/gitlab-runner
+      - ./.vols/gitlab-runner/cache:/cache
+    depends_on:
+      gitlab:
+        condition: service_healthy
+    networks:
+      - devops-network
+
+  # ========================================================================
+  # MANAGEMENT API — NestJS Project Provisioning Orchestrator
+  # ========================================================================
+  # Orchestrates project lifecycle across GitLab, Vault, Kong, and
+  # Cloudflare. Swagger docs at /api/docs. Health check at /health.
+  api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    container_name: api
+    restart: unless-stopped
+    ports:
+      - "13000:3000"
+    environment:
+      NODE_ENV: ${NODE_ENV}
+      API_PORT: ${API_PORT}
+      API_HOST: ${API_HOST}
+      API_KEY: ${API_KEY}
+      LOG_LEVEL: ${LOG_LEVEL}
+      DOMAIN: ${DOMAIN}
+      APPS_DOMAIN: ${APPS_DOMAIN}
+      GITLAB_DOMAIN: ${GITLAB_DOMAIN}
+      GITLAB_URL: http://gitlab
+      GITLAB_ROOT_TOKEN: ${GITLAB_ROOT_TOKEN}
+      GITLAB_TEMPLATE_GROUP_ID: ${GITLAB_TEMPLATE_GROUP_ID}
+      GITLAB_CONFIG_GROUP_ID: ${GITLAB_CONFIG_GROUP_ID}
+      KONG_ADMIN_URL: http://kong:8001
+      VAULT_URL: http://vault:8200
+      VAULT_DEV_ROOT_TOKEN_ID: ${VAULT_DEV_ROOT_TOKEN_ID}
+      CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN}
+      CLOUDFLARE_ZONE_ID: ${CLOUDFLARE_ZONE_ID}
+      CLOUDFLARE_TUNNEL_ID: ${CLOUDFLARE_TUNNEL_ID}
+      OIDC_ISSUER_URL: ${OIDC_ISSUER_URL}
+      OIDC_JWKS_URL: ${OIDC_JWKS_URL}
+      OIDC_AUDIENCE: ${OIDC_AUDIENCE}
+      CORS_ORIGIN: ${CORS_ORIGIN}
+      CORS_CREDENTIALS: ${CORS_CREDENTIALS}
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"const h=require('http');h.get('http://127.0.0.1:3000/health',r=>{process.exit(r.statusCode===200?0:1)}).on('error',()=>process.exit(1))\""]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    depends_on:
+      kong:
+        condition: service_healthy
+      vault:
+        condition: service_healthy
+    networks:
+      - devops-network
+
+  # ========================================================================
+  # VAULT OIDC INIT — One-shot initializer for Vault OIDC auth method
+  # ========================================================================
+  vault-oidc-init:
+    image: hashicorp/vault:1.21
+    container_name: vault-oidc-init
+    restart: "no"
+    entrypoint: /bin/sh
+    command: ["/scripts/init-oidc.sh"]
+    environment:
+      VAULT_ADDR: http://vault:8200
+      VAULT_TOKEN: ${VAULT_DEV_ROOT_TOKEN_ID}
+      KC_CLIENT_SECRET_VAULT: ${KC_CLIENT_SECRET_VAULT}
+      KC_REALM: ${KC_REALM}
+      KEYCLOAK_ISSUER_URL: ${OIDC_ISSUER_URL}
+      VAULT_EXTERNAL_URL: https://${VAULT_DOMAIN}
+    volumes:
+      - ./vault/init-oidc.sh:/scripts/init-oidc.sh:ro
+    depends_on:
+      vault:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+    networks:
+      - devops-network
+
+  # ========================================================================
+  # OAUTH2-PROXY — OIDC authentication for Traefik Dashboard + Kong Admin
+  # ========================================================================
+  # Provides ForwardAuth endpoint at /oauth2/auth for services without
+  # native OIDC support. Routes via ${OAUTH_DOMAIN}.
+  oauth2-proxy:
+    image: quay.io/oauth2-proxy/oauth2-proxy:latest
+    container_name: oauth2-proxy
+    restart: unless-stopped
+    environment:
+      OAUTH2_PROXY_PROVIDER: oidc
+      OAUTH2_PROXY_OIDC_ISSUER_URL: ${OAUTH2_PROXY_OIDC_ISSUER_URL}
+      OAUTH2_PROXY_INSECURE_OIDC_SKIP_ISSUER_VERIFICATION: "true"
+      OAUTH2_PROXY_CLIENT_ID: oauth2-proxy
+      OAUTH2_PROXY_CLIENT_SECRET: ${KC_CLIENT_SECRET_OAUTH2_PROXY}
+      OAUTH2_PROXY_COOKIE_SECRET: ${OAUTH2_PROXY_COOKIE_SECRET}
+      OAUTH2_PROXY_COOKIE_SECURE: "true"
+      OAUTH2_PROXY_COOKIE_DOMAINS: ".devops.${DOMAIN}"
+      OAUTH2_PROXY_REDIRECT_URL: https://${OAUTH_DOMAIN}/oauth2/callback
+      OAUTH2_PROXY_EMAIL_DOMAINS: "*"
+      OAUTH2_PROXY_HTTP_ADDRESS: "0.0.0.0:4180"
+      OAUTH2_PROXY_REVERSE_PROXY: "true"
+      OAUTH2_PROXY_SET_XAUTHREQUEST: "true"
+      OAUTH2_PROXY_SKIP_PROVIDER_BUTTON: "true"
+      OAUTH2_PROXY_PASS_ACCESS_TOKEN: "true"
+      OAUTH2_PROXY_WHITELIST_DOMAINS: ".devops.${DOMAIN}"
+    depends_on:
+      keycloak:
+        condition: service_healthy
+    networks:
+      - devops-network

@@ -1,0 +1,68 @@
+# ==========================================================================
+# Shared CI Config: node-pipeline
+# ==========================================================================
+# Reusable hidden jobs for Node.js projects.
+# Include in your .gitlab-ci.yml:
+#
+#   include:
+#     - project: "configs/node-pipeline"
+#       file: "/.gitlab-ci.yml"
+#
+# Then extend:
+#   lint:
+#     extends: .node-lint
+# ==========================================================================
+
+.node-lint:
+  stage: lint
+  image: node:20-alpine
+  before_script:
+    - corepack enable
+    - pnpm install --frozen-lockfile
+  script:
+    - pnpm run lint
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+.node-test:
+  stage: test
+  image: node:20-alpine
+  before_script:
+    - corepack enable
+    - pnpm install --frozen-lockfile
+  script:
+    - pnpm run test
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+  coverage: '/All files[^|]*\|[^|]*\s+([\d\.]+)/'
+
+.node-build:
+  stage: build
+  image: node:20-alpine
+  before_script:
+    - corepack enable
+    - pnpm install --frozen-lockfile
+  script:
+    - pnpm run build
+  artifacts:
+    paths:
+      - dist/
+    expire_in: 1 hour
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+.node-publish:
+  stage: deploy
+  image: node:20-alpine
+  before_script:
+    - corepack enable
+    - pnpm install --frozen-lockfile
+  script:
+    - |
+      echo "//${CI_SERVER_HOST}/api/v4/projects/${CI_PROJECT_ID}/packages/npm/:_authToken=${CI_JOB_TOKEN}" > .npmrc
+      echo "@${CI_PROJECT_ROOT_NAMESPACE}:registry=https://${CI_SERVER_HOST}/api/v4/projects/${CI_PROJECT_ID}/packages/npm/" >> .npmrc
+      pnpm publish --no-git-checks
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+/

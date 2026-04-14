@@ -1,0 +1,28 @@
+# Environment
+*.env*
+!sample.env
+
+# Docker volumes
+.vols*/
+
+# Node.js
+node_modules/
+dist/
+build/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+
+# ACME certificates (sensitive)
+acme.json
+
+coverage
