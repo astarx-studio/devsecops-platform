@@ -288,15 +288,15 @@ docker compose logs <service>        # view logs
 docker compose logs --tail=50 <svc>  # recent logs only
 ```
 
-### Vault is sealed after restart (production mode only)
+### OpenBao is sealed after restart (production mode only)
 
-In the current v1 setup (dev mode), Vault auto-unseals on every start. If you've switched to production mode:
+In the current v1 setup (dev mode), OpenBao auto-unseals on every start. If you've switched to production mode:
 
 ```sh
-docker exec vault vault status
-docker exec vault vault operator unseal <key1>
-docker exec vault vault operator unseal <key2>
-docker exec vault vault operator unseal <key3>
+docker exec vault bao status
+docker exec vault bao operator unseal <key1>
+docker exec vault bao operator unseal <key2>
+docker exec vault bao operator unseal <key3>
 ```
 
 ### Keycloak realm not imported
@@ -343,4 +343,4 @@ curl -H "PRIVATE-TOKEN: <token>" http://localhost:80/api/v4/projects
 If users are redirected in a loop:
 1. Verify `OAUTH2_PROXY_COOKIE_SECRET` is a valid 16/24/32-byte base64 string.
 2. Verify `OAUTH2_PROXY_COOKIE_DOMAINS` matches `.devops.yourdomain.com` (note the leading dot).
-3. Clear browser cookies for the domain and retry.
+3. Clear 

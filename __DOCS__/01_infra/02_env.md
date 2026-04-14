@@ -99,15 +99,15 @@ The `KC_HOSTNAME` variable is pre-filled to match your `KEYCLOAK_DOMAIN`. Leave 
 
 ---
 
-## Vault (secrets storage)
+## OpenBao (secrets storage)
 
 ```
 VAULT_DEV_ROOT_TOKEN_ID=change-me-vault-dev-token
 ```
 
-`VAULT_DEV_ROOT_TOKEN_ID` — This is the token you'll use to log in to Vault and the token the Management API uses for Vault access. Think of it like a master password for the secrets store. Set it to something you'll remember (or store in a password manager), but keep it **alphanumeric and hyphens only** — Vault 1.21+ rejects tokens that contain dots or other special characters.
+`VAULT_DEV_ROOT_TOKEN_ID` — This is the token you'll use to log in to OpenBao and the token the Management API uses for OpenBao access. Think of it like a master password for the secrets store. Set it to something you'll remember (or store in a password manager), but keep it **alphanumeric and hyphens only** — OpenBao rejects tokens that contain dots or other special characters.
 
-In v1, Vault runs in "dev mode," which means it auto-unseals on startup using this token. This is convenient but not suitable for production use with real sensitive data. See [the Vault admin page](../02_admin/04_vault.md) for what that means.
+In v1, OpenBao runs in "dev mode," which means it auto-unseals on startup using this token. This is convenient but not suitable for production use with real sensitive data. See [the OpenBao admin page](../02_admin/04_vault.md) for what that means.
 
 ---
 

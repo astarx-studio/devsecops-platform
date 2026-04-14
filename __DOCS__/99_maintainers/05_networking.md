@@ -247,7 +247,7 @@ services:
         preserve_host: true
 
   - name: vault-service
-    url: http://vault:8200
+    url: http://vault:8200  # OpenBao instance
     routes:
       - name: vault-route
         hosts: ["${VAULT_DOMAIN}"]
@@ -368,4 +368,4 @@ The `cloudflared` service is **profile-gated** — it only starts when you use `
 
 All hostnames are routed to Traefik. Traefik and Kong handle the per-hostname dispatching.
 
-The `cloudflared` container connects to Cloudflare's edge using the `TUNNEL_TOKEN` and then forwards all tunnel traffic to the configured origins.
+The `cloudflared` container connects to Cloudflare's edge using the `TUNNEL_TOKEN` and then forwards all 

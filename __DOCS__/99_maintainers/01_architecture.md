@@ -53,7 +53,7 @@ graph LR
     end
 
     subgraph secrets ["Secrets"]
-        vault["Vault 1.21\nKV v2 secrets engine\nOIDC auth method"]
+        vault["OpenBao 2\nKV v2 secrets engine\nOIDC auth method"]
     end
 
     subgraph scm ["Source & CI/CD"]
@@ -125,13 +125,13 @@ graph LR
 - The realm is imported from `keycloak/realm-export.json` on first boot. The file contains `${VAR}` placeholders that Keycloak resolves from container environment variables.
 - `realm_roles` claim is mapped via a dedicated client scope so that JWT bearer tokens carry the user's realm roles.
 
-### Vault
+### OpenBao
 
 - Runs in **dev mode** (`server -dev`). Auto-initialized and auto-unsealed on every start.
 - Data persisted at `.vols/vault` via the volume mount.
 - KV v2 secrets engine on the default `secret/` mount.
 - OIDC auth method configured by `vault-oidc-init` (one-shot container) pointing at the Keycloak realm.
-- Management API authenticates to Vault via a static `VAULT_DEV_ROOT_TOKEN_ID` token. A production-ready `config.hcl` is included for future migration to server mode.
+- Management API authenticates to OpenBao via a static `VAULT_DEV_ROOT_TOKEN_ID` token. A production-ready `config.hcl` is included for future migration to server mode.
 
 ### GitLab
 
@@ -173,7 +173,7 @@ graph LR
 | Reverse proxy | Traefik v3.6 | Native Docker label integration, automatic TLS with ACME, ForwardAuth middleware |
 | API Gateway | Kong 3.9 | Mature plugin ecosystem, declarative config via decK, host-based routing |
 | Identity | Keycloak 26.6 | Industry-standard OIDC/OAuth2, configurable client scopes, realm import |
-| Secrets | Vault 1.21 | KV v2 versioning, OIDC auth, fine-grained policies |
+| Secrets | OpenBao 2 | KV v2 versioning, OIDC auth, fine-grained policies |
 | SCM | GitLab CE 18.10 | Integrated registry, package manager, CI/CD, OIDC SSO |
 | Management API | NestJS 11 | TypeScript, decorator-driven, built-in Swagger, modular |
 | Database | PostgreSQL 17 | Separate instances for Kong and Keycloak; Alpine for smaller image size |
@@ -242,4 +242,4 @@ graph TD
 
 `traefik` and the Postgres instances have no upstream dependencies declared in Compose. They start concurrently with the rest. `oauth2-proxy` depends on `keycloak` (healthy). `cloudflared` depends on `traefik` (healthy) and is profile-gated (`cftunnel`); it does not start with a regular `docker compose up -d`.
 
-GitLab has a `start_period: 300s` on its health check, reflecting its slow boot time. Expect the full stack to be ready 5–10 minutes after `docker compose up`.
+GitLab has a `start_period: 300s` on its health check, reflecting its slow boot time. Expect the full stack to be ready 

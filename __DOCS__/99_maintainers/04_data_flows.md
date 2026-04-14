@@ -43,6 +43,7 @@ sequenceDiagram
     API->>Vault: POST /v1/secret/data/projects/{clientName}/{projectName}
     Note over API,Vault: {PROJECT_NAME, CLIENT_NAME, GITLAB_PROJECT_ID, DEPLOYMENT_ENV, ...envVars}
     Vault-->>API: 200
+    Note over API,Vault: OpenBao handles this request
 
     opt capabilities.deployable is set
         API->>Kong: PUT /services/{clientName}-{projectName}-service
@@ -181,6 +182,7 @@ sequenceDiagram
     Note over API: OidcJwtStrategy fetches JWKS from\nhttp://keycloak:8080/realms/devops/protocol/openid-connect/certs
     Note over API: Validates: signature, issuer, audience, expiry
     API->>Vault: POST /v1/secret/data/projects/...
+    Note over API,Vault: OpenBao handles this request
     Vault-->>API: 200
     API-->>CI: 201 ProjectInfoDto
 ```
@@ -192,9 +194,9 @@ sequenceDiagram
 
 ---
 
-## 5. Vault secrets access from a deployed app
+## 5. OpenBao secrets access from a deployed app
 
-How an application container retrieves its secrets from Vault at runtime.
+How an application container retrieves its secrets from OpenBao at runtime.
 
 ```mermaid
 sequenceDiagram
@@ -208,18 +210,20 @@ sequenceDiagram
     Keycloak-->>App: {access_token: "eyJ..."}
 
     App->>Vault: POST /v1/auth/oidc/login\n{role=default, jwt=eyJ...}
+    Note over App,Vault: OpenBao handles OIDC authentication
     Vault-->>App: {client_token: "hvs.xxx"}
 
     App->>Vault: GET /v1/secret/data/projects/{clientName}/{projectName}\nX-Vault-Token: hvs.xxx
+    Note over App,Vault: OpenBao KV v2 API endpoint
     Vault-->>App: {data: {PROJECT_NAME, CLIENT_NAME, ...custom secrets}}
 
     Note over App: inject secrets into runtime config / env
 ```
 
 **Notes:**
-- This flow requires the application to implement Vault OIDC authentication. The `nestjs-app` template does not include this by default; it would need to be added per project.
+- This flow requires the application to implement OpenBao OIDC authentication. The `nestjs-app` template does not include this by default; it would need to be added per project.
 - The `vault-oidc-init` one-shot container configures the `oidc` auth method and creates the `default` role. Applications should bind to this role.
-- If the project uses a simpler approach (e.g. GitLab CI injects secrets as masked variables before pipeline runs), the Vault OIDC flow is not needed at runtime.
+- If the project uses a simpler approach (e.g. GitLab CI injects secrets as masked variables before pipeline runs), the OpenBao OIDC flow is not needed at runtime.
 
 ---
 
@@ -251,6 +255,7 @@ sequenceDiagram
     Note over API: non-critical — continues on error
 
     API->>Vault: DELETE /v1/secret/metadata/projects/{clientName}/{projectName}
+    Note over API,Vault: OpenBao metadata deletion (all versions)
     Note over API: non-critical — continues on error
 
     API->>GitLab: DELETE /projects/:id
@@ -259,4 +264,4 @@ sequenceDiagram
     API-->>Operator: 204
 ```
 
-**Note:** GitLab project deletion is asynchronous. The API returns 202 from GitLab and the Management API immediately returns 204. The actual deletion completes in the background. The Vault path deletion (`/metadata/`) removes all versions of the secret permanently.
+**Note:** GitLab project deletion is asynchronous. The API returns 202 from GitLab and the Management API immediately returns 204. The actual deletion completes in the background. The OpenBao path deletion (`/metadata/`) remove
