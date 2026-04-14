@@ -82,7 +82,7 @@ Once all services are healthy, try opening these in a browser (replace `yourdoma
 |---|---|---|
 | GitLab | `https://gitlab.devops.yourdomain.com` | Login page |
 | Keycloak | `https://auth.devops.yourdomain.com` | Keycloak welcome page |
-| Vault | `https://vault.devops.yourdomain.com` | Vault UI login |
+| OpenBao | `https://vault.devops.yourdomain.com` | OpenBao UI login |
 | Kong proxy | `https://gw.devops.yourdomain.com` | Kong admin API response (routes are seeded by `kong-deck-sync` at startup) |
 | Management API | `https://api.devops.yourdomain.com/health` | `{"status":"ok"}` in plain text |
 

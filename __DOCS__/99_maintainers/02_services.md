@@ -205,18 +205,20 @@ Any service declared in `kong.template.yml` but already present in Kong is updat
 
 | Field | Value |
 |---|---|
-| Image | `hashicorp/vault:1.21` |
+| Image | `openbao/openbao:2` |
 | Host ports | `18200→8200` |
 | Volumes | `./vault/config.hcl` → `/vault/prod-config/config.hcl` (read-only, for future prod mode), `./.vols/vault` → `/vault/data` |
 | Depends on | — |
 
 **Key environment variables:**
 
-| Variable | Purpose |
-|---|---|
-| `VAULT_DEV_ROOT_TOKEN_ID` | Dev-mode root token, also used by Management API for Vault access |
-| `VAULT_DEV_LISTEN_ADDRESS` | `0.0.0.0:8200` (required for Docker networking) |
-| `VAULT_ADDR` | Internal URL `http://vault:8200` |
+| `.env` variable | Compose mapping | Purpose |
+|---|---|---|
+| `VAULT_DEV_ROOT_TOKEN_ID` | `BAO_DEV_ROOT_TOKEN_ID` | Dev-mode root token, also used by Management API for OpenBao access |
+| *(hardcoded)* | `BAO_DEV_LISTEN_ADDRESS` | `0.0.0.0:8200` (required for Docker networking) |
+| `VAULT_ADDR` | `VAULT_ADDR` | Internal URL `http://vault:8200` |
+
+> **Note:** OpenBao's Docker image reads `BAO_DEV_*` env vars for dev server configuration, not `VAULT_DEV_*`. The compose file maps the `.env` names to the correct `BAO_` names internally.
 
 **Command:** `server -dev` (development mode — auto-initialized, auto-unsealed, in-memory storage supplemented by the file volume)
 
@@ -231,8 +233,8 @@ Any service declared in `kong.template.yml` but already present in Kong is updat
 To switch to production mode: change the docker-compose command to `server -config=/vault/prod-config/config.hcl`, remove `VAULT_DEV_*` env vars, and handle manual init/unseal.
 
 **Operational notes:**
-- In dev mode, Vault is automatically initialized and unsealed on every start. No manual unsealing is needed.
-- The `VAULT_DEV_ROOT_TOKEN_ID` must be alphanumeric + hyphens only (Vault 1.21+ rejects dots and special characters).
+- In dev mode, OpenBao is automatically initialized and unsealed on every start. No manual unsealing is needed.
+- The `VAULT_DEV_ROOT_TOKEN_ID` must be alphanumeric + hyphens only (OpenBao rejects dots and special characters).
 - Dev mode is a deliberate v1 trade-off. Secrets persist in `.vols/vault/` across restarts, but the auto-unseal behavior is not production-grade.
 
 ---
@@ -362,14 +364,14 @@ The entrypoint script checks if `GITLAB_RUNNER_TOKEN` equals `FILL_AFTER_STARTUP
 
 | Field | Value |
 |---|---|
-| Image | `hashicorp/vault:1.21` |
+| Image | `openbao/openbao:2` |
 | Host ports | — |
 | Volumes | `./vault/init-oidc.sh` → `/scripts/init-oidc.sh` |
 | Depends on | `vault` (healthy), `keycloak` (healthy) |
 
 One-shot service. Runs `/init-oidc.sh`:
 
-1. Waits until Vault responds to `GET /v1/sys/health`.
+1. Waits until OpenBao responds to `GET /v1/sys/health`.
 2. Enables the `oidc` auth method (idempotent).
 3. Writes the OIDC config (discovery URL = Keycloak internal issuer).
 4. Creates a `default` OIDC role with `preferred_username` as the user claim.
@@ -410,4 +412,4 @@ One-shot service. Runs `/init-oidc.sh`:
 **Operational notes:**
 - `oauth2-proxy` is used as a ForwardAuth endpoint via Traefik's `oidc-auth@file` middleware. It is also routed through Kong at `${OAUTH_DOMAIN}` to handle the OAuth2 callback.
 - The `OAUTH2_PROXY_COOKIE_SECRET` must be exactly 32 bytes. Generate with: `openssl rand -base64 32 | head -c 32`.
-- `OAUTH2_PROXY_INSECURE_OIDC_SKIP_ISSUER_VERIFICATION` is set to `true` because the internal issuer URL (`http://keycloak:8080/...`) doesn't match the external issuer in the JWT.
+- `OAUTH2_PROXY_INSECURE_OIDC_SKIP_ISSUER_VERIFICATION` is set to `true` because the internal issuer URL (`http://keycloak:8080/...`) does

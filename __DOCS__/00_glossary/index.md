@@ -56,6 +56,6 @@ A quick reference for terms used throughout this documentation. You don't need t
 
 **Tunnel (Cloudflare Tunnel)** — A service that creates an outbound connection from your server to Cloudflare's edge network. This lets users access the platform over the internet without you needing to open inbound firewall ports.
 
-**Vault** — HashiCorp Vault. A secrets management system that stores sensitive values (passwords, tokens, API keys) securely and controls who can read them.
+**OpenBao** — An open-source secrets management system (Vault-compatible, MPL 2.0 license) that stores sensitive values (passwords, tokens, API keys) securely and controls who can read them.
 
 **Wildcard Certificate** — An HTTPS certificate that covers all subdomains under a domain (e.g., `*.devops.example.com`). This platform requests one automatically via Let's Encrypt.

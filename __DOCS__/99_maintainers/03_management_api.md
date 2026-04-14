@@ -147,7 +147,7 @@ interface AppConfiguration {
     adminUrl: string;          // KONG_ADMIN_URL (default: http://kong:8001)
   };
   vault: {
-    url: string;               // VAULT_URL (default: http://vault:8200)
+    url: string;               // VAULT_URL (default: http://vault:8200) — OpenBao instance
     token: string;             // VAULT_DEV_ROOT_TOKEN_ID (required)
   };
   cloudflare: {
@@ -396,7 +396,7 @@ HTTP client for the Kong Admin API. No authentication (Admin API is only accessi
 
 ### VaultService (`api/src/vault/vault.service.ts`)
 
-HTTP client for the Vault KV v2 API. Authenticates with `X-Vault-Token` header.
+HTTP client for the OpenBao KV v2 API. Authenticates with `X-Vault-Token` header.
 
 | Method | Signature | Description |
 |---|---|---|
@@ -430,4 +430,4 @@ To regenerate the spec after changes:
 pnpm run build
 node -e "require('./dist/main').generateSpec()"
 ```
-(If a `generateSpec` export exists; otherwise run the app and fetch `/api-json`.)
+(If a `generateSpec` export exists; othe

@@ -244,4 +244,4 @@ These variables are available in all jobs and are used by the shared configs:
 | `CI_REGISTRY_USER` / `CI_REGISTRY_PASSWORD` | GitLab built-in | Registry auth |
 | `CI_JOB_TOKEN` | GitLab built-in | Short-lived token for package/registry auth |
 
-Project-specific secrets (from Vault) are not automatically injected into CI jobs. If a project needs Vault secrets in CI, the pipeline must include a step to authenticate to Vault and fetch them.
+Project-specific secrets (from OpenBao) are not automatically injected into CI jobs. If a project needs OpenBao secrets in CI, the pipeline must include a step

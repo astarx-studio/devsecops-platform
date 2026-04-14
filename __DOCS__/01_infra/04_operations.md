@@ -76,7 +76,7 @@ All persistent data is stored under `.vols/` in the project root. This folder is
 
 - `.vols/gitlab/` — GitLab repositories, registry images, uploads, and configuration
 - `.vols/gitlab-runner/` — GitLab Runner configuration and build cache
-- `.vols/vault/` — Vault secrets storage
+- `.vols/vault/` — OpenBao secrets storage
 - `.vols/keycloak-db/` — Keycloak database (users, realm configuration, OIDC clients)
 - `.vols/kong-db/` — Kong database (routes, services, plugins)
 - `.vols/traefik/` — ACME certificate storage (your Let's Encrypt certificates)
@@ -94,7 +94,7 @@ If the platform goes down and you restore `.vols/` from a backup, you can bring 
 The most critical folders to back up are:
 
 - `.vols/gitlab/` — losing this means losing all repositories
-- `.vols/vault/` — losing this means losing stored secrets
+- `.vols/vault/` — losing this means losing stored OpenBao secrets
 - `.vols/keycloak-db/` — losing this means losing users and SSO configuration
 
 If you lose `.vols/kong-db/` or `.vols/traefik/`, Kong and Traefik will reinitialize from their configuration files, and Traefik will request new certificates automatically.

@@ -1,12 +1,12 @@
-# Vault Administration
+# OpenBao Administration
 
 ← [Back to Admin Guide](index.md)
 
-Vault is the secrets store for the platform. Instead of storing database passwords, API keys, or tokens in code or config files, they live in Vault, where access is controlled and audited.
+OpenBao is the secrets store for the platform. Instead of storing database passwords, API keys, or tokens in code or config files, they live in OpenBao, where access is controlled and audited.
 
 ---
 
-## Accessing the Vault UI
+## Accessing the OpenBao UI
 
 Go to `https://vault.devops.yourdomain.com`. You'll see a login screen with a "Token" method selected by default.
 
@@ -18,17 +18,17 @@ Alternatively, if SSO is set up and working, you can log in using **OIDC** by se
 
 ## Understanding dev mode
 
-In v1, Vault runs in **development mode**. This is the simplest way to get Vault running — it auto-unseals itself on startup using the root token you specified in `.env`, stores everything in memory (with file-backed persistence in `.vols/vault/`), and doesn't require manual initialization or unsealing.
+In v1, OpenBao runs in **development mode**. This is the simplest way to get OpenBao running — it auto-unseals itself on startup using the root token you specified in `.env`, stores everything in memory (with file-backed persistence in `.vols/vault/`), and doesn't require manual initialization or unsealing.
 
-The important thing to know: **dev mode is not a production secrets management setup.** The root token has unrestricted access to everything in Vault. If this server is accessed by untrusted parties, dev mode provides minimal protection.
+The important thing to know: **dev mode is not a production secrets management setup.** The root token has unrestricted access to everything in OpenBao. If this server is accessed by untrusted parties, dev mode provides minimal protection.
 
-For a team-internal DevOps platform running on a private server, dev mode is an acceptable starting point. Moving to a hardened Vault setup would involve switching to a non-dev server configuration, setting up auto-unseal (using a cloud KMS or HSM), and creating scoped policies for each service. That's outside the scope of v1.
+For a team-internal DevOps platform running on a private server, dev mode is an acceptable starting point. Moving to a hardened OpenBao setup would involve switching to a non-dev server configuration, setting up auto-unseal (using a cloud KMS or HSM), and creating scoped policies for each service. That's outside the scope of v1.
 
 ---
 
 ## How secrets are organized
 
-The platform uses Vault's **KV v2** (Key/Value) secrets engine. Secrets are organized by path, following this convention:
+The platform uses OpenBao's **KV v2** (Key/Value) secrets engine. Secrets are organized by path, following this convention:
 
 ```
 projects/{clientName}/{projectName}
@@ -46,7 +46,7 @@ When the Management API provisions a new project, it creates this path and seeds
 
 ## Viewing and editing secrets
 
-In the Vault UI:
+In the OpenBao UI:
 
 1. Log in
 2. In the left sidebar, click **Secrets Engines** → `secret/` (the default KV engine)
@@ -60,16 +60,16 @@ You can also create new secrets and paths manually through the UI for things the
 
 ## Adding secrets via the CLI
 
-If you prefer using the command line, you can run Vault commands directly inside the container:
+If you prefer using the command line, you can run OpenBao commands directly inside the container:
 
 ```bash
-docker compose exec vault vault kv put secret/projects/acme/website key=value other_key=other_value
+docker compose exec vault bao kv put secret/projects/acme/website key=value other_key=other_value
 ```
 
 To read a secret:
 
 ```bash
-docker compose exec vault vault kv get secret/projects/acme/website
+docker compose exec vault bao kv get secret/projects/acme/website
 ```
 
 The `VAULT_ADDR` and `VAULT_TOKEN` environment variables are already set inside the container, so no additional authentication is needed.
@@ -78,6 +78,6 @@ The `VAULT_ADDR` and `VAULT_TOKEN` environment variables are already set inside 
 
 ## What isn't automated yet in v1
 
-The Management API creates secret paths and seeds initial values, but there's no automated policy system. In a more mature setup, each project or service would get its own Vault policy — a set of rules defining which paths it's allowed to read or write. In v1, the root token is used for all access, which means everything can read everything.
+The Management API creates secret paths and seeds initial values, but there's no automated policy system. In a more mature setup, each project or service would get its own OpenBao policy — a set of rules defining which paths it's allowed to read or write. In v1, the root token is used for all access, which means everything can read everything.
 
-If you need to restrict access (e.g., prevent one project's CI pipeline from reading another project's secrets), this would require creating per-project Vault tokens and policies. That's a manual step not covered in v1.
+If you need to restrict access (e.g., prevent one project's CI pipeline from reading another project's secrets), this would require creating per-project OpenBao tokens and policies. That's a manual step not covered in v1.
