@@ -4,7 +4,7 @@ A self-hosted DevSecOps platform that runs entirely on a single server using Doc
 
 Once running, developers focus on writing code. Infrastructure is already taken care of.
 
-**Stack:** Traefik · Kong · Keycloak · HashiCorp Vault · GitLab CE · GitLab Runner · Cloudflare Tunnel · Management API
+**Stack:** Traefik · Kong · Keycloak · OpenBao · GitLab CE · GitLab Runner · Cloudflare Tunnel · Management API
 
 ---
 

@@ -6,7 +6,7 @@ import { firstValueFrom } from 'rxjs';
 import { AppConfiguration } from '../config';
 
 /**
- * Client for the Vault HTTP API (KV v2 secrets engine).
+ * Client for the OpenBao HTTP API (KV v2 secrets engine, Vault-compatible).
  *
  * Manages per-project secret paths: create, read, write, and delete.
  * Uses internal Docker DNS URL (http://vault:8200) with X-Vault-Token header.

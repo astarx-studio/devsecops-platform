@@ -3,7 +3,7 @@
 #                               Integration & Management
 # ==========================================================================
 # Containers: traefik, kong-db, kong-migration, kong, kong-deck-sync,
-#             keycloak-db, keycloak, vault, cloudflared, gitlab,
+#             keycloak-db, keycloak, vault (OpenBao), cloudflared, gitlab,
 #             gitlab-runner, api
 # Network:    devops-network (bridge)
 # ==========================================================================
@@ -310,20 +310,20 @@ services:
       - devops-network
 
   # ========================================================================
-  # VAULT — Secrets Management
+  # OPENBAO — Secrets Management (Vault-compatible, MPL 2.0)
   # ========================================================================
   # Default: dev mode (auto-unsealed). For production, change command to
   # "server -config=/vault/prod-config/config.hcl" and remove VAULT_DEV_* vars.
   vault:
-    image: hashicorp/vault:1.21
+    image: openbao/openbao:2
     container_name: vault
     command: server -dev
     restart: unless-stopped
     ports:
       - "18200:8200"
     environment:
-      VAULT_DEV_ROOT_TOKEN_ID: ${VAULT_DEV_ROOT_TOKEN_ID}
-      VAULT_DEV_LISTEN_ADDRESS: "0.0.0.0:8200"
+      BAO_DEV_ROOT_TOKEN_ID: ${VAULT_DEV_ROOT_TOKEN_ID}
+      BAO_DEV_LISTEN_ADDRESS: "0.0.0.0:8200"
       VAULT_ADDR: ${VAULT_ADDR}
     cap_add:
       - IPC_LOCK
@@ -572,10 +572,10 @@ services:
       - devops-network
 
   # ========================================================================
-  # VAULT OIDC INIT — One-shot initializer for Vault OIDC auth method
+  # OPENBAO OIDC INIT — One-shot initializer for OpenBao OIDC auth method
   # ========================================================================
   vault-oidc-init:
-    image: hashicorp/vault:1.21
+    image: openbao/openbao:2
     container_name: vault-oidc-init
     restart: "no"
     entrypoint: /bin/sh
