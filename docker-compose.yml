@@ -265,6 +265,11 @@ services:
           -e "s|\$${SMTP_FROM_NAME}|$$SMTP_FROM_NAME|g" \
           -e "s|\$${SMTP_USER}|$$SMTP_USER|g" \
           -e "s|\$${SMTP_PASSWORD}|$$SMTP_PASSWORD|g" \
+          -e "s|\$${KC_CLIENT_SECRET_GITLAB}|$$KC_CLIENT_SECRET_GITLAB|g" \
+          -e "s|\$${KC_CLIENT_SECRET_VAULT}|$$KC_CLIENT_SECRET_VAULT|g" \
+          -e "s|\$${KC_CLIENT_SECRET_OAUTH2_PROXY}|$$KC_CLIENT_SECRET_OAUTH2_PROXY|g" \
+          -e "s|\$${KEYCLOAK_ADMIN_PASSWORD}|$$KEYCLOAK_ADMIN_PASSWORD|g" \
+          -e "s|\$${KEYCLOAK_ADMIN_EMAIL}|$$KEYCLOAK_ADMIN_EMAIL|g" \
           /opt/keycloak/data/import-template/realm-export.json \
           > /opt/keycloak/data/import/realm-export.json
         exec /opt/keycloak/bin/kc.sh start-dev --import-realm
@@ -289,6 +294,10 @@ services:
       SMTP_DOMAIN: ${SMTP_DOMAIN}
       KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN}
       KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
+      KEYCLOAK_ADMIN_EMAIL: ${KEYCLOAK_ADMIN_EMAIL}
+      KC_CLIENT_SECRET_GITLAB: ${KC_CLIENT_SECRET_GITLAB}
+      KC_CLIENT_SECRET_VAULT: ${KC_CLIENT_SECRET_VAULT}
+      KC_CLIENT_SECRET_OAUTH2_PROXY: ${KC_CLIENT_SECRET_OAUTH2_PROXY}
       GITLAB_DOMAIN: ${GITLAB_DOMAIN}
       VAULT_DOMAIN: ${VAULT_DOMAIN}
       API_DOMAIN: ${API_DOMAIN}

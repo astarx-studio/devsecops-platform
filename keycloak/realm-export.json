@@ -213,7 +213,7 @@
       "directAccessGrantsEnabled": false,
       "serviceAccountsEnabled": false,
       "protocol": "openid-connect",
-      "secret": "CHANGE-ME-GITLAB-CLIENT-SECRET",
+      "secret": "${KC_CLIENT_SECRET_GITLAB}",
       "redirectUris": [
         "https://${GITLAB_DOMAIN}/users/auth/openid_connect/callback"
       ],
@@ -236,32 +236,13 @@
       "directAccessGrantsEnabled": false,
       "serviceAccountsEnabled": false,
       "protocol": "openid-connect",
-      "secret": "CHANGE-ME-VAULT-CLIENT-SECRET",
+      "secret": "${KC_CLIENT_SECRET_VAULT}",
       "redirectUris": [
         "https://${VAULT_DOMAIN}/ui/vault/auth/oidc/oidc/callback",
         "http://localhost:8250/oidc/callback"
       ],
       "webOrigins": [
         "https://${VAULT_DOMAIN}"
-      ],
-      "defaultClientScopes": ["openid", "profile", "email", "roles"]
-    },
-    {
-      "clientId": "management-api",
-      "name": "Management API",
-      "description": "OIDC client for the NestJS Management API",
-      "enabled": true,
-      "publicClient": false,
-      "standardFlowEnabled": true,
-      "directAccessGrantsEnabled": true,
-      "serviceAccountsEnabled": true,
-      "protocol": "openid-connect",
-      "secret": "CHANGE-ME-API-CLIENT-SECRET",
-      "redirectUris": [
-        "https://${API_DOMAIN}/*"
-      ],
-      "webOrigins": [
-        "https://${API_DOMAIN}"
       ],
       "defaultClientScopes": ["openid", "profile", "email", "roles"]
     },
@@ -275,10 +256,8 @@
       "directAccessGrantsEnabled": false,
       "serviceAccountsEnabled": false,
       "protocol": "openid-connect",
-      "secret": "CHANGE-ME-OAUTH2-PROXY-CLIENT-SECRET",
-      "redirectUris": [
-        "https://${OAUTH_DOMAIN}/oauth2/callback"
-      ],
+      "secret": "${KC_CLIENT_SECRET_OAUTH2_PROXY}",
+      "redirectUris": ["https://${OAUTH_DOMAIN}/oauth2/callback"],
       "webOrigins": [
         "https://${TRAEFIK_DOMAIN}",
         "https://${KONG_DOMAIN}",
@@ -295,14 +274,14 @@
       "username": "admin",
       "enabled": true,
       "emailVerified": true,
-      "email": "admin@devops.yourdomain.com",
+      "email": "${KEYCLOAK_ADMIN_EMAIL}",
       "firstName": "Platform",
       "lastName": "Admin",
       "realmRoles": ["admin", "developer"],
       "credentials": [
         {
           "type": "password",
-          "value": "CHANGE-ME-DEVOPS-ADMIN-PASSWORD",
+          "value": "${KEYCLOAK_ADMIN_PASSWORD}",
           "temporary": true
         }
       ]
