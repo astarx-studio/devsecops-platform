@@ -466,7 +466,11 @@ services:
               client_options: {
                 identifier: "gitlab",
                 secret: ENV['KC_CLIENT_SECRET_GITLAB'],
-                redirect_uri: "https://${GITLAB_DOMAIN}/users/auth/openid_connect/callback"
+                redirect_uri: "https://${GITLAB_DOMAIN}/users/auth/openid_connect/callback",
+                gitlab: {
+                  groups_attribute: "groups",
+                  admin_groups: ["admins"],
+                }
               }
             }
           }
