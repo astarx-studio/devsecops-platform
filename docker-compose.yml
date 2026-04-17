@@ -57,7 +57,10 @@ services:
       traefik.http.routers.traefik-dashboard.service: "api@internal"
       traefik.http.routers.traefik-dashboard.priority: "100"
       traefik.http.routers.traefik-dashboard.tls.certresolver: "letsencrypt"
-      traefik.http.routers.traefik-dashboard.middlewares: "oidc-auth@file"
+      traefik.http.routers.traefik-dashboard.middlewares: "oidc-auth@file,traefik-root-redirect"
+      traefik.http.middlewares.traefik-root-redirect.redirectregex.regex: "^https://[^/]+/$$"
+      traefik.http.middlewares.traefik-root-redirect.redirectregex.replacement: "https://${TRAEFIK_DOMAIN}/dashboard/"
+      traefik.http.middlewares.traefik-root-redirect.redirectregex.permanent: "false"
     healthcheck:
       test: ["CMD", "traefik", "healthcheck", "--ping"]
       interval: 15s
@@ -622,8 +625,11 @@ services:
   # ========================================================================
   # OAUTH2-PROXY — OIDC authentication for Traefik Dashboard + Kong Admin
   # ========================================================================
-  # Provides ForwardAuth endpoint at /oauth2/auth for services without
-  # native OIDC support. Routes via ${OAUTH_DOMAIN}.
+  # Runs in proxy mode with a static upstream (static://202) so that
+  # Traefik's ForwardAuth can point at the root URL. Unauthenticated
+  # requests get a 302 redirect to Keycloak; authenticated requests get
+  # a 202 response that ForwardAuth treats as "allow". Routes via
+  # ${OAUTH_DOMAIN} for the /oauth2/callback flow.
   oauth2-proxy:
     image: quay.io/oauth2-proxy/oauth2-proxy:latest
     container_name: oauth2-proxy
@@ -647,7 +653,8 @@ services:
       OAUTH2_PROXY_SET_XAUTHREQUEST: "true"
       OAUTH2_PROXY_SKIP_PROVIDER_BUTTON: "true"
       OAUTH2_PROXY_PASS_ACCESS_TOKEN: "true"
-      OAUTH2_PROXY_WHITELIST_DOMAINS: ".devops.${DOMAIN}"
+      OAUTH2_PROXY_WHITELIST_DOMAINS: ".${DOMAIN}"
+      OAUTH2_PROXY_UPSTREAMS: "static://202"
     depends_on:
       keycloak:
         condition: service_healthy
