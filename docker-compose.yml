@@ -107,7 +107,14 @@ services:
   kong-migration:
     image: kong:3.9
     container_name: kong-migration
-    command: kong migrations bootstrap
+    command: >
+      sh -c "
+        until kong migrations bootstrap 2>/dev/null; do
+          echo '[INFO] Kong DB not ready yet — retrying in 3s...'
+          sleep 3
+        done
+        echo '[INFO] Kong migrations complete.'
+      "
     restart: "no"
     environment:
       KONG_DATABASE: postgres
