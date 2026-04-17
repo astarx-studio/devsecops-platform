@@ -11,7 +11,7 @@ Here's what's covered:
 - **[Access and SSO](01_access_and_sso.md)** — How the single sign-on system works, and how to manage it when something breaks.
 - **[GitLab](02_gitlab.md)** — Setting up groups and project templates, managing users, and testing email.
 - **[Keycloak](03_keycloak.md)** — Managing users, roles, and OIDC clients. Configuring email settings.
-- **[Vault](04_vault.md)** — Accessing and managing secrets.
+- **[Vault](04_vault.md)** — Accessing and managing secrets. Admin access is granted via the Keycloak `admins` group.
 - **[Management API](05_management_api.md)** — Using the project provisioning API: creating and deleting projects, understanding capabilities.
 - **[Templates](06_templates.md)** — Managing template repositories that projects are forked from.
 - **[Shared CI/CD Configs](07_configs.md)** — Managing shared pipeline definitions that can be injected into projects.

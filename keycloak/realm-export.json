@@ -39,6 +39,13 @@
     ]
   },
   "defaultRoles": ["developer"],
+  "groups": [
+    {
+      "name": "admins",
+      "path": "/admins",
+      "realmRoles": ["admin"]
+    }
+  ],
   "clientScopes": [
     {
       "name": "openid",
@@ -171,6 +178,30 @@
       ]
     },
     {
+      "name": "groups",
+      "description": "Maps user group memberships into JWT tokens",
+      "protocol": "openid-connect",
+      "attributes": {
+        "include.in.token.scope": "true",
+        "display.on.consent.screen": "false"
+      },
+      "protocolMappers": [
+        {
+          "name": "group-membership",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-group-membership-mapper",
+          "consentRequired": false,
+          "config": {
+            "full.path": "false",
+            "claim.name": "groups",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true"
+          }
+        }
+      ]
+    },
+    {
       "name": "roles",
       "description": "Maps realm roles into JWT access tokens",
       "protocol": "openid-connect",
@@ -200,7 +231,8 @@
     "openid",
     "profile",
     "email",
-    "roles"
+    "roles",
+    "groups"
   ],
   "clients": [
     {
@@ -224,12 +256,12 @@
         "pkce.code.challenge.method": "S256",
         "post.logout.redirect.uris": "https://${GITLAB_DOMAIN}"
       },
-      "defaultClientScopes": ["openid", "profile", "email", "roles"]
+      "defaultClientScopes": ["openid", "profile", "email", "roles", "groups"]
     },
     {
       "clientId": "vault",
-      "name": "HashiCorp Vault",
-      "description": "OIDC client for Vault UI authentication",
+      "name": "OpenBao",
+      "description": "OIDC client for OpenBao UI authentication",
       "enabled": true,
       "publicClient": false,
       "standardFlowEnabled": true,
@@ -244,7 +276,7 @@
       "webOrigins": [
         "https://${VAULT_DOMAIN}"
       ],
-      "defaultClientScopes": ["openid", "profile", "email", "roles"]
+      "defaultClientScopes": ["openid", "profile", "email", "roles", "groups"]
     },
     {
       "clientId": "oauth2-proxy",
@@ -266,7 +298,7 @@
       "attributes": {
         "post.logout.redirect.uris": "https://${TRAEFIK_DOMAIN},https://${KONG_DOMAIN}"
       },
-      "defaultClientScopes": ["openid", "profile", "email", "roles"]
+      "defaultClientScopes": ["openid", "profile", "email", "roles", "groups"]
     }
   ],
   "users": [
@@ -278,6 +310,7 @@
       "firstName": "Platform",
       "lastName": "Admin",
       "realmRoles": ["admin", "developer"],
+      "groups": ["/admins"],
       "credentials": [
         {
           "type": "password",

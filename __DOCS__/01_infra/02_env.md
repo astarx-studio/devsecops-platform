@@ -79,6 +79,7 @@ The remaining Kong variables (`KONG_PG_HOST`, `KONG_PG_PORT`, `KONG_PG_DATABASE`
 
 ```
 KEYCLOAK_ADMIN=admin
+KEYCLOAK_ADMIN_EMAIL=admin@yourdomain.com
 KEYCLOAK_ADMIN_PASSWORD=change-me-keycloak-admin-password
 KC_DB_PASSWORD=change-me-keycloak-db-password
 KC_HOSTNAME_STRICT=false
@@ -86,6 +87,8 @@ KC_HTTP_ENABLED=true
 ```
 
 `KEYCLOAK_ADMIN` is the username you'll use to log in to the Keycloak admin panel. You can leave it as `admin` or change it.
+
+`KEYCLOAK_ADMIN_EMAIL` is the email address for the bootstrap admin account. Set this to a valid email address (used for account recovery and notifications). This is also the email assigned to the default admin user created in the realm.
 
 `KEYCLOAK_ADMIN_PASSWORD` is the password for that admin account. **Set this to something strong** — this account has full control over all users and login settings.
 

@@ -114,7 +114,19 @@ bao write auth/oidc/config \
 
 `KEYCLOAK_ISSUER_URL` is sourced from `${OIDC_ISSUER_URL}` in `.env`, which is the **external** public Keycloak URL (e.g. `https://auth.devops.yourdomain.com/realms/devops`). This resolves correctly inside the Docker network because Traefik is aliased to all `*.devops.<DOMAIN>` hostnames on `devops-network`, so internal DNS resolution of `auth.devops.yourdomain.com` routes to Traefik → Keycloak without leaving the host. OpenBao uses this URL to fetch the discovery document (`.well-known/openid-configuration`) and the JWKS endpoint.
 
-### 3. Create default role
+### 3. Create admin policy
+
+```sh
+bao policy write admin - <<EOF
+path "*" {
+  capabilities = ["create", "read", "update", "delete", "list", "sudo"]
+}
+EOF
+```
+
+This policy grants full access to all paths and operations. It's mapped to users in the `admins` external group (see step 6 below).
+
+### 4. Create default role
 
 ```sh
 bao write auth/oidc/role/default \
@@ -122,6 +134,8 @@ bao write auth/oidc/role/default \
   allowed_redirect_uris="${VAULT_EXTERNAL_URL}/ui/vault/auth/oidc/oidc/callback" \
   allowed_redirect_uris="http://localhost:8250/oidc/callback" \
   user_claim="preferred_username" \
+  groups_claim="groups" \
+  oidc_scopes="openid,profile,email,groups" \
   policies="default" \
   ttl="1h"
 ```
@@ -131,8 +145,36 @@ bao write auth/oidc/role/default \
 | `role_type` | `oidc` | Use the OIDC flow (not JWT) |
 | `allowed_redirect_uris` | External URL + localhost | External for UI login; localhost for CLI login |
 | `user_claim` | `preferred_username` | Maps Keycloak username to Vault entity |
-| `policies` | `default` | Minimal access; extend for production |
+| `groups_claim` | `groups` | Read group membership from this OIDC claim |
+| `oidc_scopes` | `openid,profile,email,groups` | Request group membership in the token |
+| `policies` | `default` | Minimal access; extended by group mapping (see below) |
 | `ttl` | `1h` | Token lifetime |
+
+### 5. Create external group for admins
+
+```sh
+bao write identity/group \
+  name="admins" \
+  type="external"
+```
+
+### 6. Map Keycloak admins group to external group
+
+```sh
+# Get the external group ID
+EXTERNAL_GROUP_ID=$(bao read -field=id identity/group/name/admins)
+
+# Create the group alias
+bao write identity/oidc/key/default/groups/admins \
+  key=groups \
+  value=admins
+
+# Link the external group to the admin policy
+bao write identity/group/id/${EXTERNAL_GROUP_ID} \
+  policies="admin"
+```
+
+Now when a user authenticates via OIDC and their Keycloak token contains `groups: ["admins"]`, OpenBao automatically assigns them the `admin` policy.
 
 ---
 
@@ -277,4 +319,4 @@ Project secrets stored in OpenBao are not automatically injected into GitLab CI 
 
 An operator reads the secrets from Vault and manually adds them as masked CI/CD variables in the GitLab project settings (**Settings → CI/CD → Variables**). Mark each variable as **Masked** so its value is redacted from job logs.
 
-This is the only pattern that works out of the box with the current v1 Vault setup (OIDC auth method configured against Keycloak, not GitLab). Automated Vault-in-CI patterns (e.g., using GitLab ID tokens against a Vault JWT auth method) require additiona
+This is the only pattern that works out of the box with the current v1 Vault setup (OIDC auth method configured against Keycloak, not GitLab). Automated Vault-in-CI patterns (e.g., using GitLab ID tokens against a Vault JWT auth method) require additional Vault configuration not included in v1.

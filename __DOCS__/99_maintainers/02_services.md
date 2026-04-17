@@ -374,7 +374,12 @@ One-shot service. Runs `/init-oidc.sh`:
 1. Waits until OpenBao responds to `GET /v1/sys/health`.
 2. Enables the `oidc` auth method (idempotent).
 3. Writes the OIDC config (discovery URL = Keycloak internal issuer).
-4. Creates a `default` OIDC role with `preferred_username` as the user claim.
+4. Creates an `admin` policy with full access.
+5. Creates a `default` OIDC role with `preferred_username` as the user claim and `groups` as the groups claim.
+6. Creates an external group named `admins`.
+7. Maps Keycloak's `admins` group to the external group, assigning the `admin` policy.
+
+Users authenticating via OIDC who belong to the Keycloak `admins` group automatically receive full admin access to OpenBao.
 
 **Key environment variables:** `VAULT_ADDR`, `VAULT_TOKEN`, `KEYCLOAK_ISSUER_URL`, `KC_CLIENT_SECRET_VAULT`, `VAULT_EXTERNAL_URL`.
 

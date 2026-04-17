@@ -16,6 +16,22 @@ Alternatively, if SSO is set up and working, you can log in using **OIDC** by se
 
 ---
 
+## Admin access via SSO
+
+If you're a member of the Keycloak `admins` group, you automatically get full admin access to OpenBao. The platform maps the `admins` group to OpenBao's `admin` policy through the OIDC auth method.
+
+To log in as an admin using SSO:
+
+1. Go to `https://vault.devops.yourdomain.com`
+2. Click the "OIDC" method dropdown and select it
+3. Click **Sign in with OIDC**
+4. Authenticate with your Keycloak credentials (must be in the `admins` group)
+5. You'll receive a Vault token with `admin` policy, granting full access
+
+If you're not in the `admins` group, you'll be issued a token with the `default` policy (limited read access only).
+
+---
+
 ## Understanding dev mode
 
 In v1, OpenBao runs in **development mode**. This is the simplest way to get OpenBao running — it auto-unseals itself on startup using the root token you specified in `.env`, stores everything in memory (with file-backed persistence in `.vols/vault/`), and doesn't require manual initialization or unsealing.
