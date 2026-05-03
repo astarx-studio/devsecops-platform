@@ -630,6 +630,11 @@ services:
   # requests get a 302 redirect to Keycloak; authenticated requests get
   # a 202 response that ForwardAuth treats as "allow". Routes via
   # ${OAUTH_DOMAIN} for the /oauth2/callback flow.
+  #
+  # OAUTH2_PROXY_ALLOWED_GROUPS (plural — required spelling for oauth2-proxy)
+  # restricts access after IdP login to members of the listed Keycloak groups
+  # (JWT `groups` claim; comma-separated OR list). Default `admins` matches the
+  # realm `admins` group in keycloak/realm-export.json.
   oauth2-proxy:
     image: quay.io/oauth2-proxy/oauth2-proxy:latest
     container_name: oauth2-proxy
@@ -655,6 +660,7 @@ services:
       OAUTH2_PROXY_PASS_ACCESS_TOKEN: "true"
       OAUTH2_PROXY_WHITELIST_DOMAINS: ".${DOMAIN}"
       OAUTH2_PROXY_UPSTREAMS: "static://202"
+      OAUTH2_PROXY_ALLOWED_GROUPS: ${OAUTH2_PROXY_ALLOWED_GROUPS:-admins}
     depends_on:
       keycloak:
         condition: service_healthy

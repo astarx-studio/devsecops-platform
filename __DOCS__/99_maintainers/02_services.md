@@ -411,10 +411,12 @@ Users authenticating via OIDC who belong to the Keycloak `admins` group automati
 | `OAUTH2_PROXY_SET_XAUTHREQUEST` | `true` (sets X-Auth-Request-* headers) |
 | `OAUTH2_PROXY_SKIP_PROVIDER_BUTTON` | `true` (skips the "Sign in with..." button, redirects immediately) |
 | `OAUTH2_PROXY_PASS_ACCESS_TOKEN` | `true` (passes the OIDC access token downstream) |
+| `OAUTH2_PROXY_ALLOWED_GROUPS` | Comma-separated Keycloak group names (JWT `groups` claim; **plural** — required by oauth2-proxy); default `admins` in Compose if unset |
 
 **Health check:** None defined.
 
 **Operational notes:**
 - `oauth2-proxy` is used as a ForwardAuth endpoint via Traefik's `oidc-auth@file` middleware. It is also routed through Kong at `${OAUTH_DOMAIN}` to handle the OAuth2 callback.
+- Tiered OIDC by extending oauth2-proxy / Traefik / Kong (extra instances and callbacks): [Adding tiered OIDC with oauth2-proxy](../02_admin/08_oauth2_proxy_tiers_and_forwardauth.md) in the admin guide.
 - The `OAUTH2_PROXY_COOKIE_SECRET` must be exactly 32 bytes. Generate with: `openssl rand -base64 32 | head -c 32`.
-- `OAUTH2_PROXY_INSECURE_OIDC_SKIP_ISSUER_VERIFICATION` is set to `true` because the internal issuer URL (`http://keycloak:8080/...`) does
+- `OAUTH2_PROXY_INSECURE_OIDC_SKIP_ISSUER_VERIFICATION` is set to `true` because the internal issuer URL (`http://keycloak:8080/...`) does not match the public issuer URL used in browser-facing discovery in every deployment path.

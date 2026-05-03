@@ -15,3 +15,4 @@ Here's what's covered:
 - **[Management API](05_management_api.md)** — Using the project provisioning API: creating and deleting projects, understanding capabilities.
 - **[Templates](06_templates.md)** — Managing template repositories that projects are forked from.
 - **[Shared CI/CD Configs](07_configs.md)** — Managing shared pipeline definitions that can be injected into projects.
+- **[Adding tiered OIDC with oauth2-proxy](08_oauth2_proxy_tiers_and_forwardauth.md)** — Extend Traefik, Kong, and Keycloak when you need multiple oauth2-proxy policies (admin / internal / external used only as examples).

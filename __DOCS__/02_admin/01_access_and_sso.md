@@ -63,7 +63,9 @@ If you see errors like "connection refused" or "TLS handshake failed" in service
 
 ## Tools that don't use SSO directly
 
-The Traefik dashboard (`https://traefik.devops.yourdomain.com`) and Kong admin panel (`https://gw-admin.devops.yourdomain.com`) don't have built-in OIDC support. They're protected by `oauth2-proxy`, which sits in front of them and enforces Keycloak login before allowing access.
+The Traefik dashboard (`https://traefik.devops.yourdomain.com`) and Kong admin panel (`https://gw-admin.devops.yourdomain.com`) don't have built-in OIDC support. They're protected by `oauth2-proxy`, which sits in front of them and enforces Keycloak login before allowing access. By default only users in the Keycloak **`admins`** group (JWT `groups` claim) may use those panels; configure **`OAUTH2_PROXY_ALLOWED_GROUPS`** in `.env` to change or widen that list (see [Environment variables](../01_infra/02_env.md#oauth2-proxy-allowed-groups)).
+
+To restrict those panels to **specific Keycloak groups**, or to learn **how to extend** the stack with additional oauth2-proxy instances for different policies (examples in that guide use labels such as internal vs external), see [Adding tiered OIDC with oauth2-proxy](08_oauth2_proxy_tiers_and_forwardauth.md).
 
 If you can't access these panels even after a successful Keycloak login, check that the `oauth2-proxy` service is running:
 

@@ -230,6 +230,20 @@ openssl rand -base64 32 | head -c 32
 
 ---
 
+## oauth2-proxy allowed groups
+
+```
+OAUTH2_PROXY_ALLOWED_GROUPS=admins
+```
+
+The variable name must be **`OAUTH2_PROXY_ALLOWED_GROUPS`** (plural). A singular `OAUTH2_PROXY_ALLOWED_GROUP` is **ignored** by oauth2-proxy, so the admin guard would not apply.
+
+After Keycloak login, oauth2-proxy only allows users whose JWT **`groups`** claim includes at least one of these names (comma-separated means **OR**). The stock realm defines a group named **`admins`** and assigns the bootstrap `admin` user to it; the Keycloak group mapper uses short names (`full.path` is false in `realm-export.json`), so the claim value is `admins`, not `/admins`.
+
+If you omit this variable, `docker-compose.yml` defaults to **`admins`**. Set it explicitly when you add more operator groups (for example `admins,sre`). Users who are not in any listed group can still complete Keycloak login but receive **403** from oauth2-proxy when opening the Traefik dashboard or Kong Admin.
+
+---
+
 ## SMTP (outbound email)
 
 ```
