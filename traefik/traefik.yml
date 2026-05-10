@@ -38,6 +38,11 @@ entryPoints:
           - main: "devops.__DOMAIN__"
             sans:
               - "*.devops.__DOMAIN__"
+          - main: "apps.__DOMAIN__"
+            sans:
+              - "*.apps.__DOMAIN__"
+              - "*.dev.apps.__DOMAIN__"
+              - "*.stg.apps.__DOMAIN__"
 
 certificatesResolvers:
   letsencrypt:
