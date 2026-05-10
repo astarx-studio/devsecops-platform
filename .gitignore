@@ -1,6 +1,7 @@
 # Environment
 *.env*
 !sample.env
+!edge/vpn-edge/forward-ports.sample.env
 
 # Docker volumes
 .vols*/

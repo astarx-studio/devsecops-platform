@@ -3,8 +3,8 @@
 #                               Integration & Management
 # ==========================================================================
 # Containers: traefik, kong-db, kong-migration, kong, kong-deck-sync,
-#             keycloak-db, keycloak, vault (OpenBao), cloudflared, gitlab,
-#             gitlab-runner, api
+#             keycloak-db, keycloak, vault (OpenBao), cloudflared, wireguard,
+#             gitlab, gitlab-runner, api
 # Network:    devops-network (bridge)
 # ==========================================================================
 
@@ -382,6 +382,53 @@ services:
     depends_on:
       traefik:
         condition: service_healthy
+    networks:
+      - devops-network
+
+  # ========================================================================
+  # WIREGUARD — VPN server for vpnedge public ingress (edge VM as client)
+  # ========================================================================
+  # Server mode: configs under .vols/wireguard (peer "edge" in /config/peer_edge/).
+  # Start only with: docker compose --profile vpnedge up -d
+  #
+  # Home router: forward UDP WIREGUARD_SERVER_PORT (default 51820) to this host.
+  # Docker Desktop + WSL2: if inbound UDP fails, run WireGuard natively in WSL2 and
+  # mirror the same keys/subnet; see __DOCS__/99_maintainers/05_networking.md.
+  #
+  # Edge DNAT targets HOME_TRAFFIC_IP (LAN IP of the Docker host where Traefik
+  # publishes 10080/10443 and GitLab SSH 12222), not the WG container IP.
+  # ALLOWEDIPS / WIREGUARD_PEER_ALLOWEDIPS let the edge peer route to private
+  # subnets; tune to your LAN. Advanced: set SERVER_ALLOWEDIPS_PEER_edge in
+  # /config/templates via linuxserver docs for site-to-site.
+  wireguard:
+    image: lscr.io/linuxserver/wireguard:latest
+    container_name: wireguard
+    profiles: ["vpnedge"]
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    environment:
+      PUID: 1000
+      PGID: 1000
+      TZ: UTC
+      SERVERURL: ${WIREGUARD_SERVER_URL:-auto}
+      SERVERPORT: ${WIREGUARD_SERVER_PORT:-51820}
+      PEERS: edge
+      PEERDNS: auto
+      INTERNAL_SUBNET: ${WIREGUARD_INTERNAL_SUBNET:-10.8.0.0}
+      LOG_CONFS: ${WIREGUARD_LOG_CONFS:-false}
+      ALLOWEDIPS: ${WIREGUARD_PEER_ALLOWEDIPS:-10.8.0.0/24,192.168.0.0/16,10.0.0.0/8,172.16.0.0/12}
+      PERSISTENTKEEPALIVE_PEERS: ${WIREGUARD_PERSISTENTKEEPALIVE_PEERS:-all}
+    volumes:
+      - ./.vols/wireguard:/config
+    ports:
+      - "${WIREGUARD_SERVER_PORT:-51820}:51820/udp"
+    # ip_forward: decrypted peer traffic can be forwarded toward the Docker host
+    # (HOME_TRAFFIC_IP); src_valid_mark: WireGuard policy routing.
+    sysctls:
+      - net.ipv4.ip_forward=1
+      - net.ipv4.conf.all.src_valid_mark=1
+    restart: unless-stopped
     networks:
       - devops-network
 

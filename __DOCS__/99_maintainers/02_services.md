@@ -21,7 +21,7 @@ All services share the `devops-network` Docker bridge network. The network name 
 | Phase 5 — after vault + keycloak healthy | `vault-oidc-init` |
 | Phase 5 — after vault + kong healthy | `api` |
 | Phase 6 — after gitlab healthy | `gitlab-runner` |
-| Profile-gated (manual) | `cloudflared` (only with `--profile cftunnel`) |
+| Profile-gated (manual) | `cloudflared` (`--profile cftunnel`), `wireguard` (`--profile vpnedge`) |
 
 ---
 
@@ -264,6 +264,30 @@ To switch to production mode: change the docker-compose command to `server -conf
 - If `TUNNEL_TOKEN` is missing or invalid, the container enters a restart loop. Check `docker logs cloudflared` for authentication errors.
 - The tunnel routing table (which hostnames go to which service) is configured in the Cloudflare dashboard under **Zero Trust → Networks → Tunnels**. Configure `*.devops.{DOMAIN}` → `https://traefik:443` with "No TLS Verify" enabled.
 - The rest of the platform works without Cloudflare Tunnel — it is only needed for external (internet) access.
+
+---
+
+## wireguard
+
+| Field | Value |
+|---|---|
+| Image | `lscr.io/linuxserver/wireguard:latest` |
+| Profile | `vpnedge` (only starts with `docker compose --profile vpnedge up -d`) |
+| Host ports | `${WIREGUARD_SERVER_PORT:-51820}→51820/udp` |
+| Volumes | `./.vols/wireguard` → `/config` (server config + generated `peer_edge` client files) |
+| Capabilities | `NET_ADMIN`, `SYS_MODULE` |
+| Sysctls | `net.ipv4.conf.all.src_valid_mark=1` |
+| Depends on | — |
+
+**Purpose:** WireGuard **server** at home. The cloud **edge** VM runs a **client** using `peer_edge/peer_edge.conf` from this volume, then applies **`edge/vpn-edge/apply-nat.sh`** to forward public TCP to **`HOME_TRAFFIC_IP`** (the Docker host’s LAN address). See [05_networking.md — VPN edge ingress](05_networking.md#vpn-edge-ingress-wireguard).
+
+**Key environment variables:** `WIREGUARD_SERVER_URL`, `WIREGUARD_SERVER_PORT`, `WIREGUARD_INTERNAL_SUBNET`, `WIREGUARD_PEER_ALLOWEDIPS`, `WIREGUARD_PERSISTENTKEEPALIVE_PEERS`, `WIREGUARD_LOG_CONFS` (see [02_env.md](../01_infra/02_env.md#wireguard-vpn-edge-ingress)).
+
+**Health check:** None. Use `docker logs wireguard` and `docker exec wireguard wg show`.
+
+**Operational notes:**
+- This service is **profile-gated** — use `docker compose --profile vpnedge up -d`.
+- **Docker Desktop / WSL2:** If inbound UDP to the container fails, run WireGuard natively in WSL2 with the same keys; see [05_networking.md](05_networking.md).
 
 ---
 

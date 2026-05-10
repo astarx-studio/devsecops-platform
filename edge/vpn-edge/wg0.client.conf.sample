@@ -1,0 +1,21 @@
+# Sample WireGuard *client* config for the edge VM.
+#
+# Prefer copying the generated file from the home stack after first boot:
+#   .vols/wireguard/peer_edge/peer_edge.conf
+# (or peer_edge/peer_edge.conf inside the mounted volume on the home machine).
+#
+# Fill placeholders only if you assemble by hand.
+
+[Interface]
+PrivateKey = <edge_private_key>
+Address = 10.8.0.2/32
+# Optional: keep NAT mappings alive through stateful home routers
+# PersistentKeepalive = 25
+
+[Peer]
+PublicKey = <wireguard_server_public_key>
+PresharedKey = <optional_preshared_key_if_generated>
+Endpoint = YOUR_HOME_PUBLIC_IP_OR_DDNS:51820
+# Must include routes to HOME_TRAFFIC_IP's subnet (split tunnel). Defaults from
+# compose WIREGUARD_PEER_ALLOWEDIPS often suffice (RFC1918 + 10.8.0.0/24).
+AllowedIPs = 10.8.0.0/24, 192.168.0.0/16, 10.0.0.0/8, 172.16.0.0/12

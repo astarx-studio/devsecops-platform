@@ -133,6 +133,33 @@ CLOUDFLARE_TUNNEL_ID=
 
 ---
 
+## WireGuard (VPN edge ingress)
+
+These variables are consumed only when you start the **`wireguard`** service with **`docker compose --profile vpnedge up -d`**. Keys and generated peer configs are stored under **`.vols/wireguard/`** (not in `.env`). See [Networking — VPN edge ingress](../99_maintainers/05_networking.md#vpn-edge-ingress-wireguard) and **`edge/vpn-edge/`** on the edge VM.
+
+```
+WIREGUARD_SERVER_URL=auto
+WIREGUARD_SERVER_PORT=51820
+WIREGUARD_INTERNAL_SUBNET=10.8.0.0
+WIREGUARD_PEER_ALLOWEDIPS=10.8.0.0/24,192.168.0.0/16,10.0.0.0/8,172.16.0.0/12
+WIREGUARD_PERSISTENTKEEPALIVE_PEERS=all
+WIREGUARD_LOG_CONFS=false
+```
+
+**`WIREGUARD_SERVER_URL`** — Public IP or DNS name of your home network as seen by the edge VM (linuxserver **`SERVERURL`**). Use `auto` to let the image detect the outbound IP on first start (may be wrong behind some NATs).
+
+**`WIREGUARD_SERVER_PORT`** — UDP listen port on the host (default `51820`). Forward this port from your router to the Docker host.
+
+**`WIREGUARD_INTERNAL_SUBNET`** — VPN addressing base (default `10.8.0.0`); must not overlap your LAN.
+
+**`WIREGUARD_PEER_ALLOWEDIPS`** — Split-tunnel **`AllowedIPs`** embedded in the generated **edge** client config so the edge can route to your LAN and reach **`HOME_TRAFFIC_IP`**.
+
+**`WIREGUARD_PERSISTENTKEEPALIVE_PEERS`** — Passed through as **`PERSISTENTKEEPALIVE_PEERS`** (e.g. `all`) so the home side sends keepalives when your public IP is dynamic.
+
+**`WIREGUARD_LOG_CONFS`** — Set to `true` to print peer QR codes in container logs on regeneration (optional).
+
+---
+
 ## GitLab (source control + CI/CD)
 
 ```

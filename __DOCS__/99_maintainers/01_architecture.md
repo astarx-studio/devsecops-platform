@@ -26,7 +26,7 @@ graph TD
     Internet -->|"no direct inbound port"| CF
 ```
 
-No inbound TCP ports are exposed to the public internet. All traffic arrives via the Cloudflare Tunnel, which maintains an outbound-only connection from the host to Cloudflare's edge. The host itself only opens Docker host ports for local management access (on non-standard ports).
+No inbound TCP ports are exposed to the public internet when you use **Cloudflare Tunnel** (`cftunnel`): traffic arrives via an outbound-only connection from `cloudflared` to Cloudflare. Alternatively, **VPN edge** (`vpnedge`) uses a cloud VM with public TCP and WireGuard to your home; see [Networking](05_networking.md). The host still opens Docker-mapped ports for local management (non-standard host ports).
 
 ---
 
@@ -240,6 +240,6 @@ graph TD
     gitlab_svc --> runner_svc
 ```
 
-`traefik` and the Postgres instances have no upstream dependencies declared in Compose. They start concurrently with the rest. `oauth2-proxy` depends on `keycloak` (healthy). `cloudflared` depends on `traefik` (healthy) and is profile-gated (`cftunnel`); it does not start with a regular `docker compose up -d`.
+`traefik` and the Postgres instances have no upstream dependencies declared in Compose. They start concurrently with the rest. `oauth2-proxy` depends on `keycloak` (healthy). `cloudflared` depends on `traefik` (healthy) and is profile-gated (`cftunnel`); it does not start with a regular `docker compose up -d`. `wireguard` is profile-gated (`vpnedge`) and has no Compose dependency on other services.
 
 GitLab has a `start_period: 300s` on its health check, reflecting its slow boot time. Expect the full stack to be ready 

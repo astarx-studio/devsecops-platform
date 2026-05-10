@@ -21,6 +21,7 @@ graph LR
         api["api\n:3000"]
         oauth2proxy["oauth2-proxy\n:4180"]
         cloudflared["cloudflared\n(profile: cftunnel)"]
+        wireguard["wireguard\n(profile: vpnedge)"]
         pgkong["kong-db\n:5432"]
         pgkc["keycloak-db\n:5432"]
     end
@@ -368,4 +369,153 @@ The `cloudflared` service is **profile-gated** — it only starts when you use `
 
 All hostnames are routed to Traefik. Traefik and Kong handle the per-hostname dispatching.
 
-The `cloudflared` container connects to Cloudflare's edge using the `TUNNEL_TOKEN` and then forwards all 
+The `cloudflared` container connects to Cloudflare's edge using the `TUNNEL_TOKEN` and then forwards traffic for each configured public hostname to the origin you set in the Zero Trust dashboard (typically `https://traefik:443`).
+
+---
+
+## Public ingress modes (Compose profiles)
+
+| Mode | When to use | Command |
+|------|-------------|---------|
+| **Direct** | Your network exposes host ports `10080` / `10443` (and optionally others) to the internet | `docker compose up -d` |
+| **Cloudflare Tunnel** | You use Cloudflare Tunnel for ingress (dashboard routing) | `docker compose --profile cftunnel up -d` |
+| **VPN edge** | Home ISP blocks inbound `80`/`443`; a cloud VM terminates TCP and forwards over WireGuard to this stack | `docker compose --profile vpnedge up -d` |
+
+Do not use **`cftunnel`** and **`vpnedge`** for the **same** public DNS names at the same time unless you intentionally split hostnames; pick one path per domain.
+
+---
+
+## VPN edge ingress (WireGuard)
+
+Use this when a **cloud edge VM** (for example Ubuntu on GCP) holds your public IP and listeners on **TCP 80, 443, 12222**, while the stack stays at home behind CGNAT or an ISP that blocks inbound HTTP(S).
+
+**Pieces:**
+
+1. **Home:** `wireguard` service (`lscr.io/linuxserver/wireguard`), profile **`vpnedge`**, UDP `${WIREGUARD_SERVER_PORT:-51820}` published to the host. Config and generated peer files live under **`.vols/wireguard/`** (e.g. `peer_edge/peer_edge.conf`).
+2. **Home router:** Forward **UDP** `51820` (or your chosen port) to the machine that runs Docker (on **Docker Desktop + WSL2**, you may also need Windows / WSL port forwarding so the packet reaches the listener).
+3. **Edge VM:** Install **`wireguard-tools`** and **`nftables`**. Copy `peer_edge.conf` from the home volume to `/etc/wireguard/wg0.conf` (or merge keys with `edge/vpn-edge/wg0.client.conf.sample`). Enable **`net.ipv4.ip_forward=1`** (see `edge/vpn-edge/sysctl-ip-forward.conf`). Run `wg-quick up wg0`.
+4. **Edge NAT:** From the repo, use **`edge/vpn-edge/apply-nat.sh`** with a **`forward-ports.env`** derived from **`edge/vpn-edge/forward-ports.sample.env`**. Set **`HOME_TRAFFIC_IP`** to the **IPv4 of the Docker host on the LAN** where Traefik publishes **`10080`/`10443`** and GitLab SSH **`12222`**. The script DNATs public ports to that IP and SNATs out **`wg0`** so return traffic works. Traefik and GitLab will see the **edge’s WireGuard IP** as the client address (double SNAT: internet → edge → tunnel).
+
+**Default TCP map (edge public → home host port):** `80→10080`, `443→10443`, `12222→12222`. Add more `public:dest` pairs in **`FORWARD_TCP`** if you expose extra services.
+
+**Git over SSH:** Use port **12222** on the edge as well (do not steal **TCP 22** on the edge VM unless you move admin `sshd` to another port). Example: `ssh -p 12222 git@<GITLAB_DOMAIN>`.
+
+**Split tunnel / `AllowedIPs`:** The compose defaults set **`WIREGUARD_PEER_ALLOWEDIPS`** so the edge peer can reach RFC1918 ranges and the VPN subnet; adjust if your home LAN uses only one `/24`. **`WIREGUARD_SERVER_URL`** should be your home public IP or DDNS (passed through to the image as **`SERVERURL`**).
+
+**DNS:** While using **vpnedge**, point **`A`/`AAAA`** records for `*.devops.<DOMAIN>`, `*.apps.<DOMAIN>`, and related names to the **edge VM’s public IP**, not your home IP. **Let’s Encrypt** can stay on **DNS-01** via Cloudflare (`CF_DNS_API_TOKEN`); HTTP reachability to home is not required for issuance.
+
+**Cloud firewall (example GCP):** Allow **inbound** **TCP 80, 443, 12222** (and any extra ports you added). Allow **outbound UDP** to home **`51820`**.
+
+**Home-side hardening (ideal):** Allow **TCP 10080, 10443, 12222** only from the **WireGuard subnet** (e.g. `10.8.0.0/24`) on the Docker host firewall, not from the public WAN. On Windows this is often **Windows Defender Firewall** advanced rules; exact steps depend on your layout.
+
+**Docker Desktop + WSL2:** If inbound UDP to the `wireguard` container fails, run **WireGuard in the WSL2 distro** that backs Docker, reuse the same keys/subnet from `.vols/wireguard`, and forward UDP from the router to the WSL IP.
+
+**Reusable edge kit:** All edge scripts and samples live under **`edge/vpn-edge/`** so you can reprovision another VM or cloud provider with the same steps.
+
+### Edge VM bootstrap (fresh Ubuntu)
+
+Assume a new cloud VM (e.g. Ubuntu on GCP) and that **VPC firewall** already allows **inbound TCP 80, 443, 12222** and **outbound UDP** to your home **`51820`**. Replace `EDGE_USER`, `EDGE_HOST`, and paths as needed.
+
+**1. Packages and IP forwarding**
+
+```bash
+sudo apt-get update
+sudo apt-get install -y wireguard wireguard-tools nftables iproute2
+```
+
+Install the sysctl drop-in from the repo (or create the same file manually):
+
+```bash
+# If you cloned the repo on the edge:
+sudo install -m 644 edge/vpn-edge/sysctl-ip-forward.conf /etc/sysctl.d/99-vpn-edge-ip-forward.conf
+sudo sysctl --system
+```
+
+Equivalent one-liner if you only have the file contents:
+
+```bash
+echo 'net.ipv4.ip_forward = 1' | sudo tee /etc/sysctl.d/99-vpn-edge-ip-forward.conf
+sudo sysctl --system
+```
+
+**2. Copy the kit and WireGuard client config from your workstation**
+
+On the machine where the repo lives (after `docker compose --profile vpnedge up -d` has generated keys):
+
+```bash
+scp -r edge/vpn-edge/ EDGE_USER@EDGE_HOST:~/vpn-edge/
+scp .vols/wireguard/peer_edge/peer_edge.conf EDGE_USER@EDGE_HOST:/tmp/wg0.conf
+```
+
+**3. On the edge: install config, env, and NAT script**
+
+```bash
+sudo install -m 600 /tmp/wg0.conf /etc/wireguard/wg0.conf
+chmod +x ~/vpn-edge/apply-nat.sh
+cp ~/vpn-edge/forward-ports.sample.env ~/vpn-edge/forward-ports.env
+# Edit HOME_TRAFFIC_IP (Docker host LAN IP); set WAN_IFACE / WG_IFACE only if detection fails
+nano ~/vpn-edge/forward-ports.env
+```
+
+**4. Bring up WireGuard and apply nftables**
+
+```bash
+sudo wg-quick up wg0
+sudo ~/vpn-edge/apply-nat.sh apply ~/vpn-edge/forward-ports.env
+```
+
+**5. Verify**
+
+```bash
+sudo wg show
+sudo nft list table ip vpnedge
+```
+
+**6. Persistence across reboots**
+
+WireGuard:
+
+```bash
+sudo systemctl enable wg-quick@wg0
+sudo systemctl start wg-quick@wg0
+```
+
+The **`apply-nat.sh`** rules live only in nftables runtime until you re-run the script. After each reboot, run `sudo ~/vpn-edge/apply-nat.sh apply ~/vpn-edge/forward-ports.env` again, or add a small **`systemd` oneshot** / **`@reboot` cron** that runs the same command once **`wg0`** is up.
+
+### VPN edge troubleshooting (e.g. HTTP 503)
+
+**503 means something spoke HTTP** (often Traefik or Kong) but treated the request as “no healthy backend” or “service unavailable.” The tunnel can be “up” for WireGuard while **TCP to `HOME_TRAFFIC_IP:10443` still fails** or backends are unhealthy.
+
+1. **Confirm the tunnel actually carries data** — On both sides, `sudo wg show` should show **`latest handshake: …` (recent)** and **`transfer`** bytes **increasing** when you load a page. If handshake is missing or **rx/tx stay at 0**, fix routing / firewall first (GCP rules, home UDP `51820`, `HOME_TRAFFIC_IP`, `AllowedIPs`).
+
+2. **Use the correct `HOME_TRAFFIC_IP` (Docker Desktop + WSL2)** — Prefer the **WSL2 instance’s primary IPv4** (where Docker listens), not only the Windows Wi‑Fi/LAN address:
+   - In WSL: `hostname -I` or `ip -4 route get 1.1.1.1 | awk '{print $7; exit}'`
+   - That address is usually inside **`172.16.0.0/12`**, which is already covered by the default **`WIREGUARD_PEER_ALLOWEDIPS`** in Compose. Put **that** IP in **`forward-ports.env`** on the edge, re-run **`apply-nat.sh apply`**.
+
+3. **IP forwarding in the WireGuard container** — The `wireguard` Compose service sets **`net.ipv4.ip_forward=1`** so decrypted traffic can be forwarded from **`wg0`** toward the Docker host. After changing Compose, run **`docker compose --profile vpnedge up -d`** again.
+
+4. **Isolate HTTP vs VPN** — On the **home** host (same machine as Docker):
+   ```bash
+   curl -vk https://127.0.0.1:10443/ -H "Host: YOUR_REAL_HOSTNAME"
+   ```
+   If this already returns **503**, fix **Kong / upstream health** (`docker compose ps`, `docker logs traefik`, `docker logs kong`), not the edge.
+
+5. **From the edge VM** (after `wg0` is up), reach Traefik through the tunnel:
+   ```bash
+   curl -vk "https://${HOME_TRAFFIC_IP}:10443/" -H "Host: YOUR_REAL_HOSTNAME"
+   ```
+   Use a hostname that matches a Traefik/Kong route (e.g. `gitlab.devops.example.com`). If this fails with timeout or TLS errors but step 4 works, the problem is **VPN path or `HOME_TRAFFIC_IP`**. If this returns **503** as well, the problem is **application health** (same as step 4).
+
+6. **Optional: MTU** — Rarely, WireGuard MTU causes odd TLS or large-response failures. If small `curl` works but browsers fail, try lowering MTU on the edge **`[Interface]`** (e.g. `MTU = 1280`) and restart `wg-quick`.
+
+```mermaid
+flowchart LR
+  Internet[Internet]
+  EdgeVM[Edge_VM]
+  WG[WireGuard]
+  HomeHost[Docker_host_LAN]
+
+  Internet -->|"TCP_80_443_12222"| EdgeVM
+  EdgeVM -->|"UDP_tunnel"| WG
+  WG --> HomeHost
+```
