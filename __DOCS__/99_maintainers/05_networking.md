@@ -471,16 +471,43 @@ sudo wg show
 sudo nft list table ip vpnedge
 ```
 
-**6. Persistence across reboots**
+**6. Persistence across reboots (edge VM)**
 
-WireGuard:
+**WireGuard client (`wg0`):**
 
 ```bash
 sudo systemctl enable wg-quick@wg0
 sudo systemctl start wg-quick@wg0
 ```
 
-The **`apply-nat.sh`** rules live only in nftables runtime until you re-run the script. After each reboot, run `sudo ~/vpn-edge/apply-nat.sh apply ~/vpn-edge/forward-ports.env` again, or add a small **`systemd` oneshot** / **`@reboot` cron** that runs the same command once **`wg0`** is up.
+Requires a valid **`/etc/wireguard/wg0.conf`** (from `peer_edge.conf`).
+
+**nftables NAT (`apply-nat.sh`):** rules are **not** saved automatically. Use the **systemd** unit in the repo so NAT is reapplied **after** `wg0` is up on every boot.
+
+From the repo directory on the edge (or copy `edge/vpn-edge/systemd/` onto the VM):
+
+```bash
+cd ~/vpn-edge/systemd
+sudo chmod +x install.sh
+sudo ./install.sh
+sudo nano /etc/default/vpn-edge-nat
+# Set VPN_EDGE_APPLY_SCRIPT and VPN_EDGE_ENV_FILE to absolute paths (no ~).
+sudo systemctl daemon-reload
+sudo systemctl enable --now wg-quick@wg0.service vpn-edge-nat.service
+```
+
+Verify:
+
+```bash
+systemctl status wg-quick@wg0.service vpn-edge-nat.service
+sudo nft list table ip vpnedge
+```
+
+**Unit files:** [`edge/vpn-edge/systemd/vpn-edge-nat.service`](../../edge/vpn-edge/systemd/vpn-edge-nat.service), [`edge/vpn-edge/systemd/vpn-edge-nat.default.sample`](../../edge/vpn-edge/systemd/vpn-edge-nat.default.sample), [`edge/vpn-edge/systemd/install.sh`](../../edge/vpn-edge/systemd/install.sh).
+
+**Spot / preemptible VMs:** A **new** instance may get a **new public IP** unless you use a **static external IP**. Update **DNS A records** to the new address after recreation. Reinstall **`/etc/wireguard/wg0.conf`** and **`forward-ports.env`** (or keep them on a **persistent disk** / config management).
+
+**Home PC:** Docker Compose services use **`restart: unless-stopped`**; after reboot, start **Docker Desktop** (and WSL2 if you use it), then confirm **`docker compose --profile vpnedge ps`** shows **`wireguard`** running. Your **router** UDP **51820** forward is unchanged.
 
 ### VPN edge troubleshooting (e.g. HTTP 503)
 

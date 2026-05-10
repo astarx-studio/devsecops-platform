@@ -1,0 +1,14 @@
+[Unit]
+Description=Apply nftables NAT for VPN edge (after WireGuard wg0)
+After=network-online.target wg-quick@wg0.service
+Wants=network-online.target wg-quick@wg0.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+EnvironmentFile=-/etc/default/vpn-edge-nat
+# Paths must be set in /etc/default/vpn-edge-nat (see vpn-edge-nat.default.sample in repo).
+ExecStart=/bin/bash -c 'if [[ -z "${VPN_EDGE_APPLY_SCRIPT:-}" || -z "${VPN_EDGE_ENV_FILE:-}" ]]; then echo "vpn-edge-nat: missing VPN_EDGE_APPLY_SCRIPT or VPN_EDGE_ENV_FILE in /etc/default/vpn-edge-nat" >&2; exit 1; fi; exec "${VPN_EDGE_APPLY_SCRIPT}" apply "${VPN_EDGE_ENV_FILE}"'
+
+[Install]
+WantedBy=multi-user.target

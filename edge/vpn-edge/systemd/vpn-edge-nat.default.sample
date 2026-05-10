@@ -1,0 +1,5 @@
+# Copy to /etc/default/vpn-edge-nat and set absolute paths (no ~).
+# Used by vpn-edge-nat.service — see __DOCS__/99_maintainers/05_networking.md
+#
+VPN_EDGE_APPLY_SCRIPT=/home/CHANGE_ME/vpn-edge/apply-nat.sh
+VPN_EDGE_ENV_FILE=/home/CHANGE_ME/vpn-edge/forward-ports.env
