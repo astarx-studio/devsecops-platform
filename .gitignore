@@ -12,6 +12,9 @@
 # Docker volumes
 .vols*/
 
+# Phase-0 backups — may contain sensitive volume data; never commit
+backups/
+
 # Node.js
 node_modules/
 dist/
