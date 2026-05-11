@@ -481,8 +481,8 @@ Recommended commit order (one commit per task for auditable history):
 - [ ] T7: Decision recorded in plan + docs
 - [ ] T8: Decision recorded in plan + docs; if C, scans surface in test project
 - [ ] T9: All three text edits committed; `git diff` shows no functional changes
-- [ ] Chart tag `v0.2.0` published to OCI registry
-- [ ] Pipeline tag `v0.2.0` exists on `configs/auto-devops-pipeline`
+- [ ] Chart tag `v0.2.1` published to OCI registry
+- [ ] Pipeline tag `v0.2.1` exists on `configs/auto-devops-pipeline`
 
 ### 6.4 — Decision log (filled in as decisions are made)
 
