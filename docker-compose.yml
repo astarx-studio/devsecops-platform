@@ -25,14 +25,22 @@ services:
     image: traefik:v3.6
     container_name: traefik
     # 1. Process traefik.yml template (replace __DOMAIN__ and __ACME_EMAIL__)
-    # 2. Fix acme.json permissions (chmod 600 doesn't persist on Windows bind mounts)
-    # 3. exec traefik with the processed config
+    # 2. Process all dynamic config templates (same substitution) into a
+    #    writable dir so that dynamic/*.yml files can also reference __DOMAIN__.
+    # 3. Fix acme.json permissions (chmod 600 doesn't persist on Windows bind mounts)
+    # 4. exec traefik with the processed config
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
         sed -e "s/__DOMAIN__/$$DOMAIN/g" \
             -e "s/__ACME_EMAIL__/$$ACME_EMAIL/g" \
             /etc/traefik/traefik-template.yml > /etc/traefik/traefik.yml
+        mkdir -p /etc/traefik/dynamic
+        for f in /etc/traefik/dynamic-templates/*.yml; do
+          sed -e "s/__DOMAIN__/$$DOMAIN/g" \
+              -e "s/__ACME_EMAIL__/$$ACME_EMAIL/g" \
+              "$$f" > "/etc/traefik/dynamic/$$(basename $$f)"
+        done
         touch /etc/traefik/certs/acme.json
         chmod 600 /etc/traefik/certs/acme.json
         exec traefik --configFile=/etc/traefik/traefik.yml
@@ -44,7 +52,7 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./traefik/traefik.yml:/etc/traefik/traefik-template.yml:ro
-      - ./traefik/dynamic:/etc/traefik/dynamic:ro
+      - ./traefik/dynamic:/etc/traefik/dynamic-templates:ro
       - ./.vols/traefik/certs:/etc/traefik/certs
     environment:
       DOMAIN: ${DOMAIN}
