@@ -2,7 +2,8 @@
 # =============================================================================
 # bootstrap/k8s-primitives.sh
 # =============================================================================
-# Installs in-cluster Traefik via Helm and the External Secrets Operator (ESO).
+# Installs in-cluster Traefik via Helm, the External Secrets Operator (ESO),
+# and Stakater Reloader.
 # Called after bootstrap/k3d-cluster.sh has created the cluster and namespaces.
 #
 # Usage:
@@ -14,7 +15,11 @@
 # What it does:
 #   1. Installs in-cluster Traefik (traefik/traefik chart) into kube-system.
 #   2. Installs External Secrets Operator into eso-system.
-#   3. Waits for both operator pods to become healthy.
+#   3. Installs Stakater Reloader into reloader-system.
+#      Reloader watches Deployments annotated with reloader.stakater.com/auto: "true"
+#      and triggers a rolling restart whenever a referenced Secret or ConfigMap
+#      changes — ensuring pods always run with the latest Vault-sourced secrets.
+#   4. Waits for all operator pods to become healthy.
 # =============================================================================
 set -euo pipefail
 
@@ -73,7 +78,28 @@ fi
 info "External Secrets Operator installed."
 
 # -----------------------------------------------------------------------------
-# 3. Health checks
+# 3. Stakater Reloader
+# -----------------------------------------------------------------------------
+log "Adding stakater Helm repo..."
+helm repo add stakater https://stakater.github.io/stakater-charts --force-update >/dev/null
+helm repo update >/dev/null
+
+if helm status reloader -n reloader-system >/dev/null 2>&1; then
+  info "Reloader already installed — upgrading..."
+  helm upgrade reloader stakater/reloader \
+    -n reloader-system \
+    --wait --timeout 5m
+else
+  log "Installing Stakater Reloader..."
+  helm install reloader stakater/reloader \
+    -n reloader-system \
+    --create-namespace \
+    --wait --timeout 5m
+fi
+info "Stakater Reloader installed."
+
+# -----------------------------------------------------------------------------
+# 4. Health checks
 # -----------------------------------------------------------------------------
 log "Waiting for Traefik pod to be ready..."
 kubectl rollout status deployment/traefik -n kube-system --timeout=120s
@@ -82,6 +108,10 @@ info "Traefik ready."
 log "Waiting for ESO pod to be ready..."
 kubectl rollout status deployment/external-secrets -n eso-system --timeout=120s
 info "ESO ready."
+
+log "Waiting for Reloader pod to be ready..."
+kubectl rollout status deployment/reloader -n reloader-system --timeout=120s
+info "Reloader ready."
 
 log "Verifying ESO CRDs..."
 kubectl get crd externalsecrets.external-secrets.io >/dev/null \

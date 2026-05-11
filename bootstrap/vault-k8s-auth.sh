@@ -18,7 +18,7 @@
 #   1. Copies the k3d server CA cert into the vault container.
 #   2. Creates vault-token-reviewer SA + system:auth-delegator binding + token.
 #   3. Enables vault auth/kubernetes (idempotent).
-#   4. Configures auth/kubernetes with k3d CA + API URL + reviewer JWT.
+#   4. Configures auth/kubernetes with k3d CA + Docker DNS hostname API URL + reviewer JWT.
 #   5. Creates policy: app-secrets-read (read secret/data/projects/*).
 #   6. Creates role: eso-reader (bound to eso-system/external-secrets, TTL 1h).
 #   7. Applies ClusterSecretStore vault-backend via kubectl.
@@ -69,12 +69,12 @@ docker cp "${CA_TMP}" "${VAULT_CONTAINER}:/tmp/k3d-ca.crt"
 rm -f "${CA_TMP}"
 info "CA cert copied into ${VAULT_CONTAINER}:/tmp/k3d-ca.crt"
 
-# k3d server IP inside devops-network
-K3D_IP=$(docker inspect "k3d-${K3D_CLUSTER_NAME}-server-0" \
-  --format '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}' \
-  | awk '{print $1}')
-[[ -z "${K3D_IP}" ]] && die "Could not determine k3d server IP."
-info "k3d API server IP: ${K3D_IP}"
+# Use the stable Docker DNS hostname for the k3d API server instead of a
+# dynamic IP address.  The hostname is fixed regardless of container restarts,
+# so Vault's stored kubernetes auth config survives k3d server container
+# restarts without needing to be reconfigured.
+K3D_API_HOST="k3d-${K3D_CLUSTER_NAME}-server-0"
+info "k3d API server hostname: ${K3D_API_HOST}"
 
 # -----------------------------------------------------------------------------
 # 2. Create vault-token-reviewer SA (idempotent)
@@ -149,7 +149,7 @@ docker exec \
   -e REVIEWER_JWT="${REVIEWER_JWT}" \
   "${VAULT_CONTAINER}" \
   sh -c "vault write auth/kubernetes/config \
-    kubernetes_host='https://${K3D_IP}:6443' \
+    kubernetes_host='https://${K3D_API_HOST}:6443' \
     kubernetes_ca_cert=@/tmp/k3d-ca.crt \
     token_reviewer_jwt=\"\$REVIEWER_JWT\" \
     issuer='https://kubernetes.default.svc.cluster.local'"
@@ -260,4 +260,4 @@ log "  Policy         : app-secrets-read"
 log "  Role           : eso-reader (eso-system/external-secrets, TTL 1h)"
 log "  ClusterSecretStore: vault-backend (Status: ${STATUS:-unknown})"
 log ""
-log "Next step: run bootstrap/vault-k8s-auth.sh is complete — proceed to Phase 3."
+log "Next step: proceed to Phase 3 (Helm chart wrapper + Auto DevOps templates)."

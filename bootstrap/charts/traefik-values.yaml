@@ -48,14 +48,15 @@ providers:
     publishedService:
       enabled: true
 
-# Resource requests/limits appropriate for a single-host dev cluster
+# Resource requests/limits.  Limits are bumped from the initial dev-only values
+# to give Traefik headroom during bursty Ingress reloads and prevent OOMKill.
 resources:
   requests:
     cpu: 100m
-    memory: 64Mi
-  limits:
-    cpu: 300m
     memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
 
 # Minimal logging — INFO level, structured JSON
 logs:

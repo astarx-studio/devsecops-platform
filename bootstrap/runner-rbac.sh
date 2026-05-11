@@ -12,9 +12,10 @@
 #
 # Prerequisites:
 #   - k3d cluster running (k3d-cluster.sh completed)
-#   - GITLAB_ROOT_TOKEN  — GitLab PAT with api scope
-#   - GITLAB_DOMAIN      — e.g. gitlab.devops.yadatechnology.com
-#   - GITLAB_CONFIG_GROUP_ID — numeric ID of the configs group in GitLab
+#   - GITLAB_ROOT_TOKEN       — GitLab PAT with api scope
+#   - GITLAB_DOMAIN           — e.g. gitlab.devops.yadatechnology.com
+#   - GITLAB_CONFIG_GROUP_ID  — numeric ID of the configs group in GitLab
+#   - DOCKER_NETWORK          — Docker bridge network name.  Default: devops-network
 #
 # What it does (per namespace: dev, stg, prod):
 #   1. Creates ServiceAccount "gitlab-deployer".
@@ -28,6 +29,7 @@
 set -euo pipefail
 
 K3D_CLUSTER_NAME="${K3D_CLUSTER_NAME:-dsoaas}"
+DOCKER_NETWORK="${DOCKER_NETWORK:-devops-network}"
 GITLAB_DOMAIN="${GITLAB_DOMAIN:-}"
 GITLAB_ROOT_TOKEN="${GITLAB_ROOT_TOKEN:-}"
 GITLAB_CONFIG_GROUP_ID="${GITLAB_CONFIG_GROUP_ID:-}"
@@ -196,14 +198,30 @@ EOF
     prod) GL_SCOPE="prod" ;;
   esac
 
-  # Upsert: try PUT first (update), fall back to POST (create)
+  # Pre-flight: warn if multiple KUBECONFIG_B64 variables already exist for
+  # this scope from prior buggy runs (GitLab allows duplicates per scope via
+  # POST, so we surface them early before the upsert).
+  EXISTING_SCOPES=$(curl -sf \
+    -H "PRIVATE-TOKEN: ${GITLAB_ROOT_TOKEN}" \
+    "https://${GITLAB_DOMAIN}/api/v4/groups/${GITLAB_CONFIG_GROUP_ID}/variables?per_page=100" \
+    2>/dev/null \
+    | grep -o '"key":"KUBECONFIG_B64"[^}]*"environment_scope":"[^"]*"' \
+    | grep -o '"environment_scope":"[^"]*"' \
+    | sed 's/"environment_scope":"//;s/"//' || true)
+  DUPE_COUNT=$(echo "${EXISTING_SCOPES}" | grep -c "^${GL_SCOPE}$" || true)
+  if [[ "${DUPE_COUNT}" -gt 1 ]]; then
+    warn "Found ${DUPE_COUNT} KUBECONFIG_B64 variables for scope '${GL_SCOPE}' — delete duplicates in GitLab UI before re-running."
+  fi
+
+  # Upsert: try PUT first (update) — the filter query param ensures GitLab
+  # disambiguates by environment_scope, preventing updates to the wrong scope.
   HTTP_STATUS=$(curl -sf -o /dev/null -w "%{http_code}" \
     --request PUT \
     --header "PRIVATE-TOKEN: ${GITLAB_ROOT_TOKEN}" \
     --form "value=${KUBECONFIG_B64}" \
     --form "masked=true" \
     --form "environment_scope=${GL_SCOPE}" \
-    "https://${GITLAB_DOMAIN}/api/v4/groups/${GITLAB_CONFIG_GROUP_ID}/variables/KUBECONFIG_B64" \
+    "https://${GITLAB_DOMAIN}/api/v4/groups/${GITLAB_CONFIG_GROUP_ID}/variables/KUBECONFIG_B64?filter%5Benvironment_scope%5D=${GL_SCOPE}" \
     2>/dev/null || echo "000")
 
   if [[ "${HTTP_STATUS}" == "200" ]]; then
@@ -231,15 +249,28 @@ EOF
 done
 
 # -----------------------------------------------------------------------------
-# Validate: quick kubectl test against each env kubeconfig
+# Validate: kubectl test from a throwaway container on devops-network.
+#
+# Host-side validation is unreliable because the kubeconfig server address
+# (k3d-dsoaas-serverlb) is a Docker DNS hostname only resolvable inside the
+# bridge network — not from the host.  A sidecar container joined to the same
+# network can resolve it correctly and serves as the ground truth.
+#
+# MSYS_NO_PATHCONV / MSYS2_ARG_CONV_EXCL suppress Git Bash path mangling on
+# Windows when passing Unix-style volume mounts to docker run.
 # -----------------------------------------------------------------------------
-log "Validating kubeconfigs..."
+log "Validating kubeconfigs from devops-network sidecar..."
 for ENV in "${ENVS[@]}"; do
   KC="${KUBECONFIG_DIR}/kubeconfig-${ENV}.yaml"
-  if KUBECONFIG="${KC}" kubectl get pods -n "${ENV}" >/dev/null 2>&1; then
-    info "kubeconfig-${ENV}.yaml: kubectl access OK."
+  if MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' \
+      docker run --rm \
+        --network "${DOCKER_NETWORK}" \
+        -v "${KC}:/kc:ro" \
+        bitnami/kubectl:latest \
+        --kubeconfig=/kc get pods -n "${ENV}" >/dev/null 2>&1; then
+    info "kubeconfig-${ENV}.yaml: access OK."
   else
-    warn "kubeconfig-${ENV}.yaml: kubectl access FAILED. Check SA permissions."
+    warn "kubeconfig-${ENV}.yaml: access FAILED. Check SA permissions."
   fi
 done
 

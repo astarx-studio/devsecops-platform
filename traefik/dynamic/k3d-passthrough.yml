@@ -11,13 +11,14 @@
 #
 # How it works:
 #   1. Outer Traefik matches Host headers for the three zones via HostRegexp.
-#   2. Traffic is forwarded to k3d-dsoaas-serverlb:8444 (host :8444 maps to
-#      in-cluster Traefik :443).  The inner Traefik then routes by Ingress host.
+#   2. Traffic is forwarded to k3d-dsoaas-serverlb:8081 (host port 8081 maps
+#      to the in-cluster Traefik :80 via klipper-LB).  The inner Traefik then
+#      routes by Ingress host.
 #   3. Priority 10 — higher than the Kong catch-all (priority 1) so these
 #      routes take precedence for app-zone hostnames.
 #   4. TLS is terminated at the outer Traefik; the in-cluster Traefik receives
-#      plain HTTP on its :80 listener (outer port 8081 / inner port 8000).
-#      Using HTTP forwarding avoids cert complexity inside the cluster.
+#      plain HTTP. From devops-network, the LB container is reachable at
+#      k3d-dsoaas-serverlb:8081 (klipper-LB forwards to the in-cluster Service).
 #
 # __DOMAIN__ placeholder is substituted at container startup by the traefik
 # entrypoint sed command (same mechanism as traefik.yml).
