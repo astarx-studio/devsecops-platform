@@ -3,6 +3,12 @@
 !sample.env
 !edge/vpn-edge/forward-ports.sample.env
 
+# VPN edge: real (non-sample) files live alongside the kit on the operator's
+# workstation / edge VM only; never committed. The sample variants of these
+# remain tracked: vpn-edge-nat.default.sample, wg0.client.conf.sample.
+/edge/vpn-edge/wg0.conf
+/edge/vpn-edge/systemd/vpn-edge-nat.default
+
 # Docker volumes
 .vols*/
 

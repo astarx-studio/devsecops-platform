@@ -86,6 +86,17 @@ apply_rules() {
   nft add rule ip "${TABLE}" postrouting oifname "${wg}" masquerade
   log_info "SNAT masquerade on oif ${wg}"
 
+  # MSS clamp on both directions of the WireGuard tunnel. Must precede the
+  # accept rules below: nftables walks rules top-to-bottom and stops at the
+  # first accept verdict, so the MSS modification has to land first.
+  # Covers stacked-VPN clients (e.g. ProtonVPN) whose effective PMTU is
+  # smaller than wg0's 1420 and whose path drops ICMP "frag needed".
+  nft add rule ip "${TABLE}" forward oifname "${wg}" \
+    tcp flags syn / syn,rst counter tcp option maxseg size set rt mtu
+  nft add rule ip "${TABLE}" forward iifname "${wg}" \
+    tcp flags syn / syn,rst counter tcp option maxseg size set rt mtu
+  log_info "MSS clamp to PMTU on ${wg} (both directions)"
+
   nft add rule ip "${TABLE}" forward iifname "${wan}" oifname "${wg}" accept
   nft add rule ip "${TABLE}" forward iifname "${wg}" oifname "${wan}" ct state established,related accept
 

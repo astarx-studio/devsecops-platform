@@ -52,17 +52,24 @@ This should print the full resolved compose configuration without errors. If it 
 
 ## Step 5 — Start the platform
 
+The command depends on your chosen ingress mode (see [Prerequisites — Choosing a public ingress mode](01_prereqs.md#choosing-a-public-ingress-mode)):
+
+**Direct:**
 ```bash
 docker compose up -d
 ```
 
-Wait for everything to initialize. GitLab in particular takes several minutes on first boot. See [Bootstrap](03_bootstrap.md) for what to watch for and how to know when it's ready.
-
-If you need external access via Cloudflare Tunnel, also start the tunnel:
-
+**Cloudflare Tunnel:**
 ```bash
 docker compose --profile cftunnel up -d
 ```
+
+**VPN edge:**
+```bash
+docker compose --profile vpnedge up -d
+```
+
+Wait for everything to initialize. GitLab in particular takes several minutes on first boot. See [Bootstrap](03_bootstrap.md) for what to watch for and how to know when it's ready.
 
 ---
 
@@ -97,9 +104,11 @@ After a fresh start, a few things need to be done manually because they depend o
 
 ## Validation checklist
 
-Work through this list to confirm everything is functional:
+### Core platform (all ingress modes)
 
-- [ ] `docker compose ps` shows all services as `healthy`
+Work through this list to confirm the stack is functional before testing public access:
+
+- [ ] `docker compose ps` (or `docker compose --profile <mode> ps`) shows all services as `healthy`
 - [ ] `https://gitlab.devops.yourdomain.com` loads with a valid HTTPS certificate
 - [ ] You can log in to GitLab as root using the password from `.env`
 - [ ] `https://auth.devops.yourdomain.com` loads the Keycloak welcome screen
@@ -111,7 +120,24 @@ Work through this list to confirm everything is functional:
 - [ ] GitLab can send a test email: Admin Area → Settings → Email → **Send test email**
 - [ ] Keycloak can reach SMTP: Keycloak admin → Realm Settings → Email → **Test connection**
 
-If any step fails, refer to [Bootstrap — Common Issues](03_bootstrap.md#common-issues-during-first-boot) for troubleshooting guidance.
+### Cloudflare Tunnel (profile: `cftunnel`)
+
+- [ ] `docker compose --profile cftunnel ps cloudflared` shows `running`
+- [ ] `docker logs cloudflared` contains `Registered tunnel connection` (not a restart loop)
+- [ ] Opening `https://gitlab.devops.yourdomain.com` from a device **not** on your local network loads correctly
+
+### VPN edge (profile: `vpnedge`)
+
+- [ ] `docker compose --profile vpnedge ps wireguard` shows `running`
+- [ ] `docker exec wireguard wg show` shows a recent handshake and growing transfer counters for the `peer_edge` peer
+- [ ] `docker exec wireguard iptables -t nat -L POSTROUTING -nv` shows the MASQUERADE rule with a non-zero packet count
+- [ ] From the edge VM: `sudo wg show` shows the home peer with a recent handshake and growing transfer
+- [ ] From the edge VM: `sudo nft list table ip vpnedge` contains the MSS clamp rules (`tcp option maxseg size set rt mtu`) ordered before the ACCEPT rules
+- [ ] Opening `https://gw.devops.yourdomain.com` in a browser shows a response (Kong 404 is expected without a matching host)
+- [ ] Opening `https://gitlab.devops.yourdomain.com` from outside your home network loads the full GitLab sign-in page
+- [ ] *(Optional, stacked-VPN clients)* Repeat the above two browser tests with a consumer VPN active — both pages should load completely without stalling
+
+If any step fails, refer to [Bootstrap — Common Issues](03_bootstrap.md#common-issues-during-first-boot) or [Networking — VPN edge troubleshooting](../99_maintainers/05_networking.md#vpn-edge-troubleshooting-eg-http-503) for guidance.
 
 ---
 

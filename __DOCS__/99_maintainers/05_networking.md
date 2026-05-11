@@ -507,6 +507,22 @@ sudo nft list table ip vpnedge
 
 **Spot / preemptible VMs:** A **new** instance may get a **new public IP** unless you use a **static external IP**. Update **DNS A records** to the new address after recreation. Reinstall **`/etc/wireguard/wg0.conf`** and **`forward-ports.env`** (or keep them on a **persistent disk** / config management).
 
+### GCP load balancer (passthrough) in front of the edge VM
+
+Inbound traffic from a Google **External passthrough Network Load Balancer** still hits the edge VM’s **primary NIC** (same path as direct access). **WireGuard `AllowedIPs` on the edge client does not block** those inbound connections — that knob only affects **what you route through the tunnel outbound**.
+
+**1. VPC firewall — health check probers (required)**  
+Google’s probes use **`35.191.0.0/16`** and **`130.211.0.0/22`**. Without **ingress allow** rules to your backend **tag** (and **ports** used by the health check), backends stay **unhealthy** and the LB sends no traffic. See [Health check concepts — probe IP ranges](https://cloud.google.com/load-balancing/docs/health-check-concepts#ip-ranges) and [Firewall rules for health checks](https://cloud.google.com/load-balancing/docs/health-checks#fw-rule). Restrict to the **exact probe ports** your health check uses.
+
+**2. HTTP(S) health checks vs redirects**  
+For **HTTP**, **HTTPS**, or **HTTP/2** health checks, Google treats **any response other than `200 OK` as unhealthy**, including **`301`/`302` redirects**. Traefik/Kong/Keycloak often redirect `/` — so the LB marks the backend **unhealthy** even when the app “works.” Prefer a **TCP** or **SSL** health check on **`443`** (or the serving port) if you only need connectivity, or point an **HTTP** health check at a path that returns **200** (e.g. a small static endpoint).
+
+**3. `apply-nat.sh` / `WAN_IFACE`**  
+Rules match **`iifname $WAN`**. If the LB or a **second NIC** changes which interface receives traffic, re-detect the default route interface and set **`WAN_IFACE`** in **`forward-ports.env`**, then re-run **`apply-nat.sh apply`**.
+
+**4. Home WireGuard server — narrow `[Peer] AllowedIPs` for the edge**  
+On the **home** `wireguard` container, the **`[Peer]`** entry for the edge should **not** use **`0.0.0.0/0`** unless you intentionally want the **server** to treat the entire internet as reachable **via that peer** (it breaks normal routing). Use the edge’s tunnel address only (e.g. **`10.8.0.2/32`**) plus any **LAN CIDRs** you route over the tunnel (see linuxserver **`SERVER_ALLOWEDIPS_PEER_*`** / templates). Regenerate or edit **`wg0.conf`** and restart the **`wireguard`** service after changes.
+
 **Home PC:** Docker Compose services use **`restart: unless-stopped`**; after reboot, start **Docker Desktop** (and WSL2 if you use it), then confirm **`docker compose --profile vpnedge ps`** shows **`wireguard`** running. Your **router** UDP **51820** forward is unchanged.
 
 ### VPN edge troubleshooting (e.g. HTTP 503)
@@ -546,3 +562,134 @@ flowchart LR
   EdgeVM -->|"UDP_tunnel"| WG
   WG --> HomeHost
 ```
+
+### Intermittent failures on stacked-VPN clients (ProtonVPN, etc.)
+
+**Symptoms:**
+
+- Some clients (typically those routed through a consumer VPN like ProtonVPN) fail to load pages while normal clients succeed.
+- The tunnel itself is healthy: `sudo wg show` on the edge has a recent handshake with `transfer` counters growing, and `sudo conntrack -L -p tcp` on the edge shows `ESTABLISHED [ASSURED]` entries for working users on the same `dport=443` path.
+- For affected browsers, SYN/SYN-ACK and small responses complete, but pages with large TLS handshakes or large bodies (e.g. the GitLab sign-in page) stall or render half-loaded.
+
+**Cause:** stacked VPN tunnels (the client's VPN wrapped around this WireGuard tunnel) reduce the effective TCP MSS. If any hop between the client and the edge filters ICMP `Type 3 Code 4` ("fragmentation needed"), Path-MTU Discovery silently fails for those paths only — which presents as "intermittent / some users".
+
+**Fix (already in `edge/vpn-edge/apply-nat.sh`):** bidirectional TCP MSS clamping on the edge's forward chain, ordered **before** the ACCEPT rules so nftables' first-`accept`-wins semantics still allow the modification to apply. After `apply-nat.sh` runs, the table looks like:
+
+```nft
+table ip vpnedge {
+    chain forward {
+        type filter hook forward priority filter; policy drop;
+        oifname "wg0" tcp flags syn / syn,rst counter tcp option maxseg size set rt mtu
+        iifname "wg0" tcp flags syn / syn,rst counter tcp option maxseg size set rt mtu
+        iifname "ens4" oifname "wg0" accept
+        iifname "wg0" oifname "ens4" ct state established,related accept
+    }
+    ...
+}
+```
+
+**Verification:**
+
+```bash
+sudo nft list table ip vpnedge | grep -E "maxseg|counter"
+```
+
+Expected: two rules, both with their `counter` field incrementing within a few seconds of any new TCP flow over the tunnel.
+
+If you have an existing edge VM that was provisioned before these rules existed, just re-run the kit:
+
+```bash
+sudo ~/vpn-edge/apply-nat.sh apply ~/vpn-edge/forward-ports.env
+```
+
+**Browser test (do this on the affected client VPN):**
+
+1. Small response: open `https://gw.devops.<DOMAIN>/`. Kong's 404 page should display immediately.
+2. Large response: open `https://gitlab.devops.<DOMAIN>/`. The full GitLab sign-in page should render to completion.
+
+If (1) works but (2) still stalls, the residual is the home-side `wg0` MTU; see the next section.
+
+### Home `wireguard` container — healthy state reference
+
+A correctly-running home `wireguard` service (LinuxServer image, server mode driven by `PEERS: edge` in `docker-compose.yml`) requires **no additional configuration beyond what `sample.env` already provides**. The auto-generated `wg0.conf` under `.vols/wireguard/wg_confs/wg0.conf` already includes the canonical `PostUp` rule that masquerades decrypted tunnel traffic onto the Docker bridge so Traefik on `HOME_TRAFFIC_IP` sees the container's `eth0` address as the source — which is what makes return packets land back in the container's network namespace where the tunnel can pick them up.
+
+Verify on a deployed home host with `docker exec` (no shell session required):
+
+```bash
+docker exec wireguard sh -c "cat /config/wg_confs/wg0.conf" | head -15
+docker exec wireguard iptables -t nat -L POSTROUTING -nv
+docker exec wireguard iptables -L FORWARD -nv
+docker exec wireguard ip -4 addr show wg0
+```
+
+Expected (private keys redacted):
+
+```
+[Interface]
+Address = 10.8.0.1
+ListenPort = 51820
+PrivateKey = <…>
+PostUp = iptables -A FORWARD -i %i -j ACCEPT; iptables -A FORWARD -o %i -j ACCEPT; iptables -t nat -A POSTROUTING -o eth+ -j MASQUERADE
+PostDown = iptables -D FORWARD -i %i -j ACCEPT; iptables -D FORWARD -o %i -j ACCEPT; iptables -t nat -D POSTROUTING -o eth+ -j MASQUERADE
+
+[Peer]
+# peer_edge
+PublicKey = <…>
+PresharedKey = <…>
+AllowedIPs = 10.8.0.2/32
+PersistentKeepalive = 25
+```
+
+```
+Chain POSTROUTING (policy ACCEPT 0 packets, 0 bytes)
+ pkts bytes target     prot opt in     out     source               destination
+ <pkts> <bytes> MASQUERADE  all  --  *      eth+    0.0.0.0/0            0.0.0.0/0
+```
+
+```
+Chain FORWARD (policy ACCEPT 0 packets, 0 bytes)
+ pkts bytes target     prot opt in     out     source               destination
+ <pkts> <bytes> ACCEPT     all  --  wg0    *       0.0.0.0/0            0.0.0.0/0
+ <pkts> <bytes> ACCEPT     all  --  *      wg0     0.0.0.0/0            0.0.0.0/0
+```
+
+```
+4: wg0: <POINTOPOINT,NOARP,UP,LOWER_UP> mtu 1420 …
+    inet 10.8.0.1/32 scope global wg0
+```
+
+If the `MASQUERADE` rule is missing or its counter stays at 0 while `wg0` is seeing traffic, the image's `PostUp` didn't take effect — usually a host-kernel `iptables` module issue. Fixes, in order of preference:
+
+1. Confirm `cap_add: [NET_ADMIN, SYS_MODULE]` is present on the `wireguard` service in `docker-compose.yml` (it is by default).
+2. On hosts where the `xt_MASQUERADE` / `nf_nat` modules aren't auto-loaded inside the container, mount the host's modules: add `/lib/modules:/lib/modules:ro` to the `wireguard` service `volumes` and `docker compose --profile vpnedge up -d wireguard`.
+3. Recreate the container so `PostUp` re-runs cleanly: `docker compose --profile vpnedge up -d --force-recreate wireguard`.
+
+**Common misdiagnosis to avoid:** an analysis that points at the home container's routing table (specifically the route `10.8.0.2 dev wg0 scope link`) and concludes "the container only knows its own wg0 IP" is reading the route backwards. That entry is the route to the **edge peer**, auto-added by `wg-quick` from the peer's `AllowedIPs = 10.8.0.2/32`. The container's own wg0 address is **`10.8.0.1`** (server side), as shown by the `ip -4 addr show wg0` step above. Symmetric routing is fine; if return traffic is being lost, the cause is almost always MSS/MTU (previous section) or peer `AllowedIPs` (next section), not the routing table inside the container.
+
+### Home `wireguard` container — adjusting `wg0` MTU
+
+Only do this if the bidirectional MSS clamp on the edge (`apply-nat.sh`) plus the browser verification above still shows stalls on stacked-VPN clients.
+
+The LinuxServer image's `/config/templates/server.conf` is the source-of-truth template for the auto-generated `wg0.conf`. Lower the `MTU` there and force a regeneration:
+
+```bash
+docker exec wireguard sh -c '
+  cp /config/templates/server.conf /config/templates/server.conf.bak
+  if grep -q "^MTU =" /config/templates/server.conf; then
+    sed -i "s/^MTU = .*/MTU = 1280/" /config/templates/server.conf
+  else
+    sed -i "/^Address =/a MTU = 1280" /config/templates/server.conf
+  fi
+  rm -f /config/.donoteditthisfile
+'
+docker compose --profile vpnedge up -d --force-recreate wireguard
+```
+
+Verify:
+
+```bash
+docker exec wireguard ip -4 addr show wg0 | grep -o 'mtu [0-9]\+'
+docker exec wireguard grep -i mtu /config/wg_confs/wg0.conf
+```
+
+Re-run the browser test from the previous section. If stalls persist even with `MTU 1280` on both sides, the residual is almost certainly **not** MTU-related — look at the affected client's VPN provider blocking specific ports/SNIs, or at home-router-level TCP timestamp/window scaling stripping.

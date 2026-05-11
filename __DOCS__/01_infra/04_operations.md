@@ -8,16 +8,26 @@ Once the platform is running, here's what you'll commonly need to do to keep it 
 
 ## Starting and stopping
 
-To start (or restart) the full stack:
+To start (or restart) the full stack, include the profile for your chosen ingress mode:
 
 ```bash
+# Direct (no extra profile)
 docker compose up -d
+
+# Cloudflare Tunnel
+docker compose --profile cftunnel up -d
+
+# VPN edge
+docker compose --profile vpnedge up -d
 ```
 
-To shut it all down gracefully:
+To shut it all down gracefully (include the profile so Docker also stops the profile-gated container):
 
 ```bash
 docker compose down
+# or, if a profile was active:
+docker compose --profile cftunnel down
+docker compose --profile vpnedge down
 ```
 
 This stops and removes the containers, but **does not delete any data** — everything in `.vols/` is preserved.

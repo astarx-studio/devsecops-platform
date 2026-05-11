@@ -108,3 +108,23 @@ You'll fill in the `SMTP_*` variables in `.env` with whatever your provider give
 ---
 
 Once you have all of the above, move on to [configuring your environment file](02_env.md).
+
+---
+
+## Choosing a public ingress mode
+
+Before you start the stack, decide how the platform will be reachable from the internet. There are three mutually exclusive modes, each with its own prerequisites.
+
+| Mode | When to use | Extra prerequisites |
+|---|---|---|
+| **Direct** | Your network already exposes the host's ports `10080` and `10443` to the internet. ISP or router firewall allows inbound TCP 80/443/12222. | Nothing beyond the above. Point DNS `A` records at your public IP. |
+| **Cloudflare Tunnel** | You want internet access without opening any inbound firewall ports. Cloudflare routes traffic through an outbound-only connection. | A Cloudflare Tunnel token (created above). Tunnel routing rules configured in the Cloudflare dashboard (Zero Trust → Networks → Tunnels). |
+| **VPN edge** | Your ISP blocks inbound TCP 80/443 (e.g. residential CGNAT), or you want a stable public IP without relying on Cloudflare. A cloud VM holds your public IP and forwards traffic through WireGuard to your home server. | A cloud VM (e.g. GCP, DigitalOcean, AWS Lightsail) with a static public IPv4. VPC/firewall rules allowing inbound TCP 80, 443, 12222 to that VM. Outbound UDP 51820 from that VM to your home public IP. Your home router must forward UDP `51820` to the Docker host. |
+
+**You can only use one mode per public DNS name at a time.** Do not point the same domain at both a Cloudflare Tunnel and a VPN edge VM.
+
+After choosing:
+
+- **Direct:** no extra configuration needed — proceed to [configuring your environment](02_env.md).
+- **Cloudflare Tunnel:** ensure `CLOUDFLARE_TUNNEL_TOKEN` is filled in `.env`; use `docker compose --profile cftunnel up -d` instead of plain `docker compose up -d`.
+- **VPN edge:** additionally follow the **Edge VM bootstrap** section in [Networking — VPN edge ingress](../99_maintainers/05_networking.md#edge-vm-bootstrap-fresh-ubuntu) after the stack is running. Use `docker compose --profile vpnedge up -d` instead of plain `docker compose up -d`.

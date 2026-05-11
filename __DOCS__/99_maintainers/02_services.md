@@ -285,9 +285,16 @@ To switch to production mode: change the docker-compose command to `server -conf
 
 **Health check:** None. Use `docker logs wireguard` and `docker exec wireguard wg show`.
 
+**The auto-generated `wg0.conf`** (under `.vols/wireguard/wg_confs/wg0.conf`) includes the canonical LinuxServer `PostUp` rule that masquerades decrypted tunnel traffic onto the Docker bridge so return packets find their way back to the container:
+```
+PostUp = iptables -A FORWARD -i %i -j ACCEPT; iptables -A FORWARD -o %i -j ACCEPT; iptables -t nat -A POSTROUTING -o eth+ -j MASQUERADE
+```
+No additional iptables configuration is needed inside the container.
+
 **Operational notes:**
 - This service is **profile-gated** — use `docker compose --profile vpnedge up -d`.
-- **Docker Desktop / WSL2:** If inbound UDP to the container fails, run WireGuard natively in WSL2 with the same keys; see [05_networking.md](05_networking.md).
+- **Docker Desktop / WSL2:** `HOME_TRAFFIC_IP` in `forward-ports.env` on the edge VM must be the **WSL2 instance's IPv4** (where Docker actually listens), not the Windows LAN address. Check with `ip -4 route get 1.1.1.1` inside WSL2. If inbound UDP to the container fails at the WSL2 layer, run WireGuard natively in WSL2 with the same keys; see [05_networking.md](05_networking.md).
+- Verify a healthy deployment: `docker exec wireguard wg show` (recent handshake, transfer counting) and `docker exec wireguard iptables -t nat -L POSTROUTING -nv` (MASQUERADE rule with non-zero packet count).
 
 ---
 

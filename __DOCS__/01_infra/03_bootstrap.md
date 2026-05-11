@@ -20,15 +20,30 @@ If this command prints a long YAML output without errors, you're good to go. If 
 
 ## Starting everything
 
-Run this from the project root (the folder that contains `docker-compose.yml`):
+Run this from the project root (the folder that contains `docker-compose.yml`). The command depends on which public ingress mode you chose during [prerequisites](01_prereqs.md#choosing-a-public-ingress-mode):
 
+**Direct (default) — no additional profile:**
 ```bash
 docker compose up -d
 ```
 
+**Cloudflare Tunnel:**
+```bash
+docker compose --profile cftunnel up -d
+```
+
+**VPN edge (WireGuard):**
+```bash
+docker compose --profile vpnedge up -d
+```
+
+The `--profile` flag activates the extra profile-gated service (`cloudflared` or `wireguard`) alongside all the core services. If you omit it, only the core platform starts.
+
 The `-d` flag means "detached" — it runs everything in the background so you get your terminal back immediately.
 
 Docker will pull any missing images (this may take a few minutes on first run), create the internal network, and start all containers.
+
+> **VPN edge only:** after the stack is up and the `wireguard` container is healthy, continue with the **Edge VM bootstrap** steps in [Networking — VPN edge ingress](../99_maintainers/05_networking.md#edge-vm-bootstrap-fresh-ubuntu) to configure the cloud VM. The platform is reachable locally before this step; the edge VM makes it reachable from the internet.
 
 ---
 
@@ -87,6 +102,8 @@ Once all services are healthy, try opening these in a browser (replace `yourdoma
 | Management API | `https://api.devops.yourdomain.com/health` | `{"status":"ok"}` in plain text |
 
 If you see HTTPS padlock icons in your browser and the pages load, certificates are working. If you see a certificate warning, Traefik may still be in the process of issuing the certificate — wait a minute and try again.
+
+> **VPN edge only:** these URLs will load on your local network immediately. From outside your network, they will only work after you complete the [Edge VM bootstrap](../99_maintainers/05_networking.md#edge-vm-bootstrap-fresh-ubuntu). On first load from outside, open `https://gw.devops.yourdomain.com` (small response) then `https://gitlab.devops.yourdomain.com` (large response) to exercise the full path.
 
 ---
 

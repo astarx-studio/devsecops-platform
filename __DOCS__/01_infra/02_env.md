@@ -33,6 +33,8 @@ APPS_DOMAIN=apps.yourdomain.com
 
 Set `DOMAIN` to your base domain. Set `APPS_DOMAIN` to the domain used for applications that developers deploy through the platform.
 
+`DOCKER_NETWORK` sets the Docker bridge network name. The default is `devops-network`. You only need to change this if that name conflicts with an existing network on your host.
+
 The remaining `*_DOMAIN` variables (`TRAEFIK_DOMAIN`, `KEYCLOAK_DOMAIN`, etc.) are already pre-filled with the correct subdomains based on the platform's naming convention. You only need to change them if you want to use different subdomain names.
 
 ---
