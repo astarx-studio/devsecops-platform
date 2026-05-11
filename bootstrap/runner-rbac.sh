@@ -198,36 +198,51 @@ EOF
     prod) GL_SCOPE="prod" ;;
   esac
 
-  # Pre-flight: warn if multiple KUBECONFIG_B64 variables already exist for
-  # this scope from prior buggy runs (GitLab allows duplicates per scope via
-  # POST, so we surface them early before the upsert).
-  EXISTING_SCOPES=$(curl -sf \
+  # Upsert strategy: GET first to determine existence for this exact scope,
+  # then PUT (update) or POST (create) accordingly.
+  #
+  # GitLab's PUT /variables/:key ignores filter[environment_scope] when only
+  # one variable with that key exists — it updates the single match regardless
+  # of scope, so a blind PUT would silently overwrite the wrong entry.  A GET
+  # check avoids that by deciding the verb before any mutation.
+  #
+  # Pre-flight: also warn if more than one variable already exists for this
+  # scope (duplicates from prior buggy runs) so they can be cleaned up first.
+  GL_VARS_JSON=$(curl -sf \
     -H "PRIVATE-TOKEN: ${GITLAB_ROOT_TOKEN}" \
     "https://${GITLAB_DOMAIN}/api/v4/groups/${GITLAB_CONFIG_GROUP_ID}/variables?per_page=100" \
-    2>/dev/null \
-    | grep -o '"key":"KUBECONFIG_B64"[^}]*"environment_scope":"[^"]*"' \
-    | grep -o '"environment_scope":"[^"]*"' \
-    | sed 's/"environment_scope":"//;s/"//' || true)
-  DUPE_COUNT=$(echo "${EXISTING_SCOPES}" | grep -c "^${GL_SCOPE}$" || true)
-  if [[ "${DUPE_COUNT}" -gt 1 ]]; then
-    warn "Found ${DUPE_COUNT} KUBECONFIG_B64 variables for scope '${GL_SCOPE}' — delete duplicates in GitLab UI before re-running."
+    2>/dev/null || echo "[]")
+
+  SCOPE_COUNT=$(echo "${GL_VARS_JSON}" \
+    | { grep -o "\"key\":\"KUBECONFIG_B64\"[^}]*\"environment_scope\":\"${GL_SCOPE}\"" || true; } \
+    | wc -l | tr -d ' ')
+
+  if [[ "${SCOPE_COUNT}" -gt 1 ]]; then
+    warn "Found ${SCOPE_COUNT} KUBECONFIG_B64 variables for scope '${GL_SCOPE}' — delete duplicates in GitLab UI before re-running."
   fi
 
-  # Upsert: try PUT first (update) — the filter query param ensures GitLab
-  # disambiguates by environment_scope, preventing updates to the wrong scope.
-  HTTP_STATUS=$(curl -sf -o /dev/null -w "%{http_code}" \
-    --request PUT \
-    --header "PRIVATE-TOKEN: ${GITLAB_ROOT_TOKEN}" \
-    --form "value=${KUBECONFIG_B64}" \
-    --form "masked=true" \
-    --form "environment_scope=${GL_SCOPE}" \
+  SCOPE_EXISTS=$(curl -sf -o /dev/null -w "%{http_code}" \
+    -H "PRIVATE-TOKEN: ${GITLAB_ROOT_TOKEN}" \
     "https://${GITLAB_DOMAIN}/api/v4/groups/${GITLAB_CONFIG_GROUP_ID}/variables/KUBECONFIG_B64?filter%5Benvironment_scope%5D=${GL_SCOPE}" \
     2>/dev/null || echo "000")
 
-  if [[ "${HTTP_STATUS}" == "200" ]]; then
-    info "GitLab CI variable KUBECONFIG_B64 (scope: ${GL_SCOPE}) updated."
+  if [[ "${SCOPE_EXISTS}" == "200" ]]; then
+    # Variable exists for this scope — update it in place.
+    HTTP_STATUS=$(curl -sf -o /dev/null -w "%{http_code}" \
+      --request PUT \
+      --header "PRIVATE-TOKEN: ${GITLAB_ROOT_TOKEN}" \
+      --form "value=${KUBECONFIG_B64}" \
+      --form "masked=true" \
+      --form "environment_scope=${GL_SCOPE}" \
+      "https://${GITLAB_DOMAIN}/api/v4/groups/${GITLAB_CONFIG_GROUP_ID}/variables/KUBECONFIG_B64?filter%5Benvironment_scope%5D=${GL_SCOPE}" \
+      2>/dev/null || echo "000")
+    if [[ "${HTTP_STATUS}" == "200" ]]; then
+      info "GitLab CI variable KUBECONFIG_B64 (scope: ${GL_SCOPE}) updated."
+    else
+      warn "PUT returned HTTP ${HTTP_STATUS} for scope '${GL_SCOPE}'. Check GitLab API."
+    fi
   else
-    # PUT failed — try POST (create)
+    # Variable does not exist for this scope — create it.
     HTTP_STATUS=$(curl -sf -o /dev/null -w "%{http_code}" \
       --request POST \
       --header "PRIVATE-TOKEN: ${GITLAB_ROOT_TOKEN}" \
@@ -237,11 +252,10 @@ EOF
       --form "environment_scope=${GL_SCOPE}" \
       "https://${GITLAB_DOMAIN}/api/v4/groups/${GITLAB_CONFIG_GROUP_ID}/variables" \
       2>/dev/null || echo "000")
-
     if [[ "${HTTP_STATUS}" =~ ^2 ]]; then
       info "GitLab CI variable KUBECONFIG_B64 (scope: ${GL_SCOPE}) created."
     else
-      warn "Failed to upsert GitLab CI variable for scope '${GL_SCOPE}' (HTTP ${HTTP_STATUS})."
+      warn "Failed to create GitLab CI variable for scope '${GL_SCOPE}' (HTTP ${HTTP_STATUS})."
       warn "Set it manually: KUBECONFIG_B64 (env scope: ${GL_SCOPE}) = contents of ${KUBECONFIG_FILE} (base64)"
     fi
   fi
