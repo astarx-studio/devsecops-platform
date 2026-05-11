@@ -1,0 +1,32 @@
+# =============================================================================
+# chart-values.yaml — per-app Helm overrides for the dsoaas-app chart.
+# =============================================================================
+# These values are merged on top of the chart defaults during `helm upgrade`.
+# Commit this file to your app repo; the pipeline picks it up automatically.
+#
+# DO NOT put secrets here. Secrets come from Vault via ExternalSecret.
+# =============================================================================
+
+# NestJS default port
+service:
+  targetPort: 3000
+
+# Health check endpoint (NestJS default — adjust if you use a different path)
+probes:
+  liveness:
+    path: /health
+    initialDelaySeconds: 15
+    periodSeconds: 20
+  readiness:
+    path: /health
+    initialDelaySeconds: 5
+    periodSeconds: 10
+
+# Resource limits — tune per app
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
