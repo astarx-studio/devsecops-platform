@@ -28,9 +28,10 @@ http:
   routers:
     # -------------------------------------------------------------------------
     # prod zone: *.apps.<DOMAIN>
+    # Traefik v3 HostRegexp uses pure Go regexp (no named-group syntax).
     # -------------------------------------------------------------------------
     k3d-prod:
-      rule: "HostRegexp(`{subdomain:[a-z0-9-]+}.apps.__DOMAIN__`)"
+      rule: "HostRegexp(`[a-z0-9-]+\\.apps\\.__DOMAIN__`)"
       entryPoints:
         - websecure
       service: k3d-ingress
@@ -40,7 +41,7 @@ http:
     # staging zone: *.stg.apps.<DOMAIN>
     # -------------------------------------------------------------------------
     k3d-stg:
-      rule: "HostRegexp(`{subdomain:[a-z0-9-]+}.stg.apps.__DOMAIN__`)"
+      rule: "HostRegexp(`[a-z0-9-]+\\.stg\\.apps\\.__DOMAIN__`)"
       entryPoints:
         - websecure
       service: k3d-ingress
@@ -50,7 +51,7 @@ http:
     # dev zone: *.dev.apps.<DOMAIN>
     # -------------------------------------------------------------------------
     k3d-dev:
-      rule: "HostRegexp(`{subdomain:[a-z0-9-]+}.dev.apps.__DOMAIN__`)"
+      rule: "HostRegexp(`[a-z0-9-]+\\.dev\\.apps\\.__DOMAIN__`)"
       entryPoints:
         - websecure
       service: k3d-ingress
@@ -58,16 +59,17 @@ http:
 
   services:
     # -------------------------------------------------------------------------
-    # Target: in-cluster Traefik via k3d LoadBalancer (HTTP)
-    # The LB container is reachable inside devops-network by its Docker
-    # hostname: k3d-dsoaas-serverlb.  Port 8081 on the host maps to
-    # in-cluster Traefik :80.
+    # Target: in-cluster Traefik via fixed NodePort on the k3d server node.
+    # klipper-LB is disabled in this cluster so the LoadBalancer service never
+    # gets an external IP.  The inner Traefik is exposed as a NodePort service
+    # on port 30080, reachable from devops-network via the k3d server's Docker
+    # hostname.
     # -------------------------------------------------------------------------
     k3d-ingress:
       loadBalancer:
         passHostHeader: true
         servers:
-          - url: "http://k3d-dsoaas-serverlb:8081"
+          - url: "http://k3d-dsoaas-server-0:30080"
         healthCheck:
           path: /ping
           interval: 30s

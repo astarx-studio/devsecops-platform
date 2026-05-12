@@ -10,9 +10,12 @@
 # IngressClass: traefik  (used in all app Ingress resources)
 # =============================================================================
 
-# Expose via the k3d LoadBalancer (host port 8081 → pod :80)
+# Expose via NodePort so the outer Traefik can reach the inner Traefik
+# via the k3d server container's Docker hostname.  klipper-LB is disabled
+# in this cluster (--disable=servicelb), so LoadBalancer type never gets
+# an external IP.  Using NodePort with a fixed port (30080) instead.
 service:
-  type: LoadBalancer
+  type: NodePort
 
 # Disable the built-in dashboard IngressRoute (outer Traefik handles admin access)
 ingressRoute:
@@ -27,6 +30,7 @@ ports:
       default: true
     exposedPort: 80
     protocol: TCP
+    nodePort: 30080   # fixed nodePort; outer Traefik targets k3d-dsoaas-server-0:30080
   websecure:
     port: 8443
     expose:

@@ -328,25 +328,36 @@ export class ProjectsService implements OnApplicationBootstrap {
     }
     await this.vaultService.writeSecrets(vaultBasePath, baseSecrets);
 
-    // Step 4b: Per-env Vault writes when envScopedVars is provided
+    // Step 4b: Per-env Vault writes — always executed so every deploy environment
+    // has a populated secret path.  Sentinel keys (DEPLOY_ENV, VAULT_PROJECT_PATH)
+    // ensure the ExternalSecret can sync even when no caller-supplied values exist.
+    // Additional caller-supplied keys from envScopedVars are merged on top.
     const envScopedEnvsWritten: DeployEnv[] = [];
-    if (input.envScopedVars) {
-      for (const env of DEPLOY_ENVS) {
-        const raw = input.envScopedVars[env];
-        if (!raw) continue;
+    for (const env of DEPLOY_ENVS) {
+      const envPath = `${vaultBasePath}/${env}`;
 
-        const envPath = `${vaultBasePath}/${env}`;
+      // Sentinel values: always present so ESO has something to sync.
+      const envData: Record<string, string> = {
+        DEPLOY_ENV: env,
+        VAULT_PROJECT_PATH: vaultBasePath,
+      };
+
+      const raw = input.envScopedVars?.[env];
+      if (raw) {
         try {
-          const parsed = JSON.parse(raw) as Record<string, string>;
-          await this.vaultService.writeSecrets(envPath, parsed);
+          Object.assign(envData, JSON.parse(raw) as Record<string, string>);
           envScopedEnvsWritten.push(env);
-          this.logger.log(`Step 4b: Seeded env-scoped Vault secrets at "${envPath}"`);
         } catch (err) {
           this.logger.warn(
-            `envScopedVars.${env} is not valid JSON — skipping: ${(err as Error).message}`,
+            `envScopedVars.${env} is not valid JSON — keeping sentinels only: ${(err as Error).message}`,
           );
         }
       }
+
+      await this.vaultService.writeSecrets(envPath, envData);
+      this.logger.log(
+        `Step 4b: Seeded env-scoped Vault secrets at "${envPath}" (${Object.keys(envData).length} keys)`,
+      );
     }
 
     // Step 5: Ensure k3d namespaces exist
@@ -727,6 +738,23 @@ export class ProjectsService implements OnApplicationBootstrap {
         effectiveSlug: finalSlug,
         metadata: { reason: 'startup reconciliation', gitlabProjectId: glProject.id },
       });
+
+      // Seed per-env Vault paths so any future deployable upgrade for this
+      // legacy project finds ExternalSecret paths already populated.
+      // Idempotent — vault KV v2 overwrites are safe.
+      for (const env of DEPLOY_ENVS) {
+        const envPath = `${vaultBasePath}/${env}`;
+        const envData: Record<string, string> = {
+          DEPLOY_ENV: env,
+          VAULT_PROJECT_PATH: vaultBasePath,
+        };
+        await this.vaultService.writeSecrets(envPath, envData).catch((err: Error) => {
+          this.logger.warn(
+            `Reconciliation: could not seed Vault path "${envPath}": ${err.message}`,
+          );
+        });
+        this.logger.verbose(`Reconciliation: seeded Vault path "${envPath}"`);
+      }
 
       backfilled++;
     }

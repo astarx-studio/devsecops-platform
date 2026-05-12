@@ -4,7 +4,7 @@
 # ==========================================================================
 # Containers: traefik, mongo, kong-db*, kong-migration*, kong*, kong-deck-sync*,
 #             keycloak-db, keycloak, vault (OpenBao), cloudflared, wireguard,
-#             gitlab, gitlab-runner, api
+#             gitlab, gitlab-runner, api, minio, minio-init
 # Network:    devops-network (bridge)
 #
 # * = DEPRECATED v2: Kong containers are scheduled for removal in Phase 5
@@ -94,6 +94,7 @@ services:
           - ${TRAEFIK_DOMAIN}
           - ${GITLAB_REGISTRY_DOMAIN}
           - ${KONG_ADMIN_DOMAIN}
+          - ${MINIO_CONSOLE_DOMAIN}
 
   # ========================================================================
   # MONGODB — Platform Registry (v2)
@@ -499,6 +500,9 @@ services:
       SMTP_FROM_NAME: ${SMTP_FROM_NAME}
       SMTP_FROM_EMAIL: ${SMTP_FROM_EMAIL}
       SMTP_DOMAIN: ${SMTP_DOMAIN}
+      # MinIO credentials consumed by the GITLAB_OMNIBUS_CONFIG object_store block.
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
       GITLAB_OMNIBUS_CONFIG: |
         external_url '${GITLAB_EXTERNAL_URL}'
         nginx['listen_port'] = 80
@@ -566,6 +570,29 @@ services:
             }
           }
         ]
+        # Object store: use MinIO (S3-compatible) for CI artifacts, uploads, LFS,
+        # and packages.  Bypasses the workhorse↔rails bind-mount temp-file handoff
+        # that races on Windows, causing Errno::ENOENT on artifact POST.
+        # Runner jobs upload directly to MinIO via a signed URL; Rails only records
+        # metadata — the zip never transits the bind-mount tmp directory.
+        gitlab_rails['object_store']['enabled'] = true
+        gitlab_rails['object_store']['proxy_download'] = false
+        gitlab_rails['object_store']['connection'] = {
+          'provider'              => 'AWS',
+          'region'                => 'us-east-1',
+          'endpoint'              => 'http://minio:9000',
+          'path_style'            => true,
+          'aws_access_key_id'     => ENV['MINIO_ACCESS_KEY'],
+          'aws_secret_access_key' => ENV['MINIO_SECRET_KEY']
+        }
+        gitlab_rails['object_store']['objects']['artifacts']['bucket']       = 'gitlab-artifacts'
+        gitlab_rails['object_store']['objects']['lfs']['bucket']            = 'gitlab-lfs'
+        gitlab_rails['object_store']['objects']['uploads']['bucket']        = 'gitlab-uploads'
+        gitlab_rails['object_store']['objects']['packages']['bucket']       = 'gitlab-packages'
+        gitlab_rails['object_store']['objects']['dependency_proxy']['bucket'] = 'gitlab-dependency-proxy'
+        gitlab_rails['object_store']['objects']['terraform_state']['bucket'] = 'gitlab-terraform-state'
+        gitlab_rails['object_store']['objects']['pages']['bucket']          = 'gitlab-pages'
+        gitlab_rails['object_store']['objects']['ci_secure_files']['bucket'] = 'gitlab-ci-secure-files'
     volumes:
       - ./.vols/gitlab/config:/etc/gitlab
       - ./.vols/gitlab/logs:/var/log/gitlab
@@ -576,6 +603,9 @@ services:
       timeout: 10s
       retries: 5
       start_period: 300s
+    depends_on:
+      minio:
+        condition: service_healthy
     networks:
       - devops-network
 
@@ -759,6 +789,89 @@ services:
       OAUTH2_PROXY_ALLOWED_GROUPS: ${OAUTH2_PROXY_ALLOWED_GROUPS:-admins}
     depends_on:
       keycloak:
+        condition: service_healthy
+    networks:
+      - devops-network
+
+  # ========================================================================
+  # MINIO — S3-Compatible Object Storage for GitLab Artifacts
+  # ========================================================================
+  # Provides reliable artifact storage for CI scan jobs (container_scanning,
+  # secret_detection, semgrep-sast).  Without this, GitLab's workhorse-to-rails
+  # direct-upload temp-file handoff races on the Windows bind mount, producing
+  # Errno::ENOENT on artifact POST and marking scan jobs as failed even though
+  # the scan completed successfully.
+  #
+  # GitLab is configured (via GITLAB_OMNIBUS_CONFIG object_store block in the
+  # gitlab service) to use MinIO as the S3 backend for artifacts, uploads, LFS,
+  # and packages.  Buckets are pre-created by the minio-init one-shot service.
+  #
+  # Console (optional): https://${MINIO_CONSOLE_DOMAIN} — requires Traefik label
+  # to be enabled and MINIO_CONSOLE_DOMAIN to be set.
+  minio:
+    image: quay.io/minio/minio:latest
+    container_name: minio
+    restart: unless-stopped
+    command: server /data --console-address :9001
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    volumes:
+      - ./.vols/minio/data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9000/minio/health/live || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.minio-console.rule: "Host(`${MINIO_CONSOLE_DOMAIN}`)"
+      traefik.http.routers.minio-console.entrypoints: "websecure"
+      traefik.http.routers.minio-console.tls.certresolver: "letsencrypt"
+      traefik.http.routers.minio-console.middlewares: "oidc-auth@file"
+      traefik.http.services.minio-console.loadbalancer.server.port: "9001"
+    networks:
+      devops-network:
+        aliases:
+          - ${MINIO_CONSOLE_DOMAIN}
+
+  # ========================================================================
+  # MINIO INIT — One-shot bucket and credential bootstrap
+  # ========================================================================
+  # Creates the four GitLab buckets on first startup (idempotent: mc mb --ignore-existing).
+  # Exits 0 after completion; does not need to stay running.
+  minio-init:
+    image: quay.io/minio/mc:latest
+    container_name: minio-init
+    restart: "no"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        echo "Waiting for MinIO to be ready..."
+        until mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD" 2>/dev/null; do
+          sleep 2
+        done
+        echo "MinIO ready. Creating GitLab buckets..."
+        mc mb --ignore-existing local/gitlab-artifacts
+        mc mb --ignore-existing local/gitlab-uploads
+        mc mb --ignore-existing local/gitlab-lfs
+        mc mb --ignore-existing local/gitlab-packages
+        mc mb --ignore-existing local/gitlab-dependency-proxy
+        mc mb --ignore-existing local/gitlab-terraform-state
+        mc mb --ignore-existing local/gitlab-pages
+        mc mb --ignore-existing local/gitlab-ci-secure-files
+        echo "Creating dedicated GitLab access key..."
+        mc admin user add local "$$MINIO_ACCESS_KEY" "$$MINIO_SECRET_KEY" 2>/dev/null || true
+        mc admin policy attach local readwrite --user "$$MINIO_ACCESS_KEY" 2>/dev/null || true
+        echo "MinIO init complete."
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
+    depends_on:
+      minio:
         condition: service_healthy
     networks:
       - devops-network

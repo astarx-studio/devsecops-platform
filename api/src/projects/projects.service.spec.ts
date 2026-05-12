@@ -168,6 +168,19 @@ describe('ProjectsService', () => {
         'projects/groupa/groupab/repoa',
         expect.objectContaining({ PROJECT_SLUG: 'repoa', EFFECTIVE_SLUG: 'repoa' }),
       );
+      // F2: per-env sentinel paths are always written, even without envScopedVars
+      expect(writeSecretsFn).toHaveBeenCalledWith(
+        'projects/groupa/groupab/repoa/dev',
+        expect.objectContaining({ DEPLOY_ENV: 'dev', VAULT_PROJECT_PATH: 'projects/groupa/groupab/repoa' }),
+      );
+      expect(writeSecretsFn).toHaveBeenCalledWith(
+        'projects/groupa/groupab/repoa/stg',
+        expect.objectContaining({ DEPLOY_ENV: 'stg', VAULT_PROJECT_PATH: 'projects/groupa/groupab/repoa' }),
+      );
+      expect(writeSecretsFn).toHaveBeenCalledWith(
+        'projects/groupa/groupab/repoa/prod',
+        expect.objectContaining({ DEPLOY_ENV: 'prod', VAULT_PROJECT_PATH: 'projects/groupa/groupab/repoa' }),
+      );
       expect(ensureNamespaceFn).toHaveBeenCalledTimes(3); // dev, stg, prod
       expect(projectModel.create).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -198,7 +211,7 @@ describe('ProjectsService', () => {
       );
     });
 
-    it('should write per-env Vault secrets when envScopedVars is provided (T1)', async () => {
+    it('should write per-env Vault secrets with caller values merged on top of sentinels when envScopedVars is provided (T1+F2)', async () => {
       const input: CreateProjectInput = {
         ...baseInput,
         envScopedVars: {
@@ -214,18 +227,24 @@ describe('ProjectsService', () => {
         'projects/groupa/groupab/repoa',
         expect.objectContaining({ PROJECT_SLUG: 'repoa' }),
       );
-      // Per-env paths written for dev and prod only (stg not provided)
+      // dev — sentinel keys present + caller value merged
       expect(writeSecretsFn).toHaveBeenCalledWith(
         'projects/groupa/groupab/repoa/dev',
-        { FEATURE_FLAG: 'on' },
+        expect.objectContaining({ DEPLOY_ENV: 'dev', FEATURE_FLAG: 'on' }),
       );
+      // stg — no caller value; sentinels only
+      expect(writeSecretsFn).toHaveBeenCalledWith(
+        'projects/groupa/groupab/repoa/stg',
+        expect.objectContaining({ DEPLOY_ENV: 'stg' }),
+      );
+      // prod — sentinel keys present + caller value merged
       expect(writeSecretsFn).toHaveBeenCalledWith(
         'projects/groupa/groupab/repoa/prod',
-        { FEATURE_FLAG: 'off' },
+        expect.objectContaining({ DEPLOY_ENV: 'prod', FEATURE_FLAG: 'off' }),
       );
     });
 
-    it('should skip invalid JSON envScopedVars gracefully (T1)', async () => {
+    it('should fall back to sentinels only for invalid JSON envScopedVars (T1+F2)', async () => {
       const input: CreateProjectInput = {
         ...baseInput,
         envScopedVars: { dev: 'not-json', stg: JSON.stringify({ KEY: 'val' }) },
@@ -233,14 +252,15 @@ describe('ProjectsService', () => {
 
       await service.createProject(input);
 
-      // stg is written; dev is silently skipped
+      // dev — invalid JSON: sentinels written, caller value silently dropped
+      expect(writeSecretsFn).toHaveBeenCalledWith(
+        'projects/groupa/groupab/repoa/dev',
+        expect.objectContaining({ DEPLOY_ENV: 'dev', VAULT_PROJECT_PATH: 'projects/groupa/groupab/repoa' }),
+      );
+      // stg — valid JSON merged on top of sentinels
       expect(writeSecretsFn).toHaveBeenCalledWith(
         'projects/groupa/groupab/repoa/stg',
-        { KEY: 'val' },
-      );
-      expect(writeSecretsFn).not.toHaveBeenCalledWith(
-        'projects/groupa/groupab/repoa/dev',
-        expect.anything(),
+        expect.objectContaining({ KEY: 'val', DEPLOY_ENV: 'stg' }),
       );
     });
 
