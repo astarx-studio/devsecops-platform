@@ -205,7 +205,7 @@ export class K8sService implements OnModuleInit {
    * @returns Base64-encoded kubeconfig string, or undefined if not available
    */
   getKubeconfigB64(env: DeployEnv): string | undefined {
-    const filePath = join(this.configDir, `${env}.yaml`);
+    const filePath = join(this.configDir, `kubeconfig-${env}.yaml`);
     if (!existsSync(filePath)) {
       this.logger.warn(`getKubeconfigB64(${env}): file not found at ${filePath}`);
       return undefined;
@@ -219,7 +219,7 @@ export class K8sService implements OnModuleInit {
 
   /** Initialises K8s clients for one environment from its kubeconfig file. */
   private initEnv(env: DeployEnv): void {
-    const filePath = join(this.configDir, `${env}.yaml`);
+    const filePath = join(this.configDir, `kubeconfig-${env}.yaml`);
 
     if (!existsSync(filePath)) {
       this.logger.warn(`Kubeconfig not found for env "${env}" at: ${filePath}`);
