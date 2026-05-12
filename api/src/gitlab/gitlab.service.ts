@@ -188,15 +188,21 @@ export class GitLabService {
   }
 
   /**
-   * Permanently deletes a GitLab project.
+   * Permanently deletes a GitLab project immediately.
+   *
+   * GitLab 15.2+ soft-deletes projects by renaming and scheduling them for
+   * later removal. The `permanently_delete=true` query param bypasses the
+   * delayed-deletion queue so the project path is freed straight away,
+   * allowing a project with the same name to be recreated without conflict.
    *
    * @param projectId - GitLab project ID to delete
    */
   async deleteProject(projectId: number): Promise<void> {
-    this.logger.warn(`Deleting GitLab project id=${projectId}`);
+    this.logger.warn(`Permanently deleting GitLab project id=${projectId}`);
     await firstValueFrom(
       this.httpService.delete(`${this.baseUrl}/api/v4/projects/${projectId}`, {
         headers: this.headers,
+        params: { permanently_delete: true },
       }),
     );
   }
