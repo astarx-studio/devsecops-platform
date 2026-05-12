@@ -667,6 +667,8 @@ services:
       MONGO_DB_NAME: ${MONGO_DB_NAME:-platform}
       KUBE_API_INTERNAL_URL: ${KUBE_API_INTERNAL_URL}
       KUBECONFIG_DIR: ${KUBECONFIG_DIR:-/etc/dsoaas/kubeconfigs}
+      AUTO_DEVOPS_PIPELINE_PROJECT: ${AUTO_DEVOPS_PIPELINE_PROJECT:-system/devsecops-platform/configs/auto-devops-pipeline}
+      AUTO_DEVOPS_PIPELINE_FILE: ${AUTO_DEVOPS_PIPELINE_FILE:-.gitlab-ci.yml}
       OIDC_ISSUER_URL: ${OIDC_ISSUER_URL}
       OIDC_JWKS_URL: ${OIDC_JWKS_URL}
       OIDC_AUDIENCE: ${OIDC_AUDIENCE}

@@ -123,8 +123,8 @@ const configuration = (): AppConfiguration => {
     },
 
     autoDevops: {
-      pipelineProject: optional('AUTO_DEVOPS_PIPELINE_PROJECT') ?? 'configs/auto-devops-pipeline',
-      pipelineFile: optional('AUTO_DEVOPS_PIPELINE_FILE') ?? '/.gitlab-ci.yml',
+      pipelineProject: optional('AUTO_DEVOPS_PIPELINE_PROJECT') ?? 'system/devsecops-platform/configs/auto-devops-pipeline',
+      pipelineFile: optional('AUTO_DEVOPS_PIPELINE_FILE') ?? '.gitlab-ci.yml',
     },
 
     oidc: {
