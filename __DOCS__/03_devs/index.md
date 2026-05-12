@@ -14,6 +14,6 @@ Here's what's covered:
 
 ---
 
-If your project was set up through the platform, most of the scaffolding already exists — a GitLab repository with a basic CI pipeline, a Vault path for your secrets, and a Kong route registered for your service. You can dive straight into your code.
+If your project was set up through the platform, most of the scaffolding already exists — a GitLab repository with a basic CI pipeline, a Vault path for your secrets, and Kubernetes namespaces wired for Auto DevOps. You can dive straight into your code.
 
 If you're not sure whether your project has been provisioned yet, ask your platform admin or check whether your repository exists in GitLab under `clients/<your-client-name>/<your-project-name>`.

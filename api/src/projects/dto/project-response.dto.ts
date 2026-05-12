@@ -60,11 +60,18 @@ export class ProjectResponseDto {
 
   @ApiPropertyOptional({
     description: 'Application hostnames per environment.',
-    example: { dev: 'repoa.dev.apps.example.com', stg: 'repoa.stg.apps.example.com', prod: 'repoa.apps.example.com' },
+    example: {
+      dev: 'repoa.dev.apps.example.com',
+      stg: 'repoa.stg.apps.example.com',
+      prod: 'repoa.apps.example.com',
+    },
   })
   appHosts?: { dev?: string; stg?: string; prod?: string };
 
-  @ApiProperty({ description: 'Capability flags.', example: { deployable: true, publishable: false } })
+  @ApiProperty({
+    description: 'Capability flags.',
+    example: { deployable: true, publishable: false },
+  })
   capabilities!: { deployable: boolean; publishable: boolean };
 
   @ApiProperty({ example: false, description: 'True for v1 legacy projects.' })

@@ -2,7 +2,7 @@
 
 ← [Back to Maintainer Guide](index.md)
 
-This document covers the Docker network topology, Traefik static and dynamic configuration, Kong declarative routing, and the DNS/domain strategy.
+This document covers the Docker network topology, Traefik static and dynamic configuration (Docker provider + file provider), k3d application ingress, and the DNS/domain strategy.
 
 ---
 
@@ -14,7 +14,7 @@ All services share a single Docker bridge network. The network name is driven by
 graph LR
     subgraph devops_network ["devops-network (bridge)"]
         traefik["traefik\n:80 :443 :8082"]
-        kong["kong\n:8000 :8001"]
+        mongo["mongo\n:27017"]
         keycloak["keycloak\n:8080 :9000"]
         vault["vault\n:8200"]
         gitlab["gitlab\n:80 :22 :5000"]
@@ -22,22 +22,18 @@ graph LR
         oauth2proxy["oauth2-proxy\n:4180"]
         cloudflared["cloudflared\n(profile: cftunnel)"]
         wireguard["wireguard\n(profile: vpnedge)"]
-        pgkong["kong-db\n:5432"]
         pgkc["keycloak-db\n:5432"]
     end
 
-    traefik -->|"catch-all :8000"| kong
-    traefik -->|"ForwardAuth :4180"| oauth2proxy
-    kong -->|":8080"| keycloak
-    kong -->|":8200"| vault
-    kong -->|":80 :5000"| gitlab
-    kong -->|":3000"| api
-    kong -->|":4180"| oauth2proxy
-    kong --- pgkong
+    traefik -->|"Docker labels / file routers"| keycloak
+    traefik -->|"Docker labels / file routers"| vault
+    traefik -->|"Docker labels / file routers"| gitlab
+    traefik -->|"Docker labels / file routers"| api
+    traefik -->|"ForwardAuth"| oauth2proxy
     keycloak --- pgkc
-    api -->|"Admin API :8001"| kong
     api -->|"HTTP :8200"| vault
     api -->|"HTTP :80"| gitlab
+    api -->|"MongoDB"| mongo
     cloudflared -->|"HTTPS :443"| traefik
 ```
 
@@ -48,10 +44,6 @@ graph LR
 | `10080` | traefik | HTTP (redirects to HTTPS) |
 | `10443` | traefik | HTTPS entry |
 | `18080` | traefik | Dashboard (no TLS on host) |
-| `18000` | kong | Proxy HTTP |
-| `18443` | kong | Proxy HTTPS |
-| `18001` | kong | Admin API (unauthenticated on host) |
-| `15432` | kong-db | PostgreSQL |
 | `15433` | keycloak-db | PostgreSQL |
 | `18200` | vault | API |
 | `12222` | gitlab | SSH |
@@ -61,7 +53,7 @@ graph LR
 
 ## DNS and domain naming conventions
 
-All service domains follow the pattern `<service>.devops.<DOMAIN>`. Deployed application domains follow `<projectName>.<APPS_DOMAIN>` (default: `<projectName>.apps.<DOMAIN>`).
+All service domains follow the pattern `<service>.devops.<DOMAIN>`. Deployed application hostnames use the app zones routed by **`traefik/dynamic/k3d-passthrough.yml`** into the k3d cluster (for example `*.dev.apps.<DOMAIN>`, `*.stg.apps.<DOMAIN>`, `*.apps.<DOMAIN>`).
 
 ```
 *.devops.<DOMAIN>
@@ -70,15 +62,15 @@ All service domains follow the pattern `<service>.devops.<DOMAIN>`. Deployed app
   ├── vault.devops.<DOMAIN>          → Vault UI
   ├── gitlab.devops.<DOMAIN>         → GitLab
   ├── registry.devops.<DOMAIN>       → GitLab container registry
-  ├── gw.devops.<DOMAIN>             → Kong proxy (public)
-  ├── gw-admin.devops.<DOMAIN>       → Kong admin UI
   ├── api.devops.<DOMAIN>            → Management API
-  └── oauth.devops.<DOMAIN>          → oauth2-proxy session endpoint
+  └── oauth.devops.<DOMAIN>          → oauth2-proxy (callback / auth)
 
-<projectName>.apps.<DOMAIN>          → Deployed applications (via Kong)
+*.dev.apps.<DOMAIN>                  → k3d / dev Ingress (via Traefik passthrough)
+*.stg.apps.<DOMAIN>                  → k3d / staging Ingress
+*.apps.<DOMAIN>                      → k3d / prod Ingress
 ```
 
-**Network aliases strategy:** Every service's public domain is added as an alias on `devops-network` in `docker-compose.yml`. This means that when the Management API or any internal service resolves `auth.devops.yourdomain.com`, Docker's built-in DNS returns Keycloak's internal IP directly — no round-trip through the public internet or Traefik.
+**Network aliases strategy:** Every service's public domain is added as an alias on `devops-network` in `docker-compose.yml`. This means that when the Management API or any internal service resolves `auth.devops.yourdomain.com`, Docker's built-in DNS returns Traefik's internal IP directly — no round-trip through the public internet.
 
 ```yaml
 # Example from docker-compose.yml (traefik service networks block)
@@ -165,173 +157,40 @@ accessLog:
 
 **Why a template?** Traefik's environment variable override mechanism can only modify existing YAML keys — it cannot create new nested structures like `domains[0].main`. The `sed` approach ensures the TLS domains and email are always correctly embedded in the YAML structure.
 
-### Dynamic configuration (`traefik/dynamic/kong.yml`)
+### Dynamic configuration (file provider)
+
+Traefik merges every `*.yml` from `traefik/dynamic/` after the container entrypoint substitutes `__DOMAIN__` / `__ACME_EMAIL__`.
+
+**`traefik/dynamic/forward-auth.yml`** — shared `oidc-auth` ForwardAuth middleware used by Docker labels (Traefik dashboard, MinIO console, and other protected operator surfaces):
 
 ```yaml
 http:
-  routers:
-    kong-catchall:
-      rule: "PathPrefix(`/`)"
-      entryPoints: [web, websecure]
-      service: kong-proxy
-      priority: 1          # lowest priority — matches only if nothing else does
-
   middlewares:
     oidc-auth:
       forwardAuth:
-        address: "http://oauth2-proxy:4180/oauth2/auth"
+        address: "http://oauth2-proxy:4180/"
         trustForwardHeader: true
         authResponseHeaders:
-          - X-Auth-Request-User
-          - X-Auth-Request-Email
-          - X-Auth-Request-Access-Token
-
-  services:
-    kong-proxy:
-      loadBalancer:
-        servers:
-          - url: "http://kong:8000"
-        healthCheck:
-          path: /status
-          port: 8001
-          interval: 30s
-          timeout: 5s
+          - "X-Auth-Request-User"
+          - "X-Auth-Request-Email"
+          - "X-Auth-Request-Access-Token"
 ```
+
+**`traefik/dynamic/k3d-passthrough.yml`** — `HostRegexp` routers for `*.dev.apps`, `*.stg.apps`, and `*.apps` hostnames forwarding to the in-cluster Traefik entrypoint. Workloads inside k3d use Kubernetes Ingress (and Helm releases) for HTTP routing.
 
 ### Docker label routing (defined per-service in `docker-compose.yml`)
 
-Higher-priority routes are applied via Docker labels on services that should bypass the `kong-catchall`:
+Per-hostname routes use `traefik.*` labels on the backing containers. Typical fields: `traefik.enable`, `Host(\`…\`)` rules, `websecure`, `letsencrypt`, and the container `loadbalancer.server.port`.
 
-**Traefik dashboard:**
-```yaml
-labels:
-  - "traefik.enable=true"
-  - "traefik.http.routers.traefik-dashboard.rule=Host(`${TRAEFIK_DOMAIN}`)"
-  - "traefik.http.routers.traefik-dashboard.entrypoints=websecure"
-  - "traefik.http.routers.traefik-dashboard.tls.certresolver=letsencrypt"
-  - "traefik.http.routers.traefik-dashboard.middlewares=oidc-auth@file"
-  - "traefik.http.routers.traefik-dashboard.service=api@internal"
-```
+**Traefik dashboard** attaches `oidc-auth@file` from the file provider plus a small redirect middleware to land users on `/dashboard/`.
 
-**Kong Admin API:**
-```yaml
-labels:
-  - "traefik.enable=true"
-  - "traefik.http.routers.kong-admin.rule=Host(`${KONG_ADMIN_DOMAIN}`)"
-  - "traefik.http.routers.kong-admin.entrypoints=websecure"
-  - "traefik.http.routers.kong-admin.tls.certresolver=letsencrypt"
-  - "traefik.http.routers.kong-admin.middlewares=oidc-auth@file"
-  - "traefik.http.services.kong-admin-svc.loadbalancer.server.port=8001"
-```
-
-**Router priority rules:**
-- All Docker-label routes have no explicit priority, which defaults to the length of the `rule` string. `Host(...)` rules are longer than `PathPrefix(/)`, so they always win over `kong-catchall`.
-- The `kong-catchall` is explicitly set to `priority: 1` to ensure it never supersedes Host-based routes.
+**Router overlap:** File-provider routes (for example k3d passthrough) set explicit `priority` so app-zone hostnames win over broader rules. When you add routers, align priorities with existing entries in the same dynamic files.
 
 ---
 
-## Kong configuration
+## Application traffic (compose → k3d)
 
-### Declarative config (`kong/kong.template.yml`)
-
-```
-format_version: "3.0"
-
-services:
-  - name: keycloak-service
-    url: http://keycloak:8080
-    routes:
-      - name: keycloak-route
-        hosts: ["${KEYCLOAK_DOMAIN}"]
-        protocols: ["http", "https"]
-        strip_path: false
-        preserve_host: true
-
-  - name: vault-service
-    url: http://vault:8200  # OpenBao instance
-    routes:
-      - name: vault-route
-        hosts: ["${VAULT_DOMAIN}"]
-        ...
-
-  - name: kong-proxy-service
-    url: http://kong:8001
-    routes:
-      - name: kong-proxy-route
-        hosts: ["${KONG_DOMAIN}"]
-        ...
-
-  - name: gitlab-service
-    url: http://gitlab:80
-    routes:
-      - name: gitlab-route
-        hosts: ["${GITLAB_DOMAIN}"]
-        ...
-    # longer timeouts for git operations
-
-  - name: gitlab-registry-service
-    url: http://gitlab:5000
-    routes:
-      - name: gitlab-registry-route
-        hosts: ["${GITLAB_REGISTRY_DOMAIN}"]
-        ...
-
-  - name: api-service
-    url: http://api:3000
-    routes:
-      - name: api-route
-        hosts: ["${API_DOMAIN}"]
-        ...
-
-  - name: oauth2-proxy-service
-    url: http://oauth2-proxy:4180
-    routes:
-      - name: oauth2-proxy-route
-        hosts: ["${OAUTH_DOMAIN}"]
-        ...
-```
-
-At startup, `kong-deck-sync` resolves all `${VAR}` placeholders via `sed` and applies the config via `deck gateway sync`. The `kong/deck` image is distroless (no shell), so a custom image is built inline with `dockerfile_inline`: it copies the `deck` binary from `kong/deck:latest` into `alpine:latest`, giving access to `sh` and `sed`.
-
-```sh
-sed \
-  -e "s|\${KEYCLOAK_DOMAIN}|$KEYCLOAK_DOMAIN|g" \
-  -e "s|\${VAULT_DOMAIN}|$VAULT_DOMAIN|g" \
-  -e "s|\${KONG_DOMAIN}|$KONG_DOMAIN|g" \
-  -e "s|\${GITLAB_DOMAIN}|$GITLAB_DOMAIN|g" \
-  -e "s|\${GITLAB_REGISTRY_DOMAIN}|$GITLAB_REGISTRY_DOMAIN|g" \
-  -e "s|\${API_DOMAIN}|$API_DOMAIN|g" \
-  -e "s|\${OAUTH_DOMAIN}|$OAUTH_DOMAIN|g" \
-  /kong/kong.template.yml > /tmp/kong.yml && \
-deck gateway sync /tmp/kong.yml --kong-addr http://kong:8001
-```
-
-### Dynamically provisioned routes
-
-When the Management API provisions a project with `capabilities.deployable`, it calls `KongService.registerService()` which directly calls the Kong Admin API:
-
-```
-PUT http://kong:8001/services/{name}
-{
-  "url": "http://{clientName}-{projectName}:3000",
-  "connect_timeout": 10000,
-  "read_timeout": 60000,
-  "write_timeout": 60000,
-  "retries": 3
-}
-
-PUT http://kong:8001/services/{name}/routes/{name}-route
-{
-  "hosts": ["{hostname}"],
-  "protocols": ["http", "https"],
-  "strip_path": false,
-  "preserve_host": true
-}
-```
-
-These routes are **not** tracked in `kong.template.yml`. They exist only in Kong's PostgreSQL database. If the Kong database is wiped and `kong-deck-sync` re-runs, these routes will be lost. The Management API does not currently have a mechanism to replay all provisioned routes from GitLab state.
-
-**Implication for maintainers:** If you need to rebuild the Kong database, you must re-invoke `POST /projects` for each existing project to re-register its Kong route (or apply them manually via the Kong Admin API).
+Public operator tools terminate TLS at the compose Traefik instance and reach containers via Docker routing. Application zones (`*.dev.apps`, `*.stg.apps`, `*.apps`) are forwarded into the k3d cluster; inner Traefik and Ingress objects route to pods. Provisioning is performed by the Management API together with GitLab CI — there is no separate API gateway service in this compose stack.
 
 ---
 
@@ -367,7 +226,7 @@ The `cloudflared` service is **profile-gated** — it only starts when you use `
 
 "No TLS Verify" is required because Traefik's certificate is issued for the public domain, and the tunnel connects via the Docker internal DNS name (`traefik`), which doesn't match the certificate subject.
 
-All hostnames are routed to Traefik. Traefik and Kong handle the per-hostname dispatching.
+All hostnames are routed to Traefik, which dispatches to the correct upstream containers or k3d passthrough routers.
 
 The `cloudflared` container connects to Cloudflare's edge using the `TUNNEL_TOKEN` and then forwards traffic for each configured public hostname to the origin you set in the Zero Trust dashboard (typically `https://traefik:443`).
 
@@ -515,7 +374,7 @@ Inbound traffic from a Google **External passthrough Network Load Balancer** sti
 Google’s probes use **`35.191.0.0/16`** and **`130.211.0.0/22`**. Without **ingress allow** rules to your backend **tag** (and **ports** used by the health check), backends stay **unhealthy** and the LB sends no traffic. See [Health check concepts — probe IP ranges](https://cloud.google.com/load-balancing/docs/health-check-concepts#ip-ranges) and [Firewall rules for health checks](https://cloud.google.com/load-balancing/docs/health-checks#fw-rule). Restrict to the **exact probe ports** your health check uses.
 
 **2. HTTP(S) health checks vs redirects**  
-For **HTTP**, **HTTPS**, or **HTTP/2** health checks, Google treats **any response other than `200 OK` as unhealthy**, including **`301`/`302` redirects**. Traefik/Kong/Keycloak often redirect `/` — so the LB marks the backend **unhealthy** even when the app “works.” Prefer a **TCP** or **SSL** health check on **`443`** (or the serving port) if you only need connectivity, or point an **HTTP** health check at a path that returns **200** (e.g. a small static endpoint).
+For **HTTP**, **HTTPS**, or **HTTP/2** health checks, Google treats **any response other than `200 OK` as unhealthy**, including **`301`/`302` redirects**. Traefik and many apps redirect `/` — so the LB marks the backend **unhealthy** even when the app “works.” Prefer a **TCP** or **SSL** health check on **`443`** (or the serving port) if you only need connectivity, or point an **HTTP** health check at a path that returns **200** (e.g. a small static endpoint).
 
 **3. `apply-nat.sh` / `WAN_IFACE`**  
 Rules match **`iifname $WAN`**. If the LB or a **second NIC** changes which interface receives traffic, re-detect the default route interface and set **`WAN_IFACE`** in **`forward-ports.env`**, then re-run **`apply-nat.sh apply`**.
@@ -527,7 +386,7 @@ On the **home** `wireguard` container, the **`[Peer]`** entry for the edge shoul
 
 ### VPN edge troubleshooting (e.g. HTTP 503)
 
-**503 means something spoke HTTP** (often Traefik or Kong) but treated the request as “no healthy backend” or “service unavailable.” The tunnel can be “up” for WireGuard while **TCP to `HOME_TRAFFIC_IP:10443` still fails** or backends are unhealthy.
+**503 means something spoke HTTP** (often Traefik) but treated the request as “no healthy backend” or “service unavailable.” The tunnel can be “up” for WireGuard while **TCP to `HOME_TRAFFIC_IP:10443` still fails** or backends are unhealthy.
 
 1. **Confirm the tunnel actually carries data** — On both sides, `sudo wg show` should show **`latest handshake: …` (recent)** and **`transfer`** bytes **increasing** when you load a page. If handshake is missing or **rx/tx stay at 0**, fix routing / firewall first (GCP rules, home UDP `51820`, `HOME_TRAFFIC_IP`, `AllowedIPs`).
 
@@ -541,13 +400,13 @@ On the **home** `wireguard` container, the **`[Peer]`** entry for the edge shoul
    ```bash
    curl -vk https://127.0.0.1:10443/ -H "Host: YOUR_REAL_HOSTNAME"
    ```
-   If this already returns **503**, fix **Kong / upstream health** (`docker compose ps`, `docker logs traefik`, `docker logs kong`), not the edge.
+   If this already returns **503**, fix **Traefik / upstream health** (`docker compose ps`, `docker logs traefik`, inner ingress logs), not the edge.
 
 5. **From the edge VM** (after `wg0` is up), reach Traefik through the tunnel:
    ```bash
    curl -vk "https://${HOME_TRAFFIC_IP}:10443/" -H "Host: YOUR_REAL_HOSTNAME"
    ```
-   Use a hostname that matches a Traefik/Kong route (e.g. `gitlab.devops.example.com`). If this fails with timeout or TLS errors but step 4 works, the problem is **VPN path or `HOME_TRAFFIC_IP`**. If this returns **503** as well, the problem is **application health** (same as step 4).
+   Use a hostname that matches a Traefik route (e.g. `gitlab.devops.example.com`). If this fails with timeout or TLS errors but step 4 works, the problem is **VPN path or `HOME_TRAFFIC_IP`**. If this returns **503** as well, the problem is **application health** (same as step 4).
 
 6. **Optional: MTU** — Rarely, WireGuard MTU causes odd TLS or large-response failures. If small `curl` works but browsers fail, try lowering MTU on the edge **`[Interface]`** (e.g. `MTU = 1280`) and restart `wg-quick`.
 
@@ -604,7 +463,7 @@ sudo ~/vpn-edge/apply-nat.sh apply ~/vpn-edge/forward-ports.env
 
 **Browser test (do this on the affected client VPN):**
 
-1. Small response: open `https://gw.devops.<DOMAIN>/`. Kong's 404 page should display immediately.
+1. Small response: open `https://traefik.devops.<DOMAIN>/dashboard/` (after login if required). You should get a definite HTTP response quickly.
 2. Large response: open `https://gitlab.devops.<DOMAIN>/`. The full GitLab sign-in page should render to completion.
 
 If (1) works but (2) still stalls, the residual is the home-side `wg0` MTU; see the next section.

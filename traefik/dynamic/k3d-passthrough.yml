@@ -14,7 +14,7 @@
 #   2. Traffic is forwarded to k3d-dsoaas-serverlb:8081 (host port 8081 maps
 #      to the in-cluster Traefik :80 via klipper-LB).  The inner Traefik then
 #      routes by Ingress host.
-#   3. Priority 10 — higher than the Kong catch-all (priority 1) so these
+#   3. Priority 10 — higher than generic low-priority routers so these
 #      routes take precedence for app-zone hostnames.
 #   4. TLS is terminated at the outer Traefik; the in-cluster Traefik receives
 #      plain HTTP. From devops-network, the LB container is reachable at

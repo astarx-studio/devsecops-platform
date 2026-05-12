@@ -1,14 +1,9 @@
 # ==========================================================================
-# DevOps Platform — Phase 1-4: Ingress, Auth, Secret, Exposure, Dev Tools,
-#                               Integration & Management
+# DevOps Platform — Compose stack (ingress, auth, data, CI, API)
 # ==========================================================================
-# Containers: traefik, mongo, keycloak-db, keycloak, vault (OpenBao), cloudflared,
-#             wireguard, gitlab, gitlab-runner, api, minio, minio-init, oauth2-proxy
+# Containers: traefik, mongo, keycloak-db, keycloak, vault (OpenBao),
+#             cloudflared, wireguard, gitlab, gitlab-runner, api, minio, minio-init
 # Network:    devops-network (bridge)
-#
-# Phase 5: Kong removed — platform HTTPS routes use Traefik Docker labels on each
-# service (see keycloak, vault, gitlab, api, oauth2-proxy). App traffic uses k3d
-# Ingress (*.dev.apps.<DOMAIN>, etc.) via traefik/dynamic/k3d-passthrough.yml.
 # ==========================================================================
 
 networks:
@@ -87,7 +82,6 @@ services:
         aliases:
           - ${KEYCLOAK_DOMAIN}
           - ${VAULT_DOMAIN}
-          - ${GITLAB_DOMAIN}
           - ${GITLAB_DOMAIN}
           - ${API_DOMAIN}
           - ${OAUTH_DOMAIN}
@@ -216,14 +210,6 @@ services:
     depends_on:
       keycloak-db:
         condition: service_healthy
-    labels:
-      traefik.enable: "true"
-      traefik.http.routers.keycloak.rule: "Host(`${KEYCLOAK_DOMAIN}`)"
-      traefik.http.routers.keycloak.entrypoints: "websecure"
-      traefik.http.routers.keycloak.tls.certresolver: "letsencrypt"
-      traefik.http.routers.keycloak.priority: "30"
-      traefik.http.routers.keycloak.service: "keycloak-ui"
-      traefik.http.services.keycloak-ui.loadbalancer.server.port: "8080"
     networks:
       - devops-network
 
@@ -254,14 +240,6 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
-    labels:
-      traefik.enable: "true"
-      traefik.http.routers.vault.rule: "Host(`${VAULT_DOMAIN}`)"
-      traefik.http.routers.vault.entrypoints: "websecure"
-      traefik.http.routers.vault.tls.certresolver: "letsencrypt"
-      traefik.http.routers.vault.priority: "30"
-      traefik.http.routers.vault.service: "vault-ui"
-      traefik.http.services.vault-ui.loadbalancer.server.port: "8200"
     networks:
       - devops-network
 
@@ -471,20 +449,6 @@ services:
     depends_on:
       minio:
         condition: service_healthy
-    labels:
-      traefik.enable: "true"
-      traefik.http.routers.gitlab.rule: "Host(`${GITLAB_DOMAIN}`)"
-      traefik.http.routers.gitlab.entrypoints: "websecure"
-      traefik.http.routers.gitlab.tls.certresolver: "letsencrypt"
-      traefik.http.routers.gitlab.priority: "30"
-      traefik.http.routers.gitlab.service: "gitlab-http"
-      traefik.http.services.gitlab-http.loadbalancer.server.port: "80"
-      traefik.http.routers.gitlab-registry.rule: "Host(`${GITLAB_REGISTRY_DOMAIN}`)"
-      traefik.http.routers.gitlab-registry.entrypoints: "websecure"
-      traefik.http.routers.gitlab-registry.tls.certresolver: "letsencrypt"
-      traefik.http.routers.gitlab-registry.priority: "30"
-      traefik.http.routers.gitlab-registry.service: "gitlab-registry-svc"
-      traefik.http.services.gitlab-registry-svc.loadbalancer.server.port: "5000"
     networks:
       - devops-network
 
@@ -598,14 +562,6 @@ services:
         condition: service_healthy
       vault:
         condition: service_healthy
-    labels:
-      traefik.enable: "true"
-      traefik.http.routers.platform-api.rule: "Host(`${API_DOMAIN}`)"
-      traefik.http.routers.platform-api.entrypoints: "websecure"
-      traefik.http.routers.platform-api.tls.certresolver: "letsencrypt"
-      traefik.http.routers.platform-api.priority: "30"
-      traefik.http.routers.platform-api.service: "platform-api-svc"
-      traefik.http.services.platform-api-svc.loadbalancer.server.port: "3000"
     networks:
       - devops-network
 
@@ -636,13 +592,13 @@ services:
       - devops-network
 
   # ========================================================================
-  # OAUTH2-PROXY — OIDC authentication for Traefik ForwardAuth
+  # OAUTH2-PROXY — OIDC for Traefik ForwardAuth (dashboard, MinIO console, etc.)
   # ========================================================================
   # Runs in proxy mode with a static upstream (static://202) so that
   # Traefik's ForwardAuth can point at the root URL. Unauthenticated
   # requests get a 302 redirect to Keycloak; authenticated requests get
-  # a 202 response that ForwardAuth treats as "allow". Public hostname
-  # ${OAUTH_DOMAIN} serves /oauth2/callback for the IdP redirect flow.
+  # a 202 response that ForwardAuth treats as "allow". Routes via
+  # ${OAUTH_DOMAIN} for the /oauth2/callback flow.
   #
   # OAUTH2_PROXY_ALLOWED_GROUPS (plural — required spelling for oauth2-proxy)
   # restricts access after IdP login to members of the listed Keycloak groups
@@ -677,14 +633,6 @@ services:
     depends_on:
       keycloak:
         condition: service_healthy
-    labels:
-      traefik.enable: "true"
-      traefik.http.routers.oauth2-proxy.rule: "Host(`${OAUTH_DOMAIN}`)"
-      traefik.http.routers.oauth2-proxy.entrypoints: "websecure"
-      traefik.http.routers.oauth2-proxy.tls.certresolver: "letsencrypt"
-      traefik.http.routers.oauth2-proxy.priority: "30"
-      traefik.http.routers.oauth2-proxy.service: "oauth2-proxy-svc"
-      traefik.http.services.oauth2-proxy-svc.loadbalancer.server.port: "4180"
     networks:
       - devops-network
 

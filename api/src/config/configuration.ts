@@ -4,12 +4,6 @@
  * Required env vars are validated at startup — the app will fail to start
  * if any required variable is missing.
  *
- * v2 changes (Phase 4):
- *   - Added: `mongo` (MongoDB connection), `kube` (Kubernetes access)
- *   - Removed: `kong` (retired in v2 — Phase 5 final removal from compose)
- *   - Removed: `cloudflare` API integration (wildcard DNS replaces per-app DNS automation)
- *   - Added: `autoDevops` (config-driven Auto DevOps pipeline project path, Phase 4.5)
- *
  * @returns AppConfiguration object consumed via NestJS ConfigService
  */
 export interface AppConfiguration {
@@ -123,7 +117,9 @@ const configuration = (): AppConfiguration => {
     },
 
     autoDevops: {
-      pipelineProject: optional('AUTO_DEVOPS_PIPELINE_PROJECT') ?? 'system/devsecops-platform/configs/auto-devops-pipeline',
+      pipelineProject:
+        optional('AUTO_DEVOPS_PIPELINE_PROJECT') ??
+        'system/devsecops-platform/configs/auto-devops-pipeline',
       pipelineFile: optional('AUTO_DEVOPS_PIPELINE_FILE') ?? '.gitlab-ci.yml',
     },
 

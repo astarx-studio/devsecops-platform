@@ -121,7 +121,7 @@ export class Project {
   capabilities!: Capabilities;
 
   /**
-   * `true` for projects provisioned through the v1 Docker-compose / Kong path.
+   * `true` for projects provisioned through the v1 Docker Compose path.
    * Set to `false` after a successful `migrateProjectToAutoDevops` mutation.
    */
   @Prop({ default: false })

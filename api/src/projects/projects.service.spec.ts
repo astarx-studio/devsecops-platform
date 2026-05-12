@@ -1,12 +1,10 @@
 import { ConflictException, NotFoundException } from '@nestjs/common';
-import { getModelToken } from '@nestjs/mongoose';
 
 import { ProjectsService } from './projects.service';
 import { GitLabService } from '../gitlab/gitlab.service';
 import { K8sService } from '../k8s/k8s.service';
 import { VaultService } from '../vault/vault.service';
 import { SlugService } from './slug.service';
-import { AuditLog } from './schemas/audit-log.schema';
 import { Project } from './schemas/project.schema';
 import { Provisioning } from './graphql/enums';
 import { createMockConfigService } from '../../test/helpers/mock-providers';
@@ -171,15 +169,24 @@ describe('ProjectsService', () => {
       // F2: per-env sentinel paths are always written, even without envScopedVars
       expect(writeSecretsFn).toHaveBeenCalledWith(
         'projects/groupa/groupab/repoa/dev',
-        expect.objectContaining({ DEPLOY_ENV: 'dev', VAULT_PROJECT_PATH: 'projects/groupa/groupab/repoa' }),
+        expect.objectContaining({
+          DEPLOY_ENV: 'dev',
+          VAULT_PROJECT_PATH: 'projects/groupa/groupab/repoa',
+        }),
       );
       expect(writeSecretsFn).toHaveBeenCalledWith(
         'projects/groupa/groupab/repoa/stg',
-        expect.objectContaining({ DEPLOY_ENV: 'stg', VAULT_PROJECT_PATH: 'projects/groupa/groupab/repoa' }),
+        expect.objectContaining({
+          DEPLOY_ENV: 'stg',
+          VAULT_PROJECT_PATH: 'projects/groupa/groupab/repoa',
+        }),
       );
       expect(writeSecretsFn).toHaveBeenCalledWith(
         'projects/groupa/groupab/repoa/prod',
-        expect.objectContaining({ DEPLOY_ENV: 'prod', VAULT_PROJECT_PATH: 'projects/groupa/groupab/repoa' }),
+        expect.objectContaining({
+          DEPLOY_ENV: 'prod',
+          VAULT_PROJECT_PATH: 'projects/groupa/groupab/repoa',
+        }),
       );
       expect(ensureNamespaceFn).toHaveBeenCalledTimes(3); // dev, stg, prod
       expect(projectModel.create).toHaveBeenCalledWith(
@@ -255,7 +262,10 @@ describe('ProjectsService', () => {
       // dev — invalid JSON: sentinels written, caller value silently dropped
       expect(writeSecretsFn).toHaveBeenCalledWith(
         'projects/groupa/groupab/repoa/dev',
-        expect.objectContaining({ DEPLOY_ENV: 'dev', VAULT_PROJECT_PATH: 'projects/groupa/groupab/repoa' }),
+        expect.objectContaining({
+          DEPLOY_ENV: 'dev',
+          VAULT_PROJECT_PATH: 'projects/groupa/groupab/repoa',
+        }),
       );
       // stg — valid JSON merged on top of sentinels
       expect(writeSecretsFn).toHaveBeenCalledWith(
@@ -288,11 +298,7 @@ describe('ProjectsService', () => {
 
       await service.createProject(input);
 
-      expect(slugResolveFn).toHaveBeenCalledWith(
-        'repoa',
-        ['groupa', 'groupab'],
-        'my-custom-slug',
-      );
+      expect(slugResolveFn).toHaveBeenCalledWith('repoa', ['groupa', 'groupab'], 'my-custom-slug');
     });
 
     it('should persist hostnameOverrides as empty object at create time (T2)', async () => {

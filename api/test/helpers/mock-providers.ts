@@ -5,7 +5,7 @@ import type { AppConfiguration } from '../../src/config';
 
 /**
  * Default test configuration values used across all unit tests.
- * Mirrors the shape of AppConfiguration (v2: Mongo + K8s, no Kong/CF).
+ * Mirrors the shape of AppConfiguration (Mongo + K8s defaults for tests).
  */
 const TEST_CONFIG: Record<string, unknown> = {
   port: 3000,

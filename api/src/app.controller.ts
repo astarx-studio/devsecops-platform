@@ -1,6 +1,6 @@
 import { Controller, Get } from '@nestjs/common';
 import { InjectConnection } from '@nestjs/mongoose';
-import { Connection } from 'mongoose';
+import { Connection, ConnectionStates } from 'mongoose';
 
 import { VaultService } from './vault/vault.service';
 
@@ -21,14 +21,14 @@ export class AppController {
   /**
    * Lightweight liveness + dependency check.
    *
-   * Returns `{ status: 'ok' }` when both MongoDB and Vault are reachable;
-   * returns `{ status: 'degraded' }` with individual component flags when
+   * Returns `{ status: 'ok', mongo: 'ok', vault: 'ok' }` when both MongoDB and Vault are reachable;
+   * returns `{ status: 'degraded', ... }` with individual component flags when
    * either dependency is unhealthy. Vault ping has an implicit 1-second
    * timeout via the underlying Axios request timeout.
    */
   @Get('health')
   async getHealth(): Promise<HealthResponse> {
-    const mongoOk = this.mongoConnection.readyState === 1;
+    const mongoOk = this.mongoConnection.readyState === ConnectionStates.connected;
     const vaultOk = await this.vaultService.ping().catch(() => false);
 
     return {

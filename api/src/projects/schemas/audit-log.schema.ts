@@ -27,7 +27,17 @@ export type AuditLogDocument = HydratedDocument<AuditLog>;
 })
 export class AuditLog {
   /** Type of lifecycle event that occurred. */
-  @Prop({ required: true, enum: Object.values(['project.created', 'project.deleted', 'project.migrated', 'project.hostname_override', 'project.pinned_v1', 'project.reconciled_legacy']) })
+  @Prop({
+    required: true,
+    enum: Object.values([
+      'project.created',
+      'project.deleted',
+      'project.migrated',
+      'project.hostname_override',
+      'project.pinned_v1',
+      'project.reconciled_legacy',
+    ]),
+  })
   eventType!: AuditEventType;
 
   /** MongoDB ObjectId of the affected project document (as string). */

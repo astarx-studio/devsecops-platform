@@ -281,7 +281,7 @@
     {
       "clientId": "oauth2-proxy",
       "name": "OAuth2 Proxy",
-      "description": "OIDC client for oauth2-proxy (Traefik ForwardAuth for operator surfaces)",
+      "description": "OIDC client for oauth2-proxy (Traefik ForwardAuth)",
       "enabled": true,
       "publicClient": false,
       "standardFlowEnabled": true,
@@ -292,11 +292,10 @@
       "redirectUris": ["https://${OAUTH_DOMAIN}/oauth2/callback"],
       "webOrigins": [
         "https://${TRAEFIK_DOMAIN}",
-        "https://${API_DOMAIN}",
         "https://${OAUTH_DOMAIN}"
       ],
       "attributes": {
-        "post.logout.redirect.uris": "https://${TRAEFIK_DOMAIN},https://${API_DOMAIN}"
+        "post.logout.redirect.uris": "https://${TRAEFIK_DOMAIN}"
       },
       "defaultClientScopes": ["openid", "profile", "email", "roles", "groups"]
     }

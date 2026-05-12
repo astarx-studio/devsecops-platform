@@ -466,17 +466,12 @@ export class GitLabService {
     let exists = false;
     try {
       const { data } = await firstValueFrom(
-        this.httpService.get<Array<{ key: string; environment_scope: string }>>(
-          baseUrl,
-          {
-            headers: this.headers,
-            params: { filter: { environment_scope: environmentScope } },
-          },
-        ),
+        this.httpService.get<Array<{ key: string; environment_scope: string }>>(baseUrl, {
+          headers: this.headers,
+          params: { filter: { environment_scope: environmentScope } },
+        }),
       );
-      exists = data.some(
-        (v) => v.key === key && v.environment_scope === environmentScope,
-      );
+      exists = data.some((v) => v.key === key && v.environment_scope === environmentScope);
     } catch (error) {
       const status = (error as { response?: { status?: number } }).response?.status;
       if (status !== 404) {
@@ -494,22 +489,20 @@ export class GitLabService {
     };
 
     if (exists) {
-      this.logger.debug(`Updating CI variable "${key}" [${environmentScope}] on project ${projectId}`);
+      this.logger.debug(
+        `Updating CI variable "${key}" [${environmentScope}] on project ${projectId}`,
+      );
       await firstValueFrom(
-        this.httpService.put(
-          `${baseUrl}/${key}`,
-          payload,
-          {
-            headers: this.headers,
-            params: { filter: { environment_scope: environmentScope } },
-          },
-        ),
+        this.httpService.put(`${baseUrl}/${key}`, payload, {
+          headers: this.headers,
+          params: { filter: { environment_scope: environmentScope } },
+        }),
       );
     } else {
-      this.logger.log(`Creating CI variable "${key}" [${environmentScope}] on project ${projectId}`);
-      await firstValueFrom(
-        this.httpService.post(baseUrl, payload, { headers: this.headers }),
+      this.logger.log(
+        `Creating CI variable "${key}" [${environmentScope}] on project ${projectId}`,
       );
+      await firstValueFrom(this.httpService.post(baseUrl, payload, { headers: this.headers }));
     }
   }
 
@@ -529,9 +522,7 @@ export class GitLabService {
       masked?: boolean;
     }>,
   ): Promise<void> {
-    this.logger.log(
-      `Setting ${variables.length} CI variable(s) on project ${projectId}`,
-    );
+    this.logger.log(`Setting ${variables.length} CI variable(s) on project ${projectId}`);
     for (const variable of variables) {
       await this.setProjectCiVariable(
         projectId,
@@ -541,9 +532,7 @@ export class GitLabService {
         variable.masked ?? true,
       );
     }
-    this.logger.log(
-      `All ${variables.length} CI variable(s) set on project ${projectId}`,
-    );
+    this.logger.log(`All ${variables.length} CI variable(s) set on project ${projectId}`);
   }
 
   private async findGroup(name: string, parentId?: number): Promise<GitLabGroup | undefined> {

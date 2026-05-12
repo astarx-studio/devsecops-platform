@@ -12,15 +12,13 @@ All services share the `devops-network` Docker bridge network. The network name 
 
 | Boot phase | Services |
 |---|---|
-| Phase 1 — immediate | `traefik`, `kong-db`, `keycloak-db`, `vault` |
-| Phase 2 — after kong-db healthy | `kong-migration` |
-| Phase 3 — after kong-migration complete | `kong` |
-| Phase 4 — after kong healthy | `kong-deck-sync` |
-| Phase 5 — after keycloak-db healthy | `keycloak` |
-| Phase 5 — after keycloak healthy | `oauth2-proxy` |
-| Phase 5 — after vault + keycloak healthy | `vault-oidc-init` |
-| Phase 5 — after vault + kong healthy | `api` |
-| Phase 6 — after gitlab healthy | `gitlab-runner` |
+| Phase 1 — immediate | `traefik`, `mongo`, `keycloak-db`, `vault` |
+| Phase 2 — after keycloak-db healthy | `keycloak` |
+| Phase 3 — after keycloak healthy | `oauth2-proxy` |
+| Phase 4 — after vault + keycloak healthy | `vault-oidc-init` |
+| Phase 5 — after mongo + vault healthy | `api` |
+| Phase 6 — long-running stack | `gitlab`, `minio`, `minio-init` (see `depends_on` in `docker-compose.yml`) |
+| Phase 7 — after gitlab healthy | `gitlab-runner` |
 | Profile-gated (manual) | `cloudflared` (`--profile cftunnel`), `wireguard` (`--profile vpnedge`) |
 
 ---
@@ -60,88 +58,18 @@ All services share the `devops-network` Docker bridge network. The network name 
 
 ---
 
-## kong-db
+## mongo
 
 | Field | Value |
 |---|---|
-| Image | `postgres:17-alpine` |
-| Host ports | `15432→5432` |
-| Volumes | `./.vols/kong-db` → `/var/lib/postgresql/data` |
+| Image | `mongo:7` |
+| Host ports | — |
+| Volumes | `./.vols/mongo` → `/data/db` |
 | Depends on | — |
 
-**Key environment variables:** `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB` (mapped from `${KONG_PG_USER}`, `${KONG_PG_PASSWORD}`, `${KONG_PG_DATABASE}`).
+**Health check:** `mongosh` admin ping. Interval 15s, timeout 5s, 3 retries, 20s start period.
 
-**Health check:** `pg_isready -U ${KONG_PG_USER} -d ${KONG_PG_DATABASE}`. Interval 10s, timeout 5s, 5 retries.
-
----
-
-## kong-migration
-
-| Field | Value |
-|---|---|
-| Image | `kong:3.9` |
-| Host ports | — |
-| Volumes | — |
-| Depends on | `kong-db` (healthy) |
-
-Runs `kong migrations bootstrap` once. Exits with code 0 on success or if migrations are already applied. `kong` service depends on this completing successfully.
-
----
-
-## kong
-
-| Field | Value |
-|---|---|
-| Image | `kong:3.9` |
-| Host ports | `18000→8000` (proxy HTTP), `18443→8443` (proxy HTTPS), `18001→8001` (admin HTTP) |
-| Volumes | — |
-| Depends on | `kong-migration` (completed successfully) |
-
-**Key environment variables:**
-
-| Variable | Purpose |
-|---|---|
-| `KONG_DATABASE` | `postgres` |
-| `KONG_PG_HOST` | `kong-db` |
-| `KONG_PG_USER` / `KONG_PG_PASSWORD` / `KONG_PG_DATABASE` | Database credentials |
-| `KONG_PROXY_ACCESS_LOG` / `KONG_ADMIN_ACCESS_LOG` | Log targets (`/dev/stdout`) |
-| `KONG_PROXY_ERROR_LOG` / `KONG_ADMIN_ERROR_LOG` | Error log targets (`/dev/stderr`) |
-| `KONG_ADMIN_LISTEN` | `0.0.0.0:8001` |
-
-**Health check:** `kong health` CLI. Interval 15s, timeout 5s, 5 retries, 30s start period.
-
-**Traefik Docker labels (defined in `docker-compose.yml`):**
-- Routes `${KONG_ADMIN_DOMAIN}` → port `8001`.
-- Protected by the `oidc-auth@file` ForwardAuth middleware.
-
-**Operational notes:**
-- The admin API (port 8001) is accessible on the host at `localhost:18001` without authentication for debugging. Do not expose port 18001 to the public network.
-- Kong is deliberately configured without declarative mode at startup. Declarative config is applied by `kong-deck-sync` after Kong is healthy.
-
----
-
-## kong-deck-sync
-
-| Field | Value |
-|---|---|
-| Image | Custom inline build: alpine + deck binary copied from `kong/deck:latest` |
-| Host ports | — |
-| Volumes | `./kong/kong.template.yml` → `/kong/kong.template.yml` (read-only) |
-| Depends on | `kong` (healthy) |
-
-One-shot service. The `kong/deck` image is distroless (no shell), so the service uses an inline `dockerfile_inline` multi-stage build that copies the `deck` binary from the official image into alpine. At startup:
-
-1. Uses `sed` to substitute all `${VAR}` placeholders in `/kong/kong.template.yml` with values from the container environment, writing to `/tmp/kong.yml`.
-2. Runs `deck gateway sync /tmp/kong.yml --kong-addr http://kong:8001`.
-
-Any service declared in `kong.template.yml` but already present in Kong is updated (idempotent). Services not in the template but present in Kong are left untouched (no `--select-tag` filter).
-
-**Key environment variables:** `KEYCLOAK_DOMAIN`, `VAULT_DOMAIN`, `KONG_DOMAIN`, `GITLAB_DOMAIN`, `GITLAB_REGISTRY_DOMAIN`, `API_DOMAIN`, `OAUTH_DOMAIN`.
-
-**Operational notes:**
-- If you add a new service to `kong.template.yml`, re-run this container: `docker compose run --rm kong-deck-sync`.
-- Dynamically provisioned project routes (via Management API) are applied directly to Kong via its Admin API and are not tracked in `kong.template.yml`.
-- The first run requires building the image: `docker compose build kong-deck-sync`.
+**Operational notes:** Primary data store for the Management API (projects, audit log, catalog metadata).
 
 ---
 
@@ -186,7 +114,7 @@ Any service declared in `kong.template.yml` but already present in Kong is updat
 | `KC_HTTP_ENABLED` | `true` (TLS terminated at Traefik) |
 | `KC_PROXY_HEADERS` | `xforwarded` (trusts `X-Forwarded-*` headers from Traefik) |
 | `KC_BOOTSTRAP_ADMIN_USERNAME` / `KC_BOOTSTRAP_ADMIN_PASSWORD` | Initial admin credentials |
-| `GITLAB_DOMAIN`, `VAULT_DOMAIN`, `API_DOMAIN`, `OAUTH_DOMAIN`, `TRAEFIK_DOMAIN`, `KONG_DOMAIN` | Substituted into `realm-export.json` template |
+| `GITLAB_DOMAIN`, `VAULT_DOMAIN`, `API_DOMAIN`, `OAUTH_DOMAIN`, `TRAEFIK_DOMAIN` | Substituted into `realm-export.json` template |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM_NAME`, `SMTP_FROM_EMAIL` | Substituted into `realm-export.json` template for SMTP config |
 
 **Command:** `start-dev --import-realm` (dev mode, suitable for single-server deployment)
@@ -197,7 +125,7 @@ Any service declared in `kong.template.yml` but already present in Kong is updat
 - `realm-export.json` on disk is a **template** with `${VAR}` placeholders. The entrypoint runs `sed` to produce the actual import file inside the container.
 - Realm import runs once on first start. If you modify `realm-export.json` after the realm already exists, it will not be re-imported automatically. You must either delete `.vols/keycloak-db` (destructive) or use the admin console / CLI to apply changes manually.
 - The bootstrap admin account is created automatically. After initial setup, create a permanent admin user via the admin console and optionally disable the bootstrap account.
-- Keycloak is not exposed directly via a host port. All access goes through Traefik → Kong → keycloak-service route → `http://keycloak:8080`.
+- Keycloak is not exposed directly via a host port. Browser traffic uses the public `Host` header on **Traefik** (`https://${KEYCLOAK_DOMAIN}`), which reverse-proxies to `http://keycloak:8080`.
 
 ---
 
@@ -360,7 +288,7 @@ The entrypoint script checks if `GITLAB_RUNNER_TOKEN` equals `FILL_AFTER_STARTUP
 | Image | Built from `./api/Dockerfile` |
 | Host ports | `13000→3000` |
 | Volumes | — |
-| Depends on | `kong` (healthy), `vault` (healthy) |
+| Depends on | `mongo` (healthy), `vault` (healthy) |
 
 **Key environment variables:**
 
@@ -372,16 +300,15 @@ The entrypoint script checks if `GITLAB_RUNNER_TOKEN` equals `FILL_AFTER_STARTUP
 | `GITLAB_TEMPLATE_GROUP_ID` | Numeric GitLab group ID for templates |
 | `GITLAB_CONFIG_GROUP_ID` | Numeric GitLab group ID for shared CI configs |
 | `GITLAB_DOMAIN` | External GitLab hostname |
-| `KONG_ADMIN_URL` | Internal Kong Admin URL (`http://kong:8001`) |
+| `MONGO_URL` | MongoDB connection string |
+| `MONGO_DB_NAME` | MongoDB database name |
+| `KUBECONFIG_DIR` | Host path mounted for per-env kubeconfigs |
 | `VAULT_URL` | Internal Vault URL (`http://vault:8200`) |
 | `VAULT_DEV_ROOT_TOKEN_ID` | Vault token |
 | `OIDC_ISSUER_URL` | External Keycloak issuer URL |
 | `OIDC_JWKS_URL` | Internal Keycloak JWKS endpoint |
 | `OIDC_AUDIENCE` | Expected `aud` claim in JWT (e.g. `management-api`) |
 | `API_KEY` | Optional static API key for `X-API-Key` auth |
-| `CLOUDFLARE_API_TOKEN` | Optional; Cloudflare integration disabled if absent |
-| `CLOUDFLARE_ZONE_ID` | Optional |
-| `CLOUDFLARE_TUNNEL_ID` | Optional |
 | `NODE_ENV` | `production` in production |
 | `LOG_LEVEL` | `info` by default |
 
@@ -447,7 +374,7 @@ Users authenticating via OIDC who belong to the Keycloak `admins` group automati
 **Health check:** None defined.
 
 **Operational notes:**
-- `oauth2-proxy` is used as a ForwardAuth endpoint via Traefik's `oidc-auth@file` middleware. It is also routed through Kong at `${OAUTH_DOMAIN}` to handle the OAuth2 callback.
-- Tiered OIDC by extending oauth2-proxy / Traefik / Kong (extra instances and callbacks): [Adding tiered OIDC with oauth2-proxy](../02_admin/08_oauth2_proxy_tiers_and_forwardauth.md) in the admin guide.
+- `oauth2-proxy` is used as a ForwardAuth endpoint via Traefik's `oidc-auth@file` middleware (`traefik/dynamic/forward-auth.yml`). Browser callbacks use `https://${OAUTH_DOMAIN}` (routed like other devops hostnames on Traefik).
+- Tiered OIDC by extending oauth2-proxy / Traefik / Keycloak (extra instances and callbacks): [Adding tiered OIDC with oauth2-proxy](../02_admin/08_oauth2_proxy_tiers_and_forwardauth.md) in the admin guide.
 - The `OAUTH2_PROXY_COOKIE_SECRET` must be exactly 32 bytes. Generate with: `openssl rand -base64 32 | head -c 32`.
 - `OAUTH2_PROXY_INSECURE_OIDC_SKIP_ISSUER_VERIFICATION` is set to `true` because the internal issuer URL (`http://keycloak:8080/...`) does not match the public issuer URL used in browser-facing discovery in every deployment path.

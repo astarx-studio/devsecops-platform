@@ -15,8 +15,8 @@ import { ProjectCapabilities } from './capabilities.dto';
  * Request body for creating a new project.
  *
  * Orchestrates GitLab fork, config injection, capability-based provisioning
- * (domain/Kong for deployable, package config for publishable), Vault secret
- * seeding, and optional Cloudflare DNS creation.
+ * (hostname for deployable, package config for publishable), Vault secret
+ * seeding, and optional DNS automation when configured.
  *
  * @property clientName - Client identifier (lowercase, hyphens). Used in group path, Vault path, subdomain.
  * @property projectName - Project identifier (lowercase, hyphens). Used in GitLab project, Vault path, subdomain.

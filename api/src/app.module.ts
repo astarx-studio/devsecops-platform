@@ -39,7 +39,7 @@ import { VaultModule } from './vault/vault.module';
       driver: ApolloDriver,
       imports: [ConfigModule],
       inject: [ConfigService],
-      useFactory: (configService: ConfigService<AppConfiguration>) => {
+      useFactory: (_configService: ConfigService<AppConfiguration>) => {
         const isProd = process.env.NODE_ENV === 'production';
         return {
           // Generate schema in-memory (code-first); use autoSchemaFile: 'schema.gql' for file output

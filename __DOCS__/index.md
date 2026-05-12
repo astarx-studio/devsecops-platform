@@ -27,13 +27,13 @@ You're a platform engineer or contributor. You need to understand the internals:
 The stack is made up of several open-source tools, each playing a specific role:
 
 - **Traefik** handles all incoming traffic, issues HTTPS certificates automatically, and routes requests to the right service. You never deal with SSL certificates manually.
-- **Kong** sits in front of services as an API gateway — it can apply rate limits, authentication rules, and routing logic in one place.
+- **Traefik** terminates TLS and routes requests to compose services and k3d app zones.
 - **Keycloak** is the login system. It gives users a single set of credentials that works across GitLab, OpenBao, and the Management API. No separate passwords per tool.
 - **OpenBao** is the secrets store. Database passwords, API keys, and other sensitive values live here — not in code or config files.
 - **GitLab CE** is where developers store their code, run CI/CD pipelines, and push Docker images. It also includes a package registry.
 - **GitLab Runner** picks up CI/CD jobs from GitLab and executes them in isolated Docker containers.
 - **Cloudflare Tunnel** lets you access the platform over the internet without opening firewall ports, by creating an encrypted outbound connection to Cloudflare's network.
-- **Management API** is a custom service that automates project creation — when asked, it creates a GitLab repository from a template, registers it with Kong, seeds a secrets path in OpenBao, and optionally sets up a DNS record.
+- **Management API** is a custom service that automates project creation — when asked, it creates a GitLab repository from a template (or Auto DevOps layout), seeds a secrets path in OpenBao, records the project in MongoDB, and wires Kubernetes namespaces for deployments.
 
 ---
 

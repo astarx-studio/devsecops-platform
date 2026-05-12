@@ -133,7 +133,7 @@ Work through this list to confirm the stack is functional before testing public 
 - [ ] `docker exec wireguard iptables -t nat -L POSTROUTING -nv` shows the MASQUERADE rule with a non-zero packet count
 - [ ] From the edge VM: `sudo wg show` shows the home peer with a recent handshake and growing transfer
 - [ ] From the edge VM: `sudo nft list table ip vpnedge` contains the MSS clamp rules (`tcp option maxseg size set rt mtu`) ordered before the ACCEPT rules
-- [ ] Opening `https://gw.devops.yourdomain.com` in a browser shows a response (Kong 404 is expected without a matching host)
+- [ ] Opening `https://traefik.devops.yourdomain.com` in a browser shows the Traefik dashboard (after oauth2-proxy + Keycloak login).
 - [ ] Opening `https://gitlab.devops.yourdomain.com` from outside your home network loads the full GitLab sign-in page
 - [ ] *(Optional, stacked-VPN clients)* Repeat the above two browser tests with a consumer VPN active — both pages should load completely without stalling
 

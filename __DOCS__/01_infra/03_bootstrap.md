@@ -51,7 +51,7 @@ Docker will pull any missing images (this may take a few minutes on first run), 
 
 Not everything starts at the same speed. Here's roughly what happens:
 
-- **Traefik and Kong** come up in seconds. Traefik will start requesting HTTPS certificates from Let's Encrypt via DNS-01 challenge. The certificate issuance process waits 60 seconds for DNS propagation before validation, so expect about 90–120 seconds for the first certificate to be ready.
+- **Traefik and MongoDB** come up in seconds. Traefik will start requesting HTTPS certificates from Let's Encrypt via DNS-01 challenge. The certificate issuance process waits 60 seconds for DNS propagation before validation, so expect about 90–120 seconds for the first certificate to be ready.
 - **Keycloak** takes about 30–90 seconds to fully initialize.
 - **GitLab** is the slowest. On first boot it can take **3–10 minutes** to finish initializing. This is normal — it's running database migrations and setting up internal configurations. If you open GitLab in a browser too soon, you may get a 502 error. Just wait and refresh.
 - **The Management API** waits for GitLab and Keycloak to be healthy before it considers itself ready.
@@ -98,7 +98,7 @@ Once all services are healthy, try opening these in a browser (replace `yourdoma
 | GitLab | `https://gitlab.devops.yourdomain.com` | Login page |
 | Keycloak | `https://auth.devops.yourdomain.com` | Keycloak welcome page |
 | OpenBao | `https://vault.devops.yourdomain.com` | OpenBao UI login |
-| Kong proxy | `https://gw.devops.yourdomain.com` | Kong admin API response (routes are seeded by `kong-deck-sync` at startup) |
+| Traefik dashboard | `https://traefik.devops.yourdomain.com` | Traefik UI behind oauth2-proxy (after login) |
 | Management API | `https://api.devops.yourdomain.com/health` | `{"status":"ok"}` in plain text |
 
 If you see HTTPS padlock icons in your browser and the pages load, certificates are working. If you see a certificate warning, Traefik may still be in the process of issuing the certificate — wait a minute and try again.

@@ -33,14 +33,14 @@ For local development against a running Docker Compose stack, use:
 pnpm run start:dev
 ```
 
-This starts the NestJS app in watch mode (`ts-node` + `@nestjs/cli`). It connects to the services in Docker using the URLs in your `.env` (e.g. `KONG_ADMIN_URL=http://localhost:18001`, `VAULT_URL=http://localhost:18200`).
+This starts the NestJS app in watch mode (`ts-node` + `@nestjs/cli`). It connects to the services in Docker using the URLs in your `.env` (for example `MONGO_URL=mongodb://localhost:27017`, `VAULT_URL=http://localhost:18200`).
 
 You will need to adjust your `.env` to use `localhost` + host-exposed ports for the `api` process's environment when running outside Docker:
 
 | Variable | Docker value | Local dev value |
 |---|---|---|
 | `GITLAB_URL` | `http://gitlab` | `http://localhost` (or the public URL) |
-| `KONG_ADMIN_URL` | `http://kong:8001` | `http://localhost:18001` |
+| `MONGO_URL` | `mongodb://mongo:27017` | `mongodb://localhost:27017` (if you publish Mongo's port) |
 | `VAULT_URL` | `http://vault:8200` | `http://localhost:18200` |
 | `OIDC_JWKS_URL` | `http://keycloak:8080/realms/devops/...` | Use the public URL (`https://auth.devops.yourdomain.com/realms/devops/protocol/openid-connect/certs`) — Keycloak has no host-exposed port |
 
@@ -165,23 +165,7 @@ traefik:
 
 Add `MY_SERVICE_DOMAIN` to `sample.env` with a comment explaining the value.
 
-### 3. Add a Kong route (if routed via Kong)
-
-Add an entry to `kong/kong.template.yml`:
-
-```yaml
-services:
-  - name: myservice-service
-    url: http://myservice:8080
-    routes:
-      - name: myservice-route
-        hosts: ["${MY_SERVICE_DOMAIN}"]
-        protocols: ["http", "https"]
-        strip_path: false
-        preserve_host: true
-```
-
-### 4. Add a Traefik route (if bypassing Kong)
+### 3. Add a Traefik route (public HTTP)
 
 Add Docker labels to the service in `docker-compose.yml`:
 
@@ -195,15 +179,17 @@ labels:
   - "traefik.http.services.myservice-svc.loadbalancer.server.port=8080"
 ```
 
-### 5. Register a Keycloak client (if SSO-integrated)
+For shared middleware only (no new upstream), extend `traefik/dynamic/forward-auth.yml` or add another file next to it.
+
+### 4. Register a Keycloak client (if SSO-integrated)
 
 Add the client to `keycloak/realm-export.json`. The realm is only imported once on Keycloak's first boot. After that, apply changes via the Keycloak admin console or use the Keycloak Admin REST API in a one-shot init container.
 
-### 6. Update `sample.env`
+### 5. Update `sample.env`
 
 Add all new environment variables to `sample.env` with clear comments. Follow the existing sections. Never put real values in `sample.env` — use `yourdomain.com` as the placeholder domain.
 
-### 7. Update documentation
+### 6. Update documentation
 
 - Add the service to `99_maintainers/02_services.md`.
 - Update the startup order diagram in `99_maintainers/01_architecture.md` if it has `depends_on` implications.
@@ -311,15 +297,9 @@ docker compose up -d keycloak-db keycloak
 # Option B: Apply changes via Keycloak admin console instead
 ```
 
-### Kong routes missing after database wipe
+### MongoDB empty after volume wipe
 
-Re-run the platform route seeding first:
-
-```sh
-docker compose run --rm kong-deck-sync
-```
-
-Then re-run provisioning for affected projects via `POST /projects`, or manually recreate routes via the Kong Admin API.
+If `.vols/mongo` is deleted, the Management API registry is gone. Restore from backup or re-import projects via your normal provisioning flow (`createProject` GraphQL mutation).
 
 ### Management API fails to connect to GitLab
 

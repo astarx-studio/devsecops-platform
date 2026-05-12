@@ -185,7 +185,7 @@ graph LR
     lint_stage --> build_stage --> deploy_stage
 ```
 
-The `deploy` job pulls the image built in `build`, then runs `docker compose up -d` on the host Docker daemon. Because the runner's `network_mode` is set to `devops-network`, the deployed container is automatically on the platform network and reachable by Kong.
+The `deploy` job pulls the image built in `build`, then runs `docker compose up -d` on the host Docker daemon. Because the runner's `network_mode` is set to `devops-network`, the deployed container is automatically on the platform network and reachable from Traefik, GitLab, Vault, and peer services on `devops-network`.
 
 ### How the Management API injects config includes
 

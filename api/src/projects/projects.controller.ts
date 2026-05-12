@@ -9,13 +9,7 @@ import {
   Delete,
   UseGuards,
 } from '@nestjs/common';
-import {
-  ApiBearerAuth,
-  ApiOperation,
-  ApiResponse,
-  ApiSecurity,
-  ApiTags,
-} from '@nestjs/swagger';
+import { ApiBearerAuth, ApiOperation, ApiResponse, ApiSecurity, ApiTags } from '@nestjs/swagger';
 
 import { CombinedAuthGuard } from '../common/guards';
 import { ProjectsService } from './projects.service';
@@ -48,7 +42,7 @@ export class ProjectsController {
   @ApiResponse({ status: 200, type: [ProjectResponseDto] })
   async findAll(): Promise<ProjectResponseDto[]> {
     const docs = await this.projectsService.listProjects();
-    return docs.map(ProjectResponseDto.fromDocument);
+    return docs.map((doc) => ProjectResponseDto.fromDocument(doc));
   }
 
   @Get(':id')

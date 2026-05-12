@@ -93,7 +93,8 @@ export class CreateProjectInput {
   groupPath!: string[];
 
   @Field(() => String, {
-    description: 'Leaf project identifier (lowercase, hyphens allowed). Becomes the GitLab project slug.',
+    description:
+      'Leaf project identifier (lowercase, hyphens allowed). Becomes the GitLab project slug.',
   })
   @IsString()
   @IsNotEmpty()

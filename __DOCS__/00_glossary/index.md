@@ -8,7 +8,9 @@ A quick reference for terms used throughout this documentation. You don't need t
 
 **API** — Application Programming Interface. A way for software to talk to other software over the network by sending structured requests and receiving structured responses.
 
-**API Gateway** — A service that sits in front of other services and controls how requests flow through. In this platform, Kong plays this role.
+**API Gateway** — A service that sits in front of other services and controls how requests flow through. In this platform, **Traefik** (and in-cluster Traefik inside k3d) performs HTTP routing and TLS termination.
+
+**ForwardAuth** — A mechanism in Traefik that routes every incoming request through an authentication check before allowing it to reach the destination. Used to protect operator UIs such as the Traefik dashboard when they do not have their own login screens.
 
 **CORS** — Cross-Origin Resource Sharing. A browser security rule that controls which web pages can make requests to your API. Relevant if you're building a web frontend that calls the Management API.
 
@@ -19,8 +21,6 @@ A quick reference for terms used throughout this documentation. You don't need t
 **Docker** — A platform for running applications in isolated containers. Each service in this platform (GitLab, Keycloak, etc.) runs as a Docker container.
 
 **Docker Compose** — A tool that lets you define and run multiple Docker containers together using a single configuration file (`docker-compose.yml`). This is how the entire platform starts with one command.
-
-**ForwardAuth** — A mechanism in Traefik that routes every incoming request through an authentication check before allowing it to reach the destination. Used to protect services like the Traefik dashboard and Kong admin that don't have their own login screens.
 
 **GitLab CE** — Community Edition of GitLab. The free, self-hosted version of GitLab. Includes source code hosting, CI/CD pipelines, and a container registry.
 
@@ -34,11 +34,11 @@ A quick reference for terms used throughout this documentation. You don't need t
 
 **Keycloak** — The login and identity management system used by this platform. It's where users are created, passwords are managed, and Single Sign-On (SSO) is configured.
 
-**Kong** — An API gateway. Sits between the internet and your internal services, applying rules like rate limiting, authentication, and routing.
+**k3d** — Lightweight Kubernetes used for team application namespaces, Ingress, and Helm releases created by Auto DevOps.
 
 **KV v2** — "Key/Value version 2" — the storage format used in Vault for storing secrets. Version 2 adds support for versioning, so you can see the history of a secret value.
 
-**Management API** — The custom NestJS service in this platform that automates project provisioning: creating GitLab repos, registering routes in Kong, seeding secrets in Vault, and optionally creating DNS records.
+**Management API** — The custom NestJS service in this platform that automates project provisioning: creating GitLab repos, seeding secrets in Vault, persisting registry data in MongoDB, and preparing Kubernetes resources for deployments.
 
 **NestJS** — A Node.js framework used to build the Management API. You don't need to know the details unless you're modifying the API itself.
 

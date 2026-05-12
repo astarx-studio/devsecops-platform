@@ -23,7 +23,9 @@ export class AppHostsType {
  */
 @ObjectType({ description: 'Capability flags set at project provisioning time.' })
 export class CapabilitiesType {
-  @Field(() => Boolean, { description: 'Project runs as an HTTP app (has Ingress + Helm release).' })
+  @Field(() => Boolean, {
+    description: 'Project runs as an HTTP app (has Ingress + Helm release).',
+  })
   deployable!: boolean;
 
   @Field(() => Boolean, { description: 'Project produces a distributable package.' })
@@ -75,7 +77,7 @@ export class ProjectType {
   templateSlug?: string;
 
   @Field(() => String, {
-    description: 'Vault KV v2 base path for this project\'s secrets.',
+    description: "Vault KV v2 base path for this project's secrets.",
   })
   vaultBasePath!: string;
 
@@ -91,7 +93,7 @@ export class ProjectType {
   capabilities!: CapabilitiesType;
 
   @Field(() => Boolean, {
-    description: 'True for projects still on the v1 Docker-compose / Kong stack.',
+    description: 'True for projects still on the v1 Docker Compose stack.',
   })
   legacyV1!: boolean;
 

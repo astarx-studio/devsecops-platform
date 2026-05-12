@@ -100,9 +100,7 @@ export class ProjectsResolver {
   @Query(() => Boolean, {
     description: 'Returns true if the given slug is not yet taken by any project.',
   })
-  async slugAvailable(
-    @Args('slug') slug: string,
-  ): Promise<boolean> {
+  async slugAvailable(@Args('slug') slug: string): Promise<boolean> {
     return this.slugService.isAvailable(slug);
   }
 
@@ -142,9 +140,7 @@ export class ProjectsResolver {
       'Provisions a new project end-to-end: GitLab group hierarchy, project creation, ' +
       'Vault secret seeding, k3d namespace check, CI variable setup, and MongoDB persistence.',
   })
-  async createProject(
-    @Args('input') input: CreateProjectInput,
-  ): Promise<ProjectType> {
+  async createProject(@Args('input') input: CreateProjectInput): Promise<ProjectType> {
     const doc = await this.projectsService.createProject(input);
     return mapProject(doc);
   }
@@ -153,9 +149,7 @@ export class ProjectsResolver {
     description:
       'Deletes a project: removes the GitLab project, Vault secrets, and MongoDB record.',
   })
-  async deleteProject(
-    @Args('id', { type: () => ID }) id: string,
-  ): Promise<boolean> {
+  async deleteProject(@Args('id', { type: () => ID }) id: string): Promise<boolean> {
     return this.projectsService.deleteProject(id);
   }
 
@@ -163,7 +157,7 @@ export class ProjectsResolver {
     description:
       'Migrates a legacy v1 project to the Auto DevOps pipeline. ' +
       'Writes .gitlab-ci.yml, sets CI vars, and triggers the pipeline. ' +
-      'Full v1 cleanup (Kong removal) runs in Phase 5 after successful prod deploy.',
+      'Compose-side cleanup for fully migrated projects is handled separately after prod is stable.',
   })
   async migrateProjectToAutoDevops(
     @Args('id', { type: () => ID }) id: string,
@@ -173,7 +167,8 @@ export class ProjectsResolver {
   }
 
   @Mutation(() => ProjectType, {
-    description: 'Sets or clears the pinnedV1 flag, exempting a project from Phase 5 migration.',
+    description:
+      'Sets or clears the pinnedV1 flag so a legacy project can stay on v1 compose until unpinned.',
   })
   async setPinnedV1(
     @Args('id', { type: () => ID }) id: string,

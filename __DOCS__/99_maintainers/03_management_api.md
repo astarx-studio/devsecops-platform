@@ -2,7 +2,7 @@
 
 ← [Back to Maintainer Guide](index.md)
 
-The Management API is a NestJS 11 application located at `api/`. It is the orchestration layer of the platform — the only service that directly talks to GitLab, Kong, Vault, and Cloudflare on behalf of operators and CI/CD automation.
+The Management API is a NestJS 11 application located at `api/`. It is the orchestration layer of the platform — the service that talks to GitLab, MongoDB, OpenBao (Vault), and Kubernetes (k3d) on behalf of operators and CI/CD automation.
 
 ---
 
@@ -15,9 +15,8 @@ graph TD
     PassportModule["PassportModule\ndefaultStrategy: oidc-jwt"]
     HttpModule["HttpModule\n@nestjs/axios"]
     GitLabModule["GitLabModule"]
-    KongModule["KongModule"]
+    K8sModule["K8sModule"]
     VaultModule["VaultModule"]
-    CloudflareModule["CloudflareModule"]
     ConfigsModule["ConfigsModule"]
     TemplatesModule["TemplatesModule"]
     ProjectsModule["ProjectsModule"]
@@ -29,9 +28,8 @@ graph TD
     AppModule --> PassportModule
     AppModule --> HttpModule
     AppModule --> GitLabModule
-    AppModule --> KongModule
     AppModule --> VaultModule
-    AppModule --> CloudflareModule
+    AppModule --> K8sModule
     AppModule --> ConfigsModule
     AppModule --> TemplatesModule
     AppModule --> ProjectsModule
@@ -39,9 +37,10 @@ graph TD
     AppModule --> AppController
 
     ProjectsModule --> GitLabModule
-    ProjectsModule --> KongModule
     ProjectsModule --> VaultModule
-    ProjectsModule --> CloudflareModule
+    ProjectsModule --> K8sModule
+    ProjectsModule --> TemplatesModule
+    ProjectsModule --> ConfigsModule
     TemplatesModule --> GitLabModule
     ConfigsModule --> GitLabModule
 ```
@@ -143,17 +142,21 @@ interface AppConfiguration {
     templateGroupId: number;   // GITLAB_TEMPLATE_GROUP_ID (required)
     configGroupId: number;     // GITLAB_CONFIG_GROUP_ID (required)
   };
-  kong: {
-    adminUrl: string;          // KONG_ADMIN_URL (default: http://kong:8001)
+  mongo: {
+    url: string;               // MONGO_URL (default: mongodb://mongo:27017)
+    dbName: string;            // MONGO_DB_NAME (default: platform)
   };
   vault: {
     url: string;               // VAULT_URL (default: http://vault:8200) — OpenBao instance
     token: string;             // VAULT_DEV_ROOT_TOKEN_ID (required)
   };
-  cloudflare: {
-    apiToken?: string;         // CLOUDFLARE_API_TOKEN (optional)
-    zoneId?: string;           // CLOUDFLARE_ZONE_ID (optional)
-    tunnelId?: string;         // CLOUDFLARE_TUNNEL_ID (optional)
+  kube: {
+    apiUrl?: string;           // KUBE_API_INTERNAL_URL (optional)
+    configDir: string;         // KUBECONFIG_DIR (default: /etc/dsoaas/kubeconfigs)
+  };
+  autoDevops: {
+    pipelineProject: string;   // AUTO_DEVOPS_PIPELINE_PROJECT
+    pipelineFile: string;      // AUTO_DEVOPS_PIPELINE_FILE
   };
   oidc: {
     issuerUrl?: string;        // OIDC_ISSUER_URL (optional)
@@ -175,103 +178,28 @@ All endpoints are documented via Swagger at `GET /api/docs` (OpenAPI UI). The ra
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| `GET` | `/health` | None | Returns `{ status: "ok" }`. Used by Docker health check and load balancers. |
+| `GET` | `/health` | None | Returns `{ status: 'ok' \| 'degraded', mongo: 'ok' \| 'down', vault: 'ok' \| 'down' }`. Used by Docker health checks and load balancers. |
 
 ---
 
-### ProjectsController (`/projects`)
+### GraphQL (`POST /graphql`)
 
-Auth: `CombinedAuthGuard` on all endpoints. Swagger security: `api-key`, `Bearer`.
+Primary interface for **project mutations** (create, delete, migrate, hostname overrides, audit queries, and related operations). The schema is **code-first** (see `api/src/projects/graphql/`). Authentication uses the same `CombinedAuthGuard` rules as REST (`X-API-Key` or `Authorization: Bearer`).
 
-#### `POST /projects`
+Input types such as `CreateProjectInput` and capability objects live in `api/src/projects/graphql/project.inputs.ts`. Provisioning writes the GitLab repo (fork or Auto DevOps path), seeds Vault, ensures Kubernetes namespaces where kubeconfigs exist, sets CI variables, and persists a `Project` document in MongoDB.
 
-Creates a new project and provisions all associated resources.
+---
 
-**Request body (`CreateProjectDto`):**
+### ProjectsController (`/projects`) — REST read model
 
-| Field | Type | Required | Default | Description |
-|---|---|---|---|---|
-| `clientName` | `string` | Yes | — | Client identifier. Used as GitLab group name and Kong service prefix. Must match `/^[a-z0-9-]+$/`. |
-| `projectName` | `string` | Yes | — | Project identifier. Used as GitLab project name and Kong service name suffix. Must match `/^[a-z0-9-]+$/`. |
-| `templateSlug` | `string` | Yes | — | Slug of the template project in the `templates` GitLab group. |
-| `description` | `string` | No | — | Optional project description passed to GitLab. |
-| `groupPath` | `string[]` | No | `["clients", clientName]` | GitLab group path segments. Groups are created if they do not exist. |
-| `configs` | `string[]` | No | `[]` | Array of config repo slugs to inject as `.gitlab-ci.yml` includes. |
-| `envVars` | `Record<string, string>` | No | `{}` | Extra key-value pairs written to Vault alongside the standard keys. |
-| `capabilities` | `ProjectCapabilities` | No | `{}` | Opt-in capabilities (see below). |
+Auth: `CombinedAuthGuard` on all routes. Swagger security: `api-key`, `Bearer`.
 
-**`ProjectCapabilities`:**
-
-| Field | Type | Description |
-|---|---|---|
-| `deployable` | `DeployableCapability \| null` | If set, creates a Kong route and optionally a Cloudflare DNS record. |
-| `publishable` | `PublishableCapability \| null` | If set, sets a package name and registry URL. |
-
-**`DeployableCapability`:**
-
-| Field | Type | Default | Description |
+| Method | Path | Status | Description |
 |---|---|---|---|
-| `domain` | `string` | `{projectName}.{APPS_DOMAIN}` | Public hostname for the deployed app. |
-| `autoDeploy` | `boolean` | `true` | Whether to trigger a GitLab pipeline immediately after provisioning. |
-
-**`PublishableCapability`:**
-
-| Field | Type | Default | Description |
-|---|---|---|---|
-| `packageName` | `string` | `@{clientName}/{projectName}` | npm package name for the GitLab package registry. |
-
-**Response (`ProjectInfoDto`, 201):**
-
-| Field | Type | Always present | Description |
-|---|---|---|---|
-| `id` | `number` | Yes | GitLab project ID |
-| `name` | `string` | Yes | Project name |
-| `clientName` | `string` | Yes | Client name |
-| `gitlabUrl` | `string` | Yes | GitLab web URL |
-| `vaultPath` | `string` | Yes | Vault KV path (e.g. `projects/acme/webapp`) |
-| `configs` | `string[]` | No | Injected config slugs |
-| `appUrl` | `string` | No | Public hostname (only if deployable) |
-| `kongServiceName` | `string` | No | Kong service name (only if deployable) |
-| `cloudflareConfigured` | `boolean` | No | Whether Cloudflare DNS was set (only if deployable) |
-| `packageName` | `string` | No | npm package name (only if publishable) |
-| `registryUrl` | `string` | No | GitLab package registry URL (only if publishable) |
-
-**Provisioning steps (in order):**
-1. Create GitLab group hierarchy from `groupPath`.
-2. Fork the template project into the target group.
-3. Inject CI config `include:` entries into `.gitlab-ci.yml`.
-4. Write Vault secrets at `secret/data/projects/{clientName}/{projectName}`.
-5. If `deployable`: register Kong service + route; attempt Cloudflare DNS (non-critical); optionally trigger pipeline (non-critical).
-6. If `publishable`: compute package name + registry URL.
-
-**Error behavior:** Steps 1–4 are critical (failure aborts and returns an error). Steps 5b, 5c, and 6 are non-critical (logged as warnings, do not fail the request).
-
----
-
-#### `GET /projects`
-
-Returns all GitLab projects the root token has access to, mapped to `ProjectInfoDto[]`.
-
-Note: `appUrl`, `kongServiceName`, `cloudflareConfigured`, `packageName`, and `registryUrl` are not populated in the list response — only `id`, `name`, `clientName`, `gitlabUrl`, and `vaultPath`.
-
----
-
-#### `GET /projects/:id`
-
-Returns a single project by GitLab project ID. Returns 404 if the project does not exist.
-
----
-
-#### `DELETE /projects/:id`
-
-Attempts to clean up all resources associated with a project. Steps are non-critical except the final GitLab deletion:
-
-1. Remove Kong service `{clientName}-{projectName}-service` (non-critical).
-2. Remove Cloudflare DNS record for `{projectName}.{APPS_DOMAIN}` (non-critical).
-3. Delete Vault secrets at `secret/metadata/projects/{clientName}/{projectName}` (non-critical).
-4. Delete the GitLab project (critical — returns error if this fails).
-
-Returns 204 on success.
+| `GET` | `/projects` | 200 | Lists all projects from MongoDB as `ProjectResponseDto[]`. |
+| `GET` | `/projects/:id` | 200 / 404 | Returns one project by MongoDB ObjectId (`ProjectResponseDto`). |
+| `POST` | `/projects` | 410 | **Deprecated** — use GraphQL mutation `createProject`. Response body includes `graphqlEndpoint` and a `hint` with the mutation name. |
+| `DELETE` | `/projects/:id` | 410 | **Deprecated** — use GraphQL mutation `deleteProject`. Same 410 payload shape as `POST`. |
 
 ---
 
@@ -375,22 +303,11 @@ HTTP client for the GitLab REST API v4. Authenticates all requests with `PRIVATE
 
 ---
 
-### KongService (`api/src/kong/kong.service.ts`)
+### K8sService (`api/src/k8s/k8s.service.ts`)
 
-HTTP client for the Kong Admin API. No authentication (Admin API is only accessible internally).
+Kubernetes clients (Core, Apps, Networking) loaded **per environment** (`dev`, `stg`, `prod`) from kubeconfig files under `kube.configDir`. Missing kubeconfigs are skipped with a warning so other environments keep working.
 
-| Method | Signature | Description |
-|---|---|---|
-| `registerService` | `(name, upstreamUrl, hosts[]) => Promise<{ serviceName, hosts }>` | PUT `/services/{name}` (upsert) with timeouts and retries. PUT `/services/{name}/routes/{name}-route` (upsert) with host matching. |
-| `removeService` | `(name) => Promise<void>` | DELETE route `{name}-route`, then DELETE service. Best-effort; logs warnings, does not throw. |
-
-**Kong service parameters set by `registerService`:**
-- `connect_timeout`: 10000 ms
-- `read_timeout`: 60000 ms
-- `write_timeout`: 60000 ms
-- `retries`: 3
-- `strip_path`: false
-- `preserve_host`: true
+Used by `ProjectsService` for namespace checks, deployment status, and related cluster operations during provisioning and lifecycle management. See the service implementation for the full public method list.
 
 ---
 
@@ -404,18 +321,6 @@ HTTP client for the OpenBao KV v2 API. Authenticates with `X-Vault-Token` header
 | `deleteSecrets` | `(path) => Promise<void>` | DELETE `/v1/secret/metadata/{path}` (deletes all versions). Logs warning and swallows errors. |
 
 Secret paths follow the pattern `projects/{clientName}/{projectName}`.
-
----
-
-### CloudflareService (`api/src/cloudflare/cloudflare.service.ts`)
-
-HTTP client for the Cloudflare API v4. Disabled (no-op) if `CLOUDFLARE_API_TOKEN` or `CLOUDFLARE_ZONE_ID` is not set.
-
-| Method | Signature | Description |
-|---|---|---|
-| `isConfigured` | `() => boolean` | Returns true if both `apiToken` and `zoneId` are set. Logs a warning once on first call if not configured. |
-| `addDnsRecord` | `(hostname) => Promise<boolean>` | POST `/zones/{zoneId}/dns_records` — creates a CNAME pointing to `{tunnelId}.cfargotunnel.com`. Returns false if not configured or on error. |
-| `removeDnsRecord` | `(hostname) => Promise<boolean>` | GET + DELETE DNS record by name + type CNAME. Returns false if not configured or on error. |
 
 ---
 

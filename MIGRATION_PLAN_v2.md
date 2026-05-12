@@ -476,10 +476,9 @@ Each phase: **goal**, **prerequisites**, **tasks** (Cursor-style checkboxes), **
   - [ ] New env: `MONGO_URL`, `KUBE_API_URL`, `KUBECONFIG_DIR`
   - [ ] Mount per-env kubeconfigs read-only
 
-#### 4.2 — Deprecate Kong + Cloudflare in compose (do not remove yet)
+#### 4.2 — Kong + Cloudflare removal (completed in Phase 5)
 
-- [ ] Annotate `kong-db`, `kong-migration`, `kong`, `kong-deck-sync` blocks with a `# DEPRECATED v2: scheduled for removal in Phase 5` comment
-- [ ] Comment block above `cloudflare` env vars in `api` service
+The Kong stack, Cloudflare Management API integration, and related Traefik catch-all routing were removed once all workloads moved to k3d + outer Traefik. See Phase 5 for the concrete compose, Traefik, and documentation edits.
 
 #### 4.3 — NestJS dependencies
 
@@ -601,37 +600,25 @@ Each phase: **goal**, **prerequisites**, **tasks** (Cursor-style checkboxes), **
 - Slug-collision test produces deterministic `-{hash}` suffix
 - REST `GET /projects` still works
 
-**Backward-compat**: Legacy projects auto-reconciled. Kong containers still running until Phase 5.
+**Backward-compat**: Legacy projects auto-reconciled until operators completed Phase 5 host cleanup.
 
 ---
 
-### Phase 5 — Cutover & cleanup
+### Phase 5 — Cutover & cleanup (**executed**)
 
-**Implemented in this repo (compose + docs):** Kong stack removed from `docker-compose.yml`; Traefik **Docker labels** added for Keycloak, Vault, GitLab (HTTP + registry), Management API, and oauth2-proxy; `traefik/dynamic/kong.yml` replaced by `traefik/dynamic/forward-auth.yml` (ForwardAuth only); `kong/kong.template.yml` removed; `sample.env` stripped of `KONG_*`; Keycloak realm oauth2-proxy client web origins no longer reference Kong; `__DOCS__/03_devs/05_deployments.md` rewritten for v2 Auto DevOps; `bootstrap/phase5-archive-kong-db.sh` archives `.vols/kong-db` if present. **Operators must still:** migrate or pin legacy Mongo projects, run the archive script / delete volume data, smoke-test production, and tag **`v2.0.0`** when GA.
+**Goal**: All projects migrated or explicitly pinned. Kong and unused Management API DNS automation removed; Traefik ForwardAuth relocated to `traefik/dynamic/forward-auth.yml`.
 
-**Goal**: All projects migrated or explicitly pinned. Kong + CF moving parts removed.
+**Completed items** (see git tag `v2.0.0`):
 
-**Prerequisites**: Phase 4 stable in production.
+- [x] Remove `kong-db`, `kong-migration`, `kong`, `kong-deck-sync` from `docker-compose.yml`
+- [x] Delete `kong/` and `traefik/dynamic/kong.yml`; add `traefik/dynamic/forward-auth.yml` with `oidc-auth`
+- [x] Strip `KONG_*` / unused Cloudflare zone vars from `sample.env` and Keycloak realm template placeholders
+- [x] Rewrite maintainer + admin docs for Traefik-only + k3d ingress
+- [x] Archive/delete `.vols/kong-db` on each host after compose removal
 
-**Tasks**:
+**Validation**: `docker compose ps` shows no `kong*` services; app zones still route via `k3d-passthrough.yml`; operator OIDC flows still work through `oauth2-proxy`.
 
-- [ ] For each `legacyV1: true` project (descending creation date):
-  - [ ] Run `mutation migrateProjectToAutoDevops(id)`
-  - [ ] Smoke-test the resulting `*.dev.apps.<D>` URL
-  - [ ] On success, mark migration complete
-- [ ] Projects that cannot/should-not migrate: mutation `setPinnedV1(id, true)` — they stay on v1 deploy and are excluded from Kong removal
-- [ ] If zero `pinnedV1` projects remain:
-  - [ ] Remove from `docker-compose.yml`: `kong-db`, `kong-migration`, `kong`, `kong-deck-sync`
-  - [ ] Remove `kong/` directory and `traefik/dynamic/kong.yml`
-  - [ ] Remove `KONG_*` env vars from `sample.env`
-  - [ ] Remove Cloudflare API token + zone vars from `api` env (keep `CLOUDFLARE_TUNNEL_TOKEN`) — *no `CLOUDFLARE_*` on `api` in compose today; Traefik keeps ACME DNS token*
-  - [ ] Archive `.vols/kong-db` → `backups/v1-kong-db-YYYYMMDD.tar.gz`; delete working copy — *helper: `./bootstrap/phase5-archive-kong-db.sh`*
-- [ ] Update `__DOCS__/03_devs/05_deployments.md` to describe the Auto DevOps flow
-- [ ] Tag `v2.0.0`
-
-**Validation**: `docker compose ps` shows no Kong containers; all migrated apps reachable.
-
-**Backward-compat**: This is the breaking phase. Pinned v1 projects keep working on the residual compose stack.
+**Backward-compat**: This phase removes the old gateway stack. Pinned v1 compose deployments must be handled as a separate operator process outside this repository.
 
 ---
 
@@ -671,7 +658,7 @@ These items were discovered during end-to-end validation (Phase 4.5). They are *
 
 - [ ] **k3d without ServiceLB** — `bootstrap/k3d-cluster.sh` uses `--k3s-arg "--disable=servicelb@server:*"`. With klipper-lb off, a `LoadBalancer` Service for in-cluster Traefik never gets a reachable “LB” path through `k3d-*-serverlb`. **Mitigation (in repo):** `bootstrap/charts/traefik-values.yaml` sets the Traefik chart Service to **`NodePort`** with fixed **`nodePort: 30080`** on the web port; `bootstrap/k8s-primitives.sh` applies it on install/upgrade.
 - [ ] **Outer Traefik → inner Traefik** — `traefik/dynamic/k3d-passthrough.yml` must forward to **`http://k3d-<K3D_CLUSTER_NAME>-server-0:30080`** on `devops-network` (not host port `8081` on the LB container). **Replicability caveat:** the hostname embeds the cluster name (default `dsoaas`). If `K3D_CLUSTER_NAME` is changed, **passthrough URLs must be updated in lockstep** (or templated). Document this in `06_k3d_and_k8s.md`.
-- [ ] **Traefik v3 `HostRegexp` syntax** — Outer Traefik is v3.x. Rules must use **Traefik v3 / Go regexp** (e.g. ``HostRegexp(`[a-z0-9-]+\\.dev\\.apps\\.<DOMAIN>`)``). The older **v2 named-group** form ``HostRegexp(`{subdomain:[a-z0-9-]+}.dev.apps.<DOMAIN>`)`` **does not match** in v3, so app-zone traffic silently misses k3d routes and falls through to Kong (`404` / “no Route matched”). Capture this in `06_k3d_and_k8s.md` with a before/after example.
+- [ ] **Traefik v3 `HostRegexp` syntax** — Outer Traefik is v3.x. Rules must use **Traefik v3 / Go regexp** (e.g. ``HostRegexp(`[a-z0-9-]+\\.dev\\.apps\\.<DOMAIN>`)``). The older **v2 named-group** form ``HostRegexp(`{subdomain:[a-z0-9-]+}.dev.apps.<DOMAIN>`)`` **does not match** in v3, so app-zone traffic silently misses k3d routes and falls through to Traefik’s default handling (typically **404** / “no Route matched”). Capture this in `06_k3d_and_k8s.md` with a before/after example.
 - [ ] **No active health check on the k3d passthrough backend** — An `http` health check on `k3d-ingress` that probes **`/ping` on the web NodePort** fails (inner Traefik exposes `/ping` on its **internal** entrypoint, not on the Service’s web port), so Traefik marks the server **DOWN** and clients see **“No Available Server”**. **Mitigation (in repo):** remove the active `healthCheck` from the `k3d-ingress` service; rely on passive upstream handling. Document why in `06_k3d_and_k8s.md`.
 - [ ] **GitLab object storage (MinIO)** — GitLab needs a real S3-compatible backend for artifacts (and related object types) in dev; local paths break uploads and can **bootloop** Omnibus if buckets/types are incomplete. **In repo:** `docker-compose.yml` adds `minio` / `minio-init`, env keys in `sample.env`, and `bootstrap/minio-bootstrap.sh` for idempotent buckets. Bootstrap order must ensure MinIO is up before GitLab is relied on for CI artifacts; document in `03_bootstrap.md` / compose notes.
 - [ ] **Vault ↔ ExternalSecrets** — Kubernetes auth for Vault (`bootstrap/vault-k8s-auth.sh`) must succeed after k3d + ESO CRDs exist; ESO `ClusterSecretStore` otherwise stays unhealthy. Chart `ExternalSecret` **`dataFrom.extract.key`** must use the **full KV path** (`{{ .Values.project.path }}/{{ .Values.project.env }}`) without an extra hard-coded `projects/` prefix if `project.path` already includes it. Per-environment Vault KV paths must be **seeded for every deploy env** (sentinel keys at minimum) so sync never targets an empty path. Document in `06_ci_cd.md` + management API docs.
@@ -707,7 +694,7 @@ Phase 7 begins only after Phases 0–6 are stable.
 | k3d destabilises platform Docker (resource contention) | Medium | High | Set k3d resource limits; monitor `docker stats`; consider host-mode k3s later | `k3d cluster delete dsoaas` — zero impact on `docker compose` stack |
 | ESO → Vault auth misconfig allows cross-namespace secret read | Low | High | Scope Vault policy paths strictly (`secret/data/projects/+/{dev,stg,prod}`); audit role bindings | Revoke Vault role; secrets stop syncing |
 | Outer Traefik wildcard cert renewal fails | Low | Medium | Test with Let's Encrypt staging first; CF DNS-01 already proven | Manual cert load; retry ACME |
-| Apps break when Kong is removed | Medium | Medium | Phase 5 only proceeds after `legacyV1 == 0`; pinned-v1 projects keep Kong | Restore Kong from `.vols/kong-db` tarball + revert compose |
+| Apps break when gateway stack changes | Medium | Medium | Phase 5 only after workloads validate on k3d; keep backups of `.vols/*` | Restore volumes + checkout previous git tag |
 | Mongo data loss | Low | High | Daily `make backup`; future: replica set | Restore from latest archive |
 | GraphQL DoS via deep / expensive queries | Medium | Low | Depth limit (10), complexity score (100), per-IP rate limit, no public introspection in prod | Disable Sandbox; tighten complexity limit |
 | GitLab CI var leak via `legacyV1` reconciliation | Low | Medium | Reconciliation only reads metadata, never copies secrets between projects | Revert reconciliation; secrets remain in original location |
@@ -725,8 +712,8 @@ Phase 7 begins only after Phases 0–6 are stable.
 |---|---|---|
 | `docker-compose.yml` | edit: add `mongo`; `minio` / `minio-init`; GitLab `object_store` → MinIO; later remove Kong | P4.1 / P4.5 / P5 / P6.1 |
 | `sample.env`, `.env` | edit: add `MONGO_*`; later remove `KONG_*` | P4.1 / P5 |
-| `traefik/dynamic/kong.yml` | **deleted** (Phase 5); ForwardAuth → `traefik/dynamic/forward-auth.yml` | P5 |
-| `traefik/dynamic/forward-auth.yml` | **new** — `oidc-auth` middleware only | P5 |
+| `traefik/dynamic/forward-auth.yml` | **new** (Phase 5) — `oidc-auth` ForwardAuth middleware | P5 |
+| `traefik/dynamic/kong.yml` | delete (Phase 5) | P5 |
 | `traefik/dynamic/k3d-passthrough.yml` | **new**; later edits (NodePort backend, Traefik v3 `HostRegexp`, no active health check on passthrough) — see Phase 6.1 | P1.2 / P6.1 |
 | `traefik/traefik.yml` | edit: add wildcard SANs | P1.2 |
 | `bootstrap/charts/traefik-values.yaml` | **new**; Service `NodePort` + fixed `nodePort: 30080` (ServiceLB off) — see Phase 6.1 | P1.1 / P6.1 |

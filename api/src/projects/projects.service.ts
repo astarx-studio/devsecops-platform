@@ -1,4 +1,10 @@
-import { ConflictException, Injectable, Logger, NotFoundException, OnApplicationBootstrap } from '@nestjs/common';
+import {
+  ConflictException,
+  Injectable,
+  Logger,
+  NotFoundException,
+  OnApplicationBootstrap,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
 
@@ -254,11 +260,7 @@ export class ProjectsService implements OnApplicationBootstrap {
 
     // Step 1: Resolve effective slug
     this.logger.log('Step 1: Resolving effective slug');
-    const effectiveSlug = await this.slugService.resolve(
-      projectSlug,
-      groupPath,
-      slugOverride,
-    );
+    const effectiveSlug = await this.slugService.resolve(projectSlug, groupPath, slugOverride);
     this.logger.log(`Effective slug resolved: "${effectiveSlug}"`);
 
     const gitlabPath = [...groupPath, projectSlug].join('/');
@@ -285,7 +287,9 @@ export class ProjectsService implements OnApplicationBootstrap {
       const forked = await this.gitlabService.forkTemplate(templateSlug, groupId, projectSlug);
       gitlabProjectId = forked.id;
     } else {
-      this.logger.log(`Step 3: Creating new Auto DevOps project "${projectSlug}" in group ${groupId}`);
+      this.logger.log(
+        `Step 3: Creating new Auto DevOps project "${projectSlug}" in group ${groupId}`,
+      );
       const created = await this.gitlabService.createNewProject(
         groupId,
         projectSlug,
@@ -367,12 +371,22 @@ export class ProjectsService implements OnApplicationBootstrap {
     // Step 6: Set env-scoped CI variables on the GitLab project
     if (isDeployable) {
       this.logger.log('Step 6: Setting env-scoped CI variables on GitLab project');
-      const ciVariables: Array<{ key: string; value: string; environmentScope: string; masked?: boolean }> = [];
+      const ciVariables: Array<{
+        key: string;
+        value: string;
+        environmentScope: string;
+        masked?: boolean;
+      }> = [];
 
       for (const env of DEPLOY_ENVS) {
         // Short / non-sensitive values must use masked:false — GitLab requires
         // masked variable values to be ≥8 characters and match a strict charset.
-        ciVariables.push({ key: 'KUBE_NAMESPACE', value: env, environmentScope: env, masked: false });
+        ciVariables.push({
+          key: 'KUBE_NAMESPACE',
+          value: env,
+          environmentScope: env,
+          masked: false,
+        });
         ciVariables.push({
           key: 'APP_HOST',
           value: appHosts[env] ?? `${effectiveSlug}.${env}.${this.appsDomain}`,
@@ -498,8 +512,8 @@ export class ProjectsService implements OnApplicationBootstrap {
    *  3. Triggers the pipeline
    *  4. Sets `legacyV1 = false` in MongoDB
    *
-   * Note: the full v1 cleanup (remove Kong route, stop compose stack) is a
-   * Phase 5 operation that runs after a successful prod deploy.
+   * Note: stopping the legacy compose stack and removing its gateway routes
+   * is a separate operator step after a successful production deploy on k3d.
    *
    * @param id - MongoDB document ID
    */
@@ -532,20 +546,35 @@ export class ProjectsService implements OnApplicationBootstrap {
 
     // Step 2: Set env-scoped CI variables
     if (doc.capabilities.deployable) {
-      const ciVars: Array<{ key: string; value: string; environmentScope: string; masked?: boolean }> = [];
+      const ciVars: Array<{
+        key: string;
+        value: string;
+        environmentScope: string;
+        masked?: boolean;
+      }> = [];
       for (const env of DEPLOY_ENVS) {
         ciVars.push({ key: 'KUBE_NAMESPACE', value: env, environmentScope: env, masked: false });
         ciVars.push({
           key: 'APP_HOST',
-          value: doc.appHosts[env as DeployEnv] ?? `${doc.effectiveSlug}.${env}.${this.appsDomain}`,
+          value: doc.appHosts[env] ?? `${doc.effectiveSlug}.${env}.${this.appsDomain}`,
           environmentScope: env,
           masked: false,
         });
-        ciVars.push({ key: 'VAULT_PROJECT_PATH', value: doc.vaultBasePath, environmentScope: env, masked: false });
+        ciVars.push({
+          key: 'VAULT_PROJECT_PATH',
+          value: doc.vaultBasePath,
+          environmentScope: env,
+          masked: false,
+        });
 
-        const kubeconfigB64 = this.k8sService.getKubeconfigB64(env as DeployEnv);
+        const kubeconfigB64 = this.k8sService.getKubeconfigB64(env);
         if (kubeconfigB64) {
-          ciVars.push({ key: 'KUBECONFIG_B64', value: kubeconfigB64, environmentScope: env, masked: true });
+          ciVars.push({
+            key: 'KUBECONFIG_B64',
+            value: kubeconfigB64,
+            environmentScope: env,
+            masked: true,
+          });
         }
       }
       await this.gitlabService.setProjectCiVariables(doc.gitlabProjectId, ciVars);
@@ -583,7 +612,11 @@ export class ProjectsService implements OnApplicationBootstrap {
    * @param env - Target environment
    * @param hostname - New hostname
    */
-  async setHostnameOverride(id: string, env: DeployEnv, hostname: string): Promise<ProjectDocument> {
+  async setHostnameOverride(
+    id: string,
+    env: DeployEnv,
+    hostname: string,
+  ): Promise<ProjectDocument> {
     this.logger.log(`setHostnameOverride: id=${id} env=${env} hostname="${hostname}"`);
     const doc = await this.findProject({ id });
 
@@ -593,12 +626,7 @@ export class ProjectsService implements OnApplicationBootstrap {
 
     // Update APP_HOST CI var for this env
     try {
-      await this.gitlabService.setProjectCiVariable(
-        doc.gitlabProjectId,
-        'APP_HOST',
-        hostname,
-        env,
-      );
+      await this.gitlabService.setProjectCiVariable(doc.gitlabProjectId, 'APP_HOST', hostname, env);
     } catch (err) {
       this.logger.warn(
         `Failed to update APP_HOST CI var (non-critical): ${(err as Error).message}`,
@@ -662,7 +690,9 @@ export class ProjectsService implements OnApplicationBootstrap {
       return;
     }
 
-    const templateGroupId = this.configService.get<number>('gitlab.templateGroupId', { infer: true });
+    const templateGroupId = this.configService.get<number>('gitlab.templateGroupId', {
+      infer: true,
+    });
     const configGroupId = this.configService.get<number>('gitlab.configGroupId', { infer: true });
 
     let backfilled = 0;
@@ -688,9 +718,7 @@ export class ProjectsService implements OnApplicationBootstrap {
         continue;
       }
 
-      const existing = await this.projectModel
-        .findOne({ gitlabProjectId: glProject.id })
-        .exec();
+      const existing = await this.projectModel.findOne({ gitlabProjectId: glProject.id }).exec();
 
       if (existing) {
         this.logger.verbose(
@@ -765,5 +793,4 @@ export class ProjectsService implements OnApplicationBootstrap {
         : 'Reconciliation complete: no new legacy projects found',
     );
   }
-
 }

@@ -240,9 +240,7 @@ export class K8sService implements OnModuleInit {
 
       this.logger.debug(`Kubeconfig loaded for env "${env}" from: ${filePath}`);
     } catch (error) {
-      this.logger.error(
-        `Failed to load kubeconfig for env "${env}": ${(error as Error).message}`,
-      );
+      this.logger.error(`Failed to load kubeconfig for env "${env}": ${(error as Error).message}`);
     }
   }
 
