@@ -359,16 +359,20 @@ export class ProjectsService implements OnApplicationBootstrap {
       const ciVariables: Array<{ key: string; value: string; environmentScope: string; masked?: boolean }> = [];
 
       for (const env of DEPLOY_ENVS) {
-        ciVariables.push({ key: 'KUBE_NAMESPACE', value: env, environmentScope: env });
+        // Short / non-sensitive values must use masked:false — GitLab requires
+        // masked variable values to be ≥8 characters and match a strict charset.
+        ciVariables.push({ key: 'KUBE_NAMESPACE', value: env, environmentScope: env, masked: false });
         ciVariables.push({
           key: 'APP_HOST',
           value: appHosts[env] ?? `${effectiveSlug}.${env}.${this.appsDomain}`,
           environmentScope: env,
+          masked: false,
         });
         ciVariables.push({
           key: 'VAULT_PROJECT_PATH',
           value: vaultBasePath,
           environmentScope: env,
+          masked: false,
         });
 
         // KUBECONFIG_B64: set per-project so CI jobs can connect to the right cluster env.
@@ -379,6 +383,7 @@ export class ProjectsService implements OnApplicationBootstrap {
             key: 'KUBECONFIG_B64',
             value: kubeconfigB64,
             environmentScope: env,
+            masked: true,
           });
         } else {
           this.logger.warn(
@@ -518,17 +523,18 @@ export class ProjectsService implements OnApplicationBootstrap {
     if (doc.capabilities.deployable) {
       const ciVars: Array<{ key: string; value: string; environmentScope: string; masked?: boolean }> = [];
       for (const env of DEPLOY_ENVS) {
-        ciVars.push({ key: 'KUBE_NAMESPACE', value: env, environmentScope: env });
+        ciVars.push({ key: 'KUBE_NAMESPACE', value: env, environmentScope: env, masked: false });
         ciVars.push({
           key: 'APP_HOST',
           value: doc.appHosts[env as DeployEnv] ?? `${doc.effectiveSlug}.${env}.${this.appsDomain}`,
           environmentScope: env,
+          masked: false,
         });
-        ciVars.push({ key: 'VAULT_PROJECT_PATH', value: doc.vaultBasePath, environmentScope: env });
+        ciVars.push({ key: 'VAULT_PROJECT_PATH', value: doc.vaultBasePath, environmentScope: env, masked: false });
 
         const kubeconfigB64 = this.k8sService.getKubeconfigB64(env as DeployEnv);
         if (kubeconfigB64) {
-          ciVars.push({ key: 'KUBECONFIG_B64', value: kubeconfigB64, environmentScope: env });
+          ciVars.push({ key: 'KUBECONFIG_B64', value: kubeconfigB64, environmentScope: env, masked: true });
         }
       }
       await this.gitlabService.setProjectCiVariables(doc.gitlabProjectId, ciVars);
