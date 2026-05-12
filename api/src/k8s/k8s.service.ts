@@ -210,7 +210,9 @@ export class K8sService implements OnModuleInit {
       this.logger.warn(`getKubeconfigB64(${env}): file not found at ${filePath}`);
       return undefined;
     }
-    return readFileSync(filePath, 'utf-8').trim();
+    // Base64-encode the raw YAML so it can be stored as a single-line GitLab
+    // CI variable. The runner decodes it with: echo "$KUBECONFIG_B64" | base64 -d
+    return Buffer.from(readFileSync(filePath, 'utf-8').trim()).toString('base64');
   }
 
   // ---------------------------------------------------------------------------

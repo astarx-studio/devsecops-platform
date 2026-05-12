@@ -9,14 +9,24 @@ import {
 import { Request, Response } from 'express';
 
 /**
- * Global HTTP exception filter that standardizes error responses
- * and logs errors with contextual information.
+ * Global HTTP exception filter that standardizes REST error responses.
+ *
+ * GraphQL resolver exceptions are intentionally skipped — they are handled
+ * by Apollo's own error formatter, which converts them to GraphQL-spec errors
+ * in the response body. Intercepting them here would call `switchToHttp()`
+ * on a GraphQL `ArgumentsHost`, which returns an incomplete request object
+ * and causes "Cannot read properties of undefined (reading 'url')" crashes.
  */
 @Catch()
 export class GlobalExceptionFilter implements ExceptionFilter {
   private readonly logger = new Logger(GlobalExceptionFilter.name);
 
   catch(exception: unknown, host: ArgumentsHost): void {
+    // Let the GraphQL layer handle its own errors; skip to avoid HTTP adapter issues.
+    if ((host.getType() as string) === 'graphql') {
+      throw exception;
+    }
+
     const ctx = host.switchToHttp();
     const response = ctx.getResponse<Response>();
     const request = ctx.getRequest<Request>();
