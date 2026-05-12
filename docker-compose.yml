@@ -2,13 +2,13 @@
 # DevOps Platform — Phase 1-4: Ingress, Auth, Secret, Exposure, Dev Tools,
 #                               Integration & Management
 # ==========================================================================
-# Containers: traefik, mongo, kong-db*, kong-migration*, kong*, kong-deck-sync*,
-#             keycloak-db, keycloak, vault (OpenBao), cloudflared, wireguard,
-#             gitlab, gitlab-runner, api, minio, minio-init
+# Containers: traefik, mongo, keycloak-db, keycloak, vault (OpenBao), cloudflared,
+#             wireguard, gitlab, gitlab-runner, api, minio, minio-init, oauth2-proxy
 # Network:    devops-network (bridge)
 #
-# * = DEPRECATED v2: Kong containers are scheduled for removal in Phase 5
-#     once all legacy v1 projects have been migrated to Auto DevOps.
+# Phase 5: Kong removed — platform HTTPS routes use Traefik Docker labels on each
+# service (see keycloak, vault, gitlab, api, oauth2-proxy). App traffic uses k3d
+# Ingress (*.dev.apps.<DOMAIN>, etc.) via traefik/dynamic/k3d-passthrough.yml.
 # ==========================================================================
 
 networks:
@@ -88,12 +88,11 @@ services:
           - ${KEYCLOAK_DOMAIN}
           - ${VAULT_DOMAIN}
           - ${GITLAB_DOMAIN}
-          - ${KONG_DOMAIN}
+          - ${GITLAB_DOMAIN}
           - ${API_DOMAIN}
           - ${OAUTH_DOMAIN}
           - ${TRAEFIK_DOMAIN}
           - ${GITLAB_REGISTRY_DOMAIN}
-          - ${KONG_ADMIN_DOMAIN}
           - ${MINIO_CONSOLE_DOMAIN}
 
   # ========================================================================
@@ -114,154 +113,6 @@ services:
       timeout: 5s
       retries: 3
       start_period: 20s
-    networks:
-      - devops-network
-
-  # ========================================================================
-  # KONG DB — PostgreSQL for Kong
-  # ========================================================================
-  # DEPRECATED v2: scheduled for removal in Phase 5 once all legacy v1
-  # projects have been migrated to the Auto DevOps / k3d Ingress path.
-  kong-db:
-    image: postgres:17-alpine
-    container_name: kong-db
-    restart: unless-stopped
-    ports:
-      - "15432:5432"
-    environment:
-      POSTGRES_DB: ${KONG_PG_DATABASE}
-      POSTGRES_USER: ${KONG_PG_USER}
-      POSTGRES_PASSWORD: ${KONG_PG_PASSWORD}
-    volumes:
-      - ./.vols/kong-db:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${KONG_PG_USER} -d ${KONG_PG_DATABASE}"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
-    networks:
-      - devops-network
-
-  # ========================================================================
-  # KONG MIGRATION — One-shot database bootstrap
-  # ========================================================================
-  # DEPRECATED v2: scheduled for removal in Phase 5.
-  kong-migration:
-    image: kong:3.9
-    container_name: kong-migration
-    command: >
-      sh -c "
-        until kong migrations bootstrap 2>/dev/null; do
-          echo '[INFO] Kong DB not ready yet — retrying in 3s...'
-          sleep 3
-        done
-        echo '[INFO] Kong migrations complete.'
-      "
-    restart: "no"
-    environment:
-      KONG_DATABASE: postgres
-      KONG_PG_HOST: ${KONG_PG_HOST}
-      KONG_PG_PORT: ${KONG_PG_PORT}
-      KONG_PG_DATABASE: ${KONG_PG_DATABASE}
-      KONG_PG_USER: ${KONG_PG_USER}
-      KONG_PG_PASSWORD: ${KONG_PG_PASSWORD}
-    depends_on:
-      kong-db:
-        condition: service_healthy
-    networks:
-      - devops-network
-
-  # ========================================================================
-  # KONG — API Gateway
-  # ========================================================================
-  # DEPRECATED v2: scheduled for removal in Phase 5.
-  kong:
-    image: kong:3.9
-    container_name: kong
-    restart: unless-stopped
-    ports:
-      - "18000:8000"
-      - "18443:8443"
-      - "18001:8001"
-    environment:
-      KONG_DATABASE: postgres
-      KONG_PG_HOST: ${KONG_PG_HOST}
-      KONG_PG_PORT: ${KONG_PG_PORT}
-      KONG_PG_DATABASE: ${KONG_PG_DATABASE}
-      KONG_PG_USER: ${KONG_PG_USER}
-      KONG_PG_PASSWORD: ${KONG_PG_PASSWORD}
-      KONG_PROXY_LISTEN: ${KONG_PROXY_LISTEN}
-      KONG_ADMIN_LISTEN: ${KONG_ADMIN_LISTEN}
-      KONG_LOG_LEVEL: ${KONG_LOG_LEVEL}
-      KONG_PROXY_ACCESS_LOG: /dev/stdout
-      KONG_ADMIN_ACCESS_LOG: /dev/stdout
-      KONG_PROXY_ERROR_LOG: /dev/stderr
-      KONG_ADMIN_ERROR_LOG: /dev/stderr
-    labels:
-      traefik.enable: "true"
-      traefik.http.routers.kong-admin.rule: "Host(`${KONG_ADMIN_DOMAIN}`)"
-      traefik.http.routers.kong-admin.entrypoints: "websecure"
-      traefik.http.routers.kong-admin.tls.certresolver: "letsencrypt"
-      traefik.http.routers.kong-admin.middlewares: "oidc-auth@file"
-      traefik.http.services.kong-admin.loadbalancer.server.port: "8001"
-    healthcheck:
-      test: ["CMD", "kong", "health"]
-      interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 30s
-    depends_on:
-      kong-migration:
-        condition: service_completed_successfully
-    networks:
-      - devops-network
-
-  # ========================================================================
-  # KONG DECK SYNC — One-shot platform route seeding
-  # ========================================================================
-  # Substitutes ${VAR} placeholders in kong.template.yml and syncs to Kong.
-  # kong/deck is distroless (no shell), so we build a minimal image that
-  # copies the deck binary into alpine for shell-based template processing.
-  # DEPRECATED v2: scheduled for removal in Phase 5.
-  kong-deck-sync:
-    build:
-      context: .
-      dockerfile_inline: |
-        FROM kong/deck:latest AS deck
-        FROM alpine:latest
-        COPY --from=deck /usr/local/bin/deck /usr/local/bin/deck
-    container_name: kong-deck-sync
-    entrypoint: ["/bin/sh", "-c"]
-    command:
-      - |
-        sed \
-          -e "s|\$${KEYCLOAK_DOMAIN}|$$KEYCLOAK_DOMAIN|g" \
-          -e "s|\$${VAULT_DOMAIN}|$$VAULT_DOMAIN|g" \
-          -e "s|\$${KONG_DOMAIN}|$$KONG_DOMAIN|g" \
-          -e "s|\$${GITLAB_DOMAIN}|$$GITLAB_DOMAIN|g" \
-          -e "s|\$${GITLAB_REGISTRY_DOMAIN}|$$GITLAB_REGISTRY_DOMAIN|g" \
-          -e "s|\$${API_DOMAIN}|$$API_DOMAIN|g" \
-          -e "s|\$${OAUTH_DOMAIN}|$$OAUTH_DOMAIN|g" \
-          /kong/kong.template.yml > /tmp/kong.yml &&
-        echo "--- Resolved kong.yml ---" &&
-        cat /tmp/kong.yml &&
-        echo "--- Syncing to Kong ---" &&
-        deck gateway sync /tmp/kong.yml --kong-addr http://kong:8001
-    restart: "no"
-    environment:
-      KEYCLOAK_DOMAIN: ${KEYCLOAK_DOMAIN}
-      VAULT_DOMAIN: ${VAULT_DOMAIN}
-      KONG_DOMAIN: ${KONG_DOMAIN}
-      GITLAB_DOMAIN: ${GITLAB_DOMAIN}
-      GITLAB_REGISTRY_DOMAIN: ${GITLAB_REGISTRY_DOMAIN}
-      API_DOMAIN: ${API_DOMAIN}
-      OAUTH_DOMAIN: ${OAUTH_DOMAIN}
-    volumes:
-      - ./kong/kong.template.yml:/kong/kong.template.yml:ro
-    depends_on:
-      kong:
-        condition: service_healthy
     networks:
       - devops-network
 
@@ -310,7 +161,6 @@ services:
           -e "s|\$${API_DOMAIN}|$$API_DOMAIN|g" \
           -e "s|\$${OAUTH_DOMAIN}|$$OAUTH_DOMAIN|g" \
           -e "s|\$${TRAEFIK_DOMAIN}|$$TRAEFIK_DOMAIN|g" \
-          -e "s|\$${KONG_DOMAIN}|$$KONG_DOMAIN|g" \
           -e "s|\$${SMTP_HOST}|$$SMTP_HOST|g" \
           -e "s|\$${SMTP_PORT}|$$SMTP_PORT|g" \
           -e "s|\$${SMTP_FROM_EMAIL}|$$SMTP_FROM_EMAIL|g" \
@@ -355,7 +205,6 @@ services:
       API_DOMAIN: ${API_DOMAIN}
       OAUTH_DOMAIN: ${OAUTH_DOMAIN}
       TRAEFIK_DOMAIN: ${TRAEFIK_DOMAIN}
-      KONG_DOMAIN: ${KONG_DOMAIN}
     volumes:
       - ./keycloak/realm-export.json:/opt/keycloak/data/import-template/realm-export.json:ro
     healthcheck:
@@ -367,6 +216,14 @@ services:
     depends_on:
       keycloak-db:
         condition: service_healthy
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.keycloak.rule: "Host(`${KEYCLOAK_DOMAIN}`)"
+      traefik.http.routers.keycloak.entrypoints: "websecure"
+      traefik.http.routers.keycloak.tls.certresolver: "letsencrypt"
+      traefik.http.routers.keycloak.priority: "30"
+      traefik.http.routers.keycloak.service: "keycloak-ui"
+      traefik.http.services.keycloak-ui.loadbalancer.server.port: "8080"
     networks:
       - devops-network
 
@@ -397,6 +254,14 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.vault.rule: "Host(`${VAULT_DOMAIN}`)"
+      traefik.http.routers.vault.entrypoints: "websecure"
+      traefik.http.routers.vault.tls.certresolver: "letsencrypt"
+      traefik.http.routers.vault.priority: "30"
+      traefik.http.routers.vault.service: "vault-ui"
+      traefik.http.services.vault-ui.loadbalancer.server.port: "8200"
     networks:
       - devops-network
 
@@ -606,6 +471,20 @@ services:
     depends_on:
       minio:
         condition: service_healthy
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.gitlab.rule: "Host(`${GITLAB_DOMAIN}`)"
+      traefik.http.routers.gitlab.entrypoints: "websecure"
+      traefik.http.routers.gitlab.tls.certresolver: "letsencrypt"
+      traefik.http.routers.gitlab.priority: "30"
+      traefik.http.routers.gitlab.service: "gitlab-http"
+      traefik.http.services.gitlab-http.loadbalancer.server.port: "80"
+      traefik.http.routers.gitlab-registry.rule: "Host(`${GITLAB_REGISTRY_DOMAIN}`)"
+      traefik.http.routers.gitlab-registry.entrypoints: "websecure"
+      traefik.http.routers.gitlab-registry.tls.certresolver: "letsencrypt"
+      traefik.http.routers.gitlab-registry.priority: "30"
+      traefik.http.routers.gitlab-registry.service: "gitlab-registry-svc"
+      traefik.http.services.gitlab-registry-svc.loadbalancer.server.port: "5000"
     networks:
       - devops-network
 
@@ -719,6 +598,14 @@ services:
         condition: service_healthy
       vault:
         condition: service_healthy
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.platform-api.rule: "Host(`${API_DOMAIN}`)"
+      traefik.http.routers.platform-api.entrypoints: "websecure"
+      traefik.http.routers.platform-api.tls.certresolver: "letsencrypt"
+      traefik.http.routers.platform-api.priority: "30"
+      traefik.http.routers.platform-api.service: "platform-api-svc"
+      traefik.http.services.platform-api-svc.loadbalancer.server.port: "3000"
     networks:
       - devops-network
 
@@ -749,13 +636,13 @@ services:
       - devops-network
 
   # ========================================================================
-  # OAUTH2-PROXY — OIDC authentication for Traefik Dashboard + Kong Admin
+  # OAUTH2-PROXY — OIDC authentication for Traefik ForwardAuth
   # ========================================================================
   # Runs in proxy mode with a static upstream (static://202) so that
   # Traefik's ForwardAuth can point at the root URL. Unauthenticated
   # requests get a 302 redirect to Keycloak; authenticated requests get
-  # a 202 response that ForwardAuth treats as "allow". Routes via
-  # ${OAUTH_DOMAIN} for the /oauth2/callback flow.
+  # a 202 response that ForwardAuth treats as "allow". Public hostname
+  # ${OAUTH_DOMAIN} serves /oauth2/callback for the IdP redirect flow.
   #
   # OAUTH2_PROXY_ALLOWED_GROUPS (plural — required spelling for oauth2-proxy)
   # restricts access after IdP login to members of the listed Keycloak groups
@@ -790,6 +677,14 @@ services:
     depends_on:
       keycloak:
         condition: service_healthy
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.oauth2-proxy.rule: "Host(`${OAUTH_DOMAIN}`)"
+      traefik.http.routers.oauth2-proxy.entrypoints: "websecure"
+      traefik.http.routers.oauth2-proxy.tls.certresolver: "letsencrypt"
+      traefik.http.routers.oauth2-proxy.priority: "30"
+      traefik.http.routers.oauth2-proxy.service: "oauth2-proxy-svc"
+      traefik.http.services.oauth2-proxy-svc.loadbalancer.server.port: "4180"
     networks:
       - devops-network
 

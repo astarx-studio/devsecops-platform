@@ -1,8 +1,8 @@
-# Adding tiered OIDC with oauth2-proxy (Traefik and Kong)
+# Adding tiered OIDC with oauth2-proxy (Traefik v2 stack)
 
 ← [Back to Admin Guide](index.md)
 
-This guide explains **how to extend** the platform when you need **more than one authorization policy** for browser flows that use [oauth2-proxy](https://oauth2-proxy.github.io/oauth2-proxy/) in front of tools that do not speak OIDC themselves. You do that by **adding oauth2-proxy instances** (and matching Traefik ForwardAuth middlewares, Keycloak clients, and Kong routes)—not by flipping a single “tiers” switch.
+This guide explains **how to extend** the platform when you need **more than one authorization policy** for browser flows that use [oauth2-proxy](https://oauth2-proxy.github.io/oauth2-proxy/) in front of tools that do not speak OIDC themselves. You do that by **adding oauth2-proxy instances** (and matching Traefik ForwardAuth middlewares and Keycloak clients)—not by flipping a single “tiers” switch.
 
 The sections below start from **what ships today**, then describe **when** to introduce extra tiers, and use three **example labels**—**admin**, **internal**, **external**—only as **illustrative** naming and policies. Your real tiers might be fewer (often **one** proxy is enough) or more than three.
 
@@ -10,7 +10,7 @@ The sections below start from **what ships today**, then describe **when** to in
 
 ## What you have today (baseline)
 
-The repo runs **one** `oauth2-proxy` container. Traefik’s ForwardAuth middleware `**oidc-auth`** (`[traefik/dynamic/kong.yml](../../traefik/dynamic/kong.yml)`) delegates login checks to `**http://oauth2-proxy:4180/**`. The Traefik dashboard and Kong Admin routers attach that middleware via labels in `[docker-compose.yml](../../docker-compose.yml)`.
+The repo runs **one** `oauth2-proxy` container. Traefik’s ForwardAuth middleware `**oidc-auth**` is defined in `[traefik/dynamic/forward-auth.yml](../../traefik/dynamic/forward-auth.yml)` and delegates login checks to `**http://oauth2-proxy:4180/**`. Routers that need operator SSO (Traefik dashboard, MinIO console, etc.) attach that middleware via labels in `[docker-compose.yml](../../docker-compose.yml)`.
 
 Group restriction for that single proxy is configured with `**OAUTH2_PROXY_ALLOWED_GROUPS**` (default `**admins**` when unset in Compose). That is **one** policy for **both** those admin surfaces: comma-separated group names are **OR** (membership in any listed group is enough). Details and env spelling are in [Environment variables](../01_infra/02_env.md#oauth2-proxy-allowed-groups).
 
@@ -52,7 +52,7 @@ Filtering is **not** done inside oauth2-proxy. **Traefik** decides, per **HTTP r
 Request → Traefik matches a router (rule) → runs middleware chain → ForwardAuth calls one URL → that URL is one oauth2-proxy:port → that process applies its allowlist
 ```
 
-- `**forwardAuth` in middleware `oidc-auth@file**` → `[kong.yml](../../traefik/dynamic/kong.yml)` points at `http://oauth2-proxy:4180/` (baseline).
+- `**forwardAuth` in middleware `oidc-auth@file**` → `[forward-auth.yml](../../traefik/dynamic/forward-auth.yml)` points at `http://oauth2-proxy:4180/` (baseline).
 - `**forwardAuth` in middleware `oidc-auth-internal@file**` → you point at `http://oauth2-proxy-internal:4181/` (example second tier).
 
 So: **which proxy** = **which middleware name** you put on the **router** that matches the traffic.
@@ -62,8 +62,8 @@ So: **which proxy** = **which middleware name** you put on the **router** that m
 
 | Mechanism                              | Typical use                                                                   | What you set                                                                                                       |
 | -------------------------------------- | ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| **Docker labels** on a Compose service | Per-app or per-host routing (`traefik` and `kong` services already do this)   | `traefik.http.routers.<routerName>.rule` (Host, PathPrefix, …) and `traefik.http.routers.<routerName>.middlewares` |
-| **File provider** YAML                 | Shared routes in `[traefik/dynamic/kong.yml](../../traefik/dynamic/kong.yml)` | `http.routers.<name>.rule`, `middlewares`, `priority`                                                              |
+| **Docker labels** on a Compose service | Per-host routing (Traefik dashboard, GitLab, Vault, protected consoles, …) | `traefik.http.routers.<routerName>.rule` (Host, PathPrefix, …) and `traefik.http.routers.<routerName>.middlewares` |
+| **File provider** YAML                 | Shared routes in `[traefik/dynamic/forward-auth.yml](../../traefik/dynamic/forward-auth.yml)` | `http.routers.<name>.rule`, `middlewares`, `priority`                                                              |
 
 
 Examples from this repo (baseline `**oidc-auth@file`** on specific hosts only):
@@ -75,14 +75,14 @@ traefik.http.routers.traefik-dashboard.rule: "Host(`${TRAEFIK_DOMAIN}`)"
 traefik.http.routers.traefik-dashboard.middlewares: "oidc-auth@file,traefik-root-redirect"
 ```
 
-**Kong Admin API UI** (`kong` service):
+**MinIO console** (`minio` service — same label pattern):
 
 ```yaml
-traefik.http.routers.kong-admin.rule: "Host(`${KONG_ADMIN_DOMAIN}`)"
-traefik.http.routers.kong-admin.middlewares: "oidc-auth@file"
+traefik.http.routers.minio-console.rule: "Host(`${MINIO_CONSOLE_DOMAIN}`)"
+traefik.http.routers.minio-console.middlewares: "oidc-auth@file"
 ```
 
-To put **another** hostname on the **internal** tier proxy, you use a **different** middleware list, e.g. `oidc-auth-internal@file` (after you define that middleware next to `oidc-auth` in `kong.yml`).
+To put **another** hostname on the **internal** tier proxy, you use a **different** middleware list, e.g. `oidc-auth-internal@file` (after you define that middleware next to `oidc-auth` in `forward-auth.yml`).
 
 ### Host vs path (and combining them)
 
@@ -93,12 +93,12 @@ Traefik’s own docs: [HTTP routing](https://doc.traefik.io/traefik/master/routi
 
 ### Priority vs catch-all
 
-In `[kong.yml](../../traefik/dynamic/kong.yml)`, `**kong-catchall`** uses **priority `1`** (lowest) and **no** OIDC middleware—so most traffic hits Kong without ForwardAuth. Higher-priority routers (for example dashboard **100** on a specific `Host`) match first and **do** run `oidc-auth@file`. When you add routers for internal tools, give them a **priority higher than 1** and a `**Host`/`Path` rule** that only matches those URLs.
+**Phase 5** removed Kong and the old anonymous PathPrefix `/` catch-all. `forward-auth.yml` defines only the `oidc-auth` middleware. Platform services use explicit Host() routers in `docker-compose.yml` (priority 30); application zones use `traefik/dynamic/k3d-passthrough.yml`. Unmatched hosts get Traefik's default 404. When you add internal tools, give each router a clear Host/Path rule and attach `oidc-auth@file` (or a sibling middleware) as needed.
 
 ### OAuth callback hosts vs app routers (easy to confuse)
 
 - **ForwardAuth** runs on the **router that fronts your app** (dashboard, internal tool, …)—that chooses `**oidc-auth`** vs `**oidc-auth-internal**`.
-- **Kong route to `OAUTH_DOMAIN` / `OAUTH_INTERNAL_DOMAIN**` only serves the **browser OAuth redirect** (`/oauth2/callback`) for the matching oauth2-proxy process. It does **not** decide per-path app policy; it only exposes the callback URL for login.
+- **Traefik route to `${OAUTH_DOMAIN}`** (see `oauth2-proxy` labels in `docker-compose.yml`) serves the **browser OAuth redirect** (`/oauth2/callback`) for oauth2-proxy. It does **not** decide per-path app policy; it only exposes the callback URL for login.
 
 ### Multiple services or routes
 
@@ -211,7 +211,7 @@ Adjust names to match your convention. `**OAUTH2_PROXY_ALLOWED_GROUPS**` must st
 | ---------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `.env` (document new keys in `[sample.env](../../sample.env)` if your team tracks suggestions there) | `OAUTH_INTERNAL_DOMAIN`, optional `KC_CLIENT_SECRET_OAUTH2_PROXY_INTERNAL`, `OAUTH2_PROXY_INTERNAL_ALLOWED_GROUPS`, optional `OAUTH2_PROXY_INTERNAL_CLIENT_ID` |
 | `[docker-compose.yml](../../docker-compose.yml)`                                                     | New service block; Traefik `networks.devops-network.aliases` entry for the new OAuth hostname                                                                  |
-| `[traefik/dynamic/kong.yml](../../traefik/dynamic/kong.yml)`                                         | New `middlewares` entry pointing at `http://oauth2-proxy-internal:4181/`                                                                                       |
+| `[traefik/dynamic/forward-auth.yml](../../traefik/dynamic/forward-auth.yml)`                                         | New `middlewares` entry pointing at `http://oauth2-proxy-internal:4181/`                                                                                       |
 | `[kong/kong.template.yml](../../kong/kong.template.yml)`                                             | New `service` + `route` for `${OAUTH_INTERNAL_DOMAIN}` → new upstream                                                                                          |
 | Keycloak admin UI                                                                                    | Valid redirect URI(s); optional new OIDC client                                                                                                                |
 | New or existing Compose service for the app                                                          | Traefik labels referencing `oidc-auth-internal@file`                                                                                                           |
@@ -284,7 +284,7 @@ Add a service (mirror `[oauth2-proxy](../../docker-compose.yml)`; change names, 
 
 (`KEYCLOAK_DOMAIN`, `OAUTH_DOMAIN`, etc. are already listed there—same pattern.)
 
-### 3) `traefik/dynamic/kong.yml` — ForwardAuth middleware
+### 3) `traefik/dynamic/forward-auth.yml` — ForwardAuth middleware
 
 Append a sibling middleware under `http.middlewares` (keep `**oidc-auth**` unchanged for the stock admin proxy):
 
@@ -360,7 +360,7 @@ Re-run Kong deck sync if that is how you apply `kong.template.yml`. Then test wi
 
 - **Traefik:** one ForwardAuth middleware name per oauth2-proxy listener; router `**middlewares`** choose which tier applies.
 - **Kong:** each `**OAUTH_*_DOMAIN`** that serves `**/oauth2/callback**` needs a route to the matching container port.
-- **Catch-all:** the `**kong-catchall`** router is still unauthenticated unless you add higher-priority routers with OIDC—usually application APIs stay protected inside apps or Kong plugins, not via extra oauth2-proxy tiers for every path.
+- **Catch-all:** removed in Phase 5 with Kong. Use explicit Host/Path routers and ForwardAuth middlewares; application APIs should enforce auth in the app or at the Ingress layer.
 
 ---
 
@@ -409,7 +409,7 @@ flowchart LR
 ## Summary
 
 - **Which URLs use which proxy:** Traefik **router `rule` + `middlewares`** (labels or dynamic YAML)—see [How Traefik picks which oauth2-proxy](#how-traefik-picks-which-oauth2-proxy-for-which-service-or-path). **Many routes, one tier:** add **one router per URL** and reuse the same `middlewares`; see [Multiple services or routes](#multiple-services-or-routes).
-- **Copy-paste walkthrough:** see [Quickstart](#quickstart-add-a-second-oauth2-proxy-internal-example) for concrete `**docker-compose.yml`**, `[kong.yml](../../traefik/dynamic/kong.yml)`, `[kong.template.yml](../../kong/kong.template.yml)`, and label snippets.
+- **Copy-paste walkthrough:** see [Quickstart](#quickstart-add-a-second-oauth2-proxy-internal-example) for concrete `**docker-compose.yml`**, `[forward-auth.yml](../../traefik/dynamic/forward-auth.yml)`, `[kong.template.yml](../../kong/kong.template.yml)`, and label snippets.
 - **Shipped:** one oauth2-proxy + `**oidc-auth`** + `**OAUTH2_PROXY_ALLOWED_GROUPS**` for operator surfaces—no separate “internal/external” services unless you add them.
 - **Tiered auth** means **extending** Compose, Traefik dynamic config, Kong, and Keycloak redirect URIs/clients using the same oauth2-proxy pattern **again**, with **distinct** allowlists and callbacks per tier.
 - **admin / internal / external** in this page are **examples**, not a built-in three-tier product mode.

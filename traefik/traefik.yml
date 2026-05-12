@@ -3,7 +3,7 @@
 # ==========================================================================
 # Edge reverse proxy. Terminates TLS via Let's Encrypt ACME (DNS challenge).
 # Wildcard cert for *.devops.{DOMAIN} via Cloudflare DNS provider.
-# Redirects HTTP -> HTTPS. Forwards all unmatched traffic to Kong.
+# Redirects HTTP -> HTTPS. Unmatched hosts return 404 (no Kong catch-all).
 # __DOMAIN__ and __ACME_EMAIL__ placeholders are substituted at container
 # startup via sed (see docker-compose.yml traefik entrypoint).
 # ==========================================================================

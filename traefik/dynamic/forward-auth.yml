@@ -1,0 +1,18 @@
+# =============================================================================
+# Traefik dynamic — ForwardAuth middleware (Phase 5)
+# =============================================================================
+# Previously shipped alongside the Kong catch-all in `kong.yml`. Kong has been
+# removed; platform services are routed directly via Docker provider labels.
+# This file only defines shared middleware referenced as `oidc-auth@file`.
+# =============================================================================
+
+http:
+  middlewares:
+    oidc-auth:
+      forwardAuth:
+        address: "http://oauth2-proxy:4180/"
+        trustForwardHeader: true
+        authResponseHeaders:
+          - "X-Auth-Request-User"
+          - "X-Auth-Request-Email"
+          - "X-Auth-Request-Access-Token"

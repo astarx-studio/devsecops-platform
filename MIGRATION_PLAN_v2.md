@@ -607,6 +607,8 @@ Each phase: **goal**, **prerequisites**, **tasks** (Cursor-style checkboxes), **
 
 ### Phase 5 — Cutover & cleanup
 
+**Implemented in this repo (compose + docs):** Kong stack removed from `docker-compose.yml`; Traefik **Docker labels** added for Keycloak, Vault, GitLab (HTTP + registry), Management API, and oauth2-proxy; `traefik/dynamic/kong.yml` replaced by `traefik/dynamic/forward-auth.yml` (ForwardAuth only); `kong/kong.template.yml` removed; `sample.env` stripped of `KONG_*`; Keycloak realm oauth2-proxy client web origins no longer reference Kong; `__DOCS__/03_devs/05_deployments.md` rewritten for v2 Auto DevOps; `bootstrap/phase5-archive-kong-db.sh` archives `.vols/kong-db` if present. **Operators must still:** migrate or pin legacy Mongo projects, run the archive script / delete volume data, smoke-test production, and tag **`v2.0.0`** when GA.
+
 **Goal**: All projects migrated or explicitly pinned. Kong + CF moving parts removed.
 
 **Prerequisites**: Phase 4 stable in production.
@@ -622,8 +624,8 @@ Each phase: **goal**, **prerequisites**, **tasks** (Cursor-style checkboxes), **
   - [ ] Remove from `docker-compose.yml`: `kong-db`, `kong-migration`, `kong`, `kong-deck-sync`
   - [ ] Remove `kong/` directory and `traefik/dynamic/kong.yml`
   - [ ] Remove `KONG_*` env vars from `sample.env`
-  - [ ] Remove Cloudflare API token + zone vars from `api` env (keep `CLOUDFLARE_TUNNEL_TOKEN`)
-  - [ ] Archive `.vols/kong-db` → `backups/v1-kong-db-YYYYMMDD.tar.gz`; delete working copy
+  - [ ] Remove Cloudflare API token + zone vars from `api` env (keep `CLOUDFLARE_TUNNEL_TOKEN`) — *no `CLOUDFLARE_*` on `api` in compose today; Traefik keeps ACME DNS token*
+  - [ ] Archive `.vols/kong-db` → `backups/v1-kong-db-YYYYMMDD.tar.gz`; delete working copy — *helper: `./bootstrap/phase5-archive-kong-db.sh`*
 - [ ] Update `__DOCS__/03_devs/05_deployments.md` to describe the Auto DevOps flow
 - [ ] Tag `v2.0.0`
 
@@ -657,11 +659,24 @@ Each phase: **goal**, **prerequisites**, **tasks** (Cursor-style checkboxes), **
 - [ ] Add `Makefile`:
   - `make bootstrap`, `make reset`, `make smoke`, `make backup`, `make restore`, `make migrate-v1`
 - [ ] Update `__DOCS__/01_infra/03_bootstrap.md` for the one-liner
-- [ ] New `__DOCS__/01_infra/06_k3d_and_k8s.md` — kubectl operations, troubleshooting
-- [ ] New `__DOCS__/99_maintainers/06_ci_cd.md` — chart wrapper + Auto DevOps pipeline internals
+- [ ] New `__DOCS__/01_infra/06_k3d_and_k8s.md` — kubectl operations, troubleshooting (**must cover Phase 6.1** items: ServiceLB off, NodePort 30080, outer↔inner Traefik URL, Traefik v3 `HostRegexp`, passthrough health check pitfall, `K3D_CLUSTER_NAME` vs hostname)
+- [ ] New `__DOCS__/99_maintainers/06_ci_cd.md` — chart wrapper + Auto DevOps pipeline internals (**must cover Phase 6.1** items: `CHART_VERSION`, `ExternalSecret` path semantics, registry pull secret + `kubectl` in deploy job, Helm `pending-*` pre-flight, port-80 convention)
 - [ ] Update `__DOCS__/99_maintainers/03_management_api.md` for GraphQL schema
 - [ ] Replace `__DOCS__/03_devs/05_deployments.md` content for v2 deploy model
 - [ ] Mark `__DOCS__/02_admin/05_management_api.md` as v1 (Swagger) or rewrite for GraphQL Sandbox
+
+#### Phase 6.1 — E2E / Phase 4.5 operational findings (must be explicit in docs + bootstrap)
+
+These items were discovered during end-to-end validation (Phase 4.5). They are **already reflected in repo config** where noted; Phase 6 must **capture them in `bootstrap/bootstrap.sh` ordering**, **`__DOCS__/01_infra/06_k3d_and_k8s.md`**, and **`__DOCS__/99_maintainers/06_ci_cd.md`** so a clean machine does not depend on tribal knowledge.
+
+- [ ] **k3d without ServiceLB** — `bootstrap/k3d-cluster.sh` uses `--k3s-arg "--disable=servicelb@server:*"`. With klipper-lb off, a `LoadBalancer` Service for in-cluster Traefik never gets a reachable “LB” path through `k3d-*-serverlb`. **Mitigation (in repo):** `bootstrap/charts/traefik-values.yaml` sets the Traefik chart Service to **`NodePort`** with fixed **`nodePort: 30080`** on the web port; `bootstrap/k8s-primitives.sh` applies it on install/upgrade.
+- [ ] **Outer Traefik → inner Traefik** — `traefik/dynamic/k3d-passthrough.yml` must forward to **`http://k3d-<K3D_CLUSTER_NAME>-server-0:30080`** on `devops-network` (not host port `8081` on the LB container). **Replicability caveat:** the hostname embeds the cluster name (default `dsoaas`). If `K3D_CLUSTER_NAME` is changed, **passthrough URLs must be updated in lockstep** (or templated). Document this in `06_k3d_and_k8s.md`.
+- [ ] **Traefik v3 `HostRegexp` syntax** — Outer Traefik is v3.x. Rules must use **Traefik v3 / Go regexp** (e.g. ``HostRegexp(`[a-z0-9-]+\\.dev\\.apps\\.<DOMAIN>`)``). The older **v2 named-group** form ``HostRegexp(`{subdomain:[a-z0-9-]+}.dev.apps.<DOMAIN>`)`` **does not match** in v3, so app-zone traffic silently misses k3d routes and falls through to Kong (`404` / “no Route matched”). Capture this in `06_k3d_and_k8s.md` with a before/after example.
+- [ ] **No active health check on the k3d passthrough backend** — An `http` health check on `k3d-ingress` that probes **`/ping` on the web NodePort** fails (inner Traefik exposes `/ping` on its **internal** entrypoint, not on the Service’s web port), so Traefik marks the server **DOWN** and clients see **“No Available Server”**. **Mitigation (in repo):** remove the active `healthCheck` from the `k3d-ingress` service; rely on passive upstream handling. Document why in `06_k3d_and_k8s.md`.
+- [ ] **GitLab object storage (MinIO)** — GitLab needs a real S3-compatible backend for artifacts (and related object types) in dev; local paths break uploads and can **bootloop** Omnibus if buckets/types are incomplete. **In repo:** `docker-compose.yml` adds `minio` / `minio-init`, env keys in `sample.env`, and `bootstrap/minio-bootstrap.sh` for idempotent buckets. Bootstrap order must ensure MinIO is up before GitLab is relied on for CI artifacts; document in `03_bootstrap.md` / compose notes.
+- [ ] **Vault ↔ ExternalSecrets** — Kubernetes auth for Vault (`bootstrap/vault-k8s-auth.sh`) must succeed after k3d + ESO CRDs exist; ESO `ClusterSecretStore` otherwise stays unhealthy. Chart `ExternalSecret` **`dataFrom.extract.key`** must use the **full KV path** (`{{ .Values.project.path }}/{{ .Values.project.env }}`) without an extra hard-coded `projects/` prefix if `project.path` already includes it. Per-environment Vault KV paths must be **seeded for every deploy env** (sentinel keys at minimum) so sync never targets an empty path. Document in `06_ci_cd.md` + management API docs.
+- [ ] **Auto DevOps pipeline robustness (GitLab project `configs/auto-devops-pipeline`)** — Deploy jobs need **`kubectl`** (e.g. Alpine image) to create a **`docker-registry`** pull secret from `CI_REGISTRY_*` so the cluster can pull private GitLab images; pass **`imagePullSecrets`** into Helm. Add a **pre-flight** for Helm releases stuck in **`pending-install` / `pending-upgrade` / `pending-rollback`** (rollback or uninstall before `helm upgrade`). Keep **`CHART_VERSION`** aligned with tagged chart releases in `configs/auto-devops-chart`. Document in `06_ci_cd.md`.
+- [ ] **Container listen port convention** — Standardize app images on **container port 80** (`EXPOSE 80`, `ENV PORT=80` for Node apps). The `dsoaas-app` chart default **`service.targetPort: 80`** avoids per-repo `chart-values.yaml` port overrides. Document for template authors in `05_deployments.md`.
 
 **Validation**: On a fresh Docker host + fresh checkout: `make bootstrap` completes; smoke test deploys `hello-world` and reaches it at `hello.dev.apps.<DOMAIN>`.
 
@@ -708,11 +723,14 @@ Phase 7 begins only after Phases 0–6 are stable.
 
 | Path | Action | Phase |
 |---|---|---|
-| `docker-compose.yml` | edit: add `mongo`; later remove Kong | P4.1 / P5 |
+| `docker-compose.yml` | edit: add `mongo`; `minio` / `minio-init`; GitLab `object_store` → MinIO; later remove Kong | P4.1 / P4.5 / P5 / P6.1 |
 | `sample.env`, `.env` | edit: add `MONGO_*`; later remove `KONG_*` | P4.1 / P5 |
-| `traefik/dynamic/kong.yml` | delete | P5 |
-| `traefik/dynamic/k3d-passthrough.yml` | **new** | P1.2 |
+| `traefik/dynamic/kong.yml` | **deleted** (Phase 5); ForwardAuth → `traefik/dynamic/forward-auth.yml` | P5 |
+| `traefik/dynamic/forward-auth.yml` | **new** — `oidc-auth` middleware only | P5 |
+| `traefik/dynamic/k3d-passthrough.yml` | **new**; later edits (NodePort backend, Traefik v3 `HostRegexp`, no active health check on passthrough) — see Phase 6.1 | P1.2 / P6.1 |
 | `traefik/traefik.yml` | edit: add wildcard SANs | P1.2 |
+| `bootstrap/charts/traefik-values.yaml` | **new**; Service `NodePort` + fixed `nodePort: 30080` (ServiceLB off) — see Phase 6.1 | P1.1 / P6.1 |
+| `bootstrap/minio-bootstrap.sh` | **new** (optional manual bucket parity with `minio-init`) | P4.5 / P6.1 |
 | `kong/` (directory) | delete | P5 |
 | `api/src/kong/` | delete | P4.11 |
 | `api/src/cloudflare/` | delete | P4.11 |
@@ -731,10 +749,10 @@ Phase 7 begins only after Phases 0–6 are stable.
 | `Makefile` | **new** | P6 |
 | `__DOCS__/01_infra/01_prereqs.md` | edit: add k3d, helm, mongo | P1.1 |
 | `__DOCS__/01_infra/03_bootstrap.md` | edit: one-liner | P6 |
-| `__DOCS__/01_infra/06_k3d_and_k8s.md` | **new** | P6 |
+| `__DOCS__/01_infra/06_k3d_and_k8s.md` | **new** (must document Phase 6.1) | P6 / P6.1 |
 | `__DOCS__/03_devs/05_deployments.md` | rewrite | P5 / P6 |
 | `__DOCS__/99_maintainers/03_management_api.md` | rewrite for GraphQL | P6 |
-| `__DOCS__/99_maintainers/06_ci_cd.md` | rewrite for chart wrapper | P6 |
+| `__DOCS__/99_maintainers/06_ci_cd.md` | rewrite for chart wrapper (must document Phase 6.1) | P6 / P6.1 |
 | `MIGRATION_PLAN_v2.md` | this file | — |
 
 ### 6.2 — Env-var diff (`sample.env`)
@@ -746,6 +764,12 @@ MONGO_DB_NAME=platform
 K3D_CLUSTER_NAME=dsoaas
 KUBE_API_INTERNAL_URL=https://k3d-dsoaas-server-0:6443
 KUBECONFIG_DIR=/etc/dsoaas/kubeconfigs
+# MinIO (GitLab object storage in dev) — see Phase 6.1
+MINIO_ROOT_USER=...
+MINIO_ROOT_PASSWORD=...
+MINIO_ACCESS_KEY=...
+MINIO_SECRET_KEY=...
+MINIO_CONSOLE_DOMAIN=...
 ```
 
 **Removed (Phase 5)**:
