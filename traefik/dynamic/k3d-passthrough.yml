@@ -70,7 +70,7 @@ http:
         passHostHeader: true
         servers:
           - url: "http://k3d-dsoaas-server-0:30080"
-        healthCheck:
-          path: /ping
-          interval: 30s
-          timeout: 5s
+        # No active health check — inner Traefik serves /ping on its internal
+        # port (8080), not the web NodePort (30080), so an active check would
+        # always return 404 and mark the server DOWN.  Traefik's passive health
+        # checking is sufficient here.
