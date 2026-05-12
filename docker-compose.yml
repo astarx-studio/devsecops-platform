@@ -210,6 +210,13 @@ services:
     depends_on:
       keycloak-db:
         condition: service_healthy
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.keycloak.rule: "Host(`${KEYCLOAK_DOMAIN}`)"
+      traefik.http.routers.keycloak.entrypoints: "websecure"
+      traefik.http.routers.keycloak.tls.certresolver: "letsencrypt"
+      # Keycloak is the IdP itself; no ForwardAuth middleware here.
+      traefik.http.services.keycloak.loadbalancer.server.port: "8080"
     networks:
       - devops-network
 
@@ -240,6 +247,13 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.vault.rule: "Host(`${VAULT_DOMAIN}`)"
+      traefik.http.routers.vault.entrypoints: "websecure"
+      traefik.http.routers.vault.tls.certresolver: "letsencrypt"
+      # Vault UI handles its own OIDC login; no ForwardAuth middleware here.
+      traefik.http.services.vault.loadbalancer.server.port: "8200"
     networks:
       - devops-network
 
@@ -449,6 +463,15 @@ services:
     depends_on:
       minio:
         condition: service_healthy
+    labels:
+      traefik.enable: "true"
+      # Main GitLab web UI — internal Nginx listens HTTP on :80.
+      # Registry router is defined in traefik/dynamic/gitlab-registry.yml to avoid the
+      # Traefik v3 Docker-provider restriction on multiple services per container.
+      traefik.http.routers.gitlab.rule: "Host(`${GITLAB_DOMAIN}`)"
+      traefik.http.routers.gitlab.entrypoints: "websecure"
+      traefik.http.routers.gitlab.tls.certresolver: "letsencrypt"
+      traefik.http.services.gitlab.loadbalancer.server.port: "80"
     networks:
       - devops-network
 
@@ -562,6 +585,13 @@ services:
         condition: service_healthy
       vault:
         condition: service_healthy
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.api.rule: "Host(`${API_DOMAIN}`)"
+      traefik.http.routers.api.entrypoints: "websecure"
+      traefik.http.routers.api.tls.certresolver: "letsencrypt"
+      # API authenticates callers via OIDC JWT (Bearer tokens); no ForwardAuth here.
+      traefik.http.services.api.loadbalancer.server.port: "3000"
     networks:
       - devops-network
 
@@ -633,6 +663,13 @@ services:
     depends_on:
       keycloak:
         condition: service_healthy
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.oauth2-proxy.rule: "Host(`${OAUTH_DOMAIN}`)"
+      traefik.http.routers.oauth2-proxy.entrypoints: "websecure"
+      traefik.http.routers.oauth2-proxy.tls.certresolver: "letsencrypt"
+      # oauth2-proxy IS the ForwardAuth target; never apply oidc-auth to itself.
+      traefik.http.services.oauth2-proxy.loadbalancer.server.port: "4180"
     networks:
       - devops-network
 

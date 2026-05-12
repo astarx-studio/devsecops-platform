@@ -1,0 +1,24 @@
+# ==========================================================================
+# Traefik dynamic config — GitLab Container Registry router
+# ==========================================================================
+# Routes HTTPS traffic for ${GITLAB_REGISTRY_DOMAIN} → gitlab container :5000.
+# Defined here (file provider) rather than as a Docker label because Traefik v3
+# rejects containers that declare more than one service via Docker labels;
+# the main gitlab router (port 80) stays on the container label instead.
+# ==========================================================================
+
+http:
+  routers:
+    gitlab-registry:
+      rule: "Host(`registry.devops.__DOMAIN__`)"
+      entryPoints:
+        - websecure
+      service: gitlab-registry
+      tls:
+        certResolver: letsencrypt
+
+  services:
+    gitlab-registry:
+      loadBalancer:
+        servers:
+          - url: "http://gitlab:5000"
