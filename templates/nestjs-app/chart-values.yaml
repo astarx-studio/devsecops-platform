@@ -4,6 +4,10 @@
 # These values are merged on top of the chart defaults during `helm upgrade`.
 # Commit this file to your app repo; the pipeline picks it up automatically.
 #
+# Project metadata (path, env, host) is injected by the pipeline at deploy time
+# via --set flags — do not duplicate those here.
+# Override only app-specific values: probes, resources, replicaCount, extraEnv.
+#
 # DO NOT put secrets here. Secrets come from Vault via ExternalSecret.
 # =============================================================================
 
