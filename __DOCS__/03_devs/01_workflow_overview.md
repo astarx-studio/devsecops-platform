@@ -22,6 +22,8 @@ When a new project is set up for you through the Management API, several things 
 
 Your repository lives under a group path like `clients/<your-client>/<your-project>`. You can find it in GitLab by browsing to your client's group.
 
+If you have an existing repository that you'd like to bring onto the platform without re-provisioning it through the API, see [Manual onboarding](06_manual_onboarding.md) for the opt-in recipe.
+
 ---
 
 ## Pushing code
