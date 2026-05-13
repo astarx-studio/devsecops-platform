@@ -622,7 +622,7 @@ The Kong stack, Cloudflare Management API integration, and related Traefik catch
 
 ---
 
-### Phase 6 — Replicability
+### Phase 6 — Replicability (**executed in repo — 2026-05-12**)
 
 **Goal**: A clean machine goes from zero → fully working v2 platform via one command.
 
@@ -630,42 +630,43 @@ The Kong stack, Cloudflare Management API integration, and related Traefik catch
 
 **Tasks**:
 
-- [ ] Author `bootstrap/bootstrap.sh`:
+- [x] Author `bootstrap/bootstrap.sh` (orchestrates checks → compose → GitLab wait → k3d → k8s primitives → Vault K8s auth → runner RBAC → seed → smoke). Compose profile is **not** hard-coded; pass `COMPOSE_EXTRA_ARGS="--profile cftunnel"` when needed.
   ```bash
   #!/usr/bin/env bash
   set -euo pipefail
   ./bootstrap/checks/prereqs.sh        # docker, k3d, helm, jq present
-  docker compose --profile cftunnel up -d
+  docker compose ${COMPOSE_EXTRA_ARGS:-} up -d
   ./bootstrap/checks/wait-gitlab.sh    # poll /-/health
   ./bootstrap/k3d-cluster.sh           # idempotent
   ./bootstrap/k8s-primitives.sh        # in-cluster traefik, ESO, namespaces
   ./bootstrap/vault-k8s-auth.sh        # enable K8s auth + policy + role + ClusterSecretStore
-  ./bootstrap/seed-platform-projects.sh  # configs/* + templates/* in GitLab
+  ./bootstrap/runner-rbac.sh
+  ./bootstrap/seed-platform-projects.sh  # configs/* (+ git push for auto-devops-* repos)
   ./bootstrap/smoke-test.sh
   ```
-- [ ] Add `Makefile`:
-  - `make bootstrap`, `make reset`, `make smoke`, `make backup`, `make restore`, `make migrate-v1`
-- [ ] Update `__DOCS__/01_infra/03_bootstrap.md` for the one-liner
-- [ ] New `__DOCS__/01_infra/06_k3d_and_k8s.md` — kubectl operations, troubleshooting (**must cover Phase 6.1** items: ServiceLB off, NodePort 30080, outer↔inner Traefik URL, Traefik v3 `HostRegexp`, passthrough health check pitfall, `K3D_CLUSTER_NAME` vs hostname)
-- [ ] New `__DOCS__/99_maintainers/06_ci_cd.md` — chart wrapper + Auto DevOps pipeline internals (**must cover Phase 6.1** items: `CHART_VERSION`, `ExternalSecret` path semantics, registry pull secret + `kubectl` in deploy job, Helm `pending-*` pre-flight, port-80 convention)
-- [ ] Update `__DOCS__/99_maintainers/03_management_api.md` for GraphQL schema
-- [ ] Replace `__DOCS__/03_devs/05_deployments.md` content for v2 deploy model
-- [ ] Mark `__DOCS__/02_admin/05_management_api.md` as v1 (Swagger) or rewrite for GraphQL Sandbox
+- [x] Add `Makefile`:
+  - `make bootstrap`, `make smoke`; `make reset` / `backup` / `restore` / `migrate-v1` **stub** with pointer to docs (not automated in Make).
+- [x] Update `__DOCS__/01_infra/03_bootstrap.md` for the one-liner
+- [x] New `__DOCS__/01_infra/06_k3d_and_k8s.md` — kubectl operations, troubleshooting (**Phase 6.1**: ServiceLB off, NodePort 30080, outer↔inner Traefik URL, Traefik v3 `HostRegexp`, passthrough health check pitfall, `K3D_CLUSTER_NAME` vs hostname)
+- [x] Extend `__DOCS__/99_maintainers/06_ci_cd.md` — Auto DevOps pipeline internals (**Phase 6.1**: `CHART_VERSION`, `ExternalSecret` path semantics, registry pull secret + `kubectl` in deploy job, Helm `pending-*` pre-flight, port-80 convention)
+- [x] Update `__DOCS__/99_maintainers/03_management_api.md` for GraphQL schema / introspection
+- [x] Align `__DOCS__/03_devs/05_deployments.md` for v2 deploy model (port 80 convention)
+- [x] Update `__DOCS__/02_admin/05_management_api.md` with link to maintainer GraphQL reference (admin page stays short)
 
 #### Phase 6.1 — E2E / Phase 4.5 operational findings (must be explicit in docs + bootstrap)
 
-These items were discovered during end-to-end validation (Phase 4.5). They are **already reflected in repo config** where noted; Phase 6 must **capture them in `bootstrap/bootstrap.sh` ordering**, **`__DOCS__/01_infra/06_k3d_and_k8s.md`**, and **`__DOCS__/99_maintainers/06_ci_cd.md`** so a clean machine does not depend on tribal knowledge.
+These items were discovered during end-to-end validation (Phase 4.5). They are **already reflected in repo config** where noted; Phase 6 **captures them in `bootstrap/bootstrap.sh` ordering**, **`__DOCS__/01_infra/06_k3d_and_k8s.md`**, and **`__DOCS__/99_maintainers/06_ci_cd.md`** so a clean machine does not depend on tribal knowledge.
 
-- [ ] **k3d without ServiceLB** — `bootstrap/k3d-cluster.sh` uses `--k3s-arg "--disable=servicelb@server:*"`. With klipper-lb off, a `LoadBalancer` Service for in-cluster Traefik never gets a reachable “LB” path through `k3d-*-serverlb`. **Mitigation (in repo):** `bootstrap/charts/traefik-values.yaml` sets the Traefik chart Service to **`NodePort`** with fixed **`nodePort: 30080`** on the web port; `bootstrap/k8s-primitives.sh` applies it on install/upgrade.
-- [ ] **Outer Traefik → inner Traefik** — `traefik/dynamic/k3d-passthrough.yml` must forward to **`http://k3d-<K3D_CLUSTER_NAME>-server-0:30080`** on `devops-network` (not host port `8081` on the LB container). **Replicability caveat:** the hostname embeds the cluster name (default `dsoaas`). If `K3D_CLUSTER_NAME` is changed, **passthrough URLs must be updated in lockstep** (or templated). Document this in `06_k3d_and_k8s.md`.
-- [ ] **Traefik v3 `HostRegexp` syntax** — Outer Traefik is v3.x. Rules must use **Traefik v3 / Go regexp** (e.g. ``HostRegexp(`[a-z0-9-]+\\.dev\\.apps\\.<DOMAIN>`)``). The older **v2 named-group** form ``HostRegexp(`{subdomain:[a-z0-9-]+}.dev.apps.<DOMAIN>`)`` **does not match** in v3, so app-zone traffic silently misses k3d routes and falls through to Traefik’s default handling (typically **404** / “no Route matched”). Capture this in `06_k3d_and_k8s.md` with a before/after example.
-- [ ] **No active health check on the k3d passthrough backend** — An `http` health check on `k3d-ingress` that probes **`/ping` on the web NodePort** fails (inner Traefik exposes `/ping` on its **internal** entrypoint, not on the Service’s web port), so Traefik marks the server **DOWN** and clients see **“No Available Server”**. **Mitigation (in repo):** remove the active `healthCheck` from the `k3d-ingress` service; rely on passive upstream handling. Document why in `06_k3d_and_k8s.md`.
-- [ ] **GitLab object storage (MinIO)** — GitLab needs a real S3-compatible backend for artifacts (and related object types) in dev; local paths break uploads and can **bootloop** Omnibus if buckets/types are incomplete. **In repo:** `docker-compose.yml` adds `minio` / `minio-init`, env keys in `sample.env`, and `bootstrap/minio-bootstrap.sh` for idempotent buckets. Bootstrap order must ensure MinIO is up before GitLab is relied on for CI artifacts; document in `03_bootstrap.md` / compose notes.
-- [ ] **Vault ↔ ExternalSecrets** — Kubernetes auth for Vault (`bootstrap/vault-k8s-auth.sh`) must succeed after k3d + ESO CRDs exist; ESO `ClusterSecretStore` otherwise stays unhealthy. Chart `ExternalSecret` **`dataFrom.extract.key`** must use the **full KV path** (`{{ .Values.project.path }}/{{ .Values.project.env }}`) without an extra hard-coded `projects/` prefix if `project.path` already includes it. Per-environment Vault KV paths must be **seeded for every deploy env** (sentinel keys at minimum) so sync never targets an empty path. Document in `06_ci_cd.md` + management API docs.
-- [ ] **Auto DevOps pipeline robustness (GitLab project `configs/auto-devops-pipeline`)** — Deploy jobs need **`kubectl`** (e.g. Alpine image) to create a **`docker-registry`** pull secret from `CI_REGISTRY_*` so the cluster can pull private GitLab images; pass **`imagePullSecrets`** into Helm. Add a **pre-flight** for Helm releases stuck in **`pending-install` / `pending-upgrade` / `pending-rollback`** (rollback or uninstall before `helm upgrade`). Keep **`CHART_VERSION`** aligned with tagged chart releases in `configs/auto-devops-chart`. Document in `06_ci_cd.md`.
-- [ ] **Container listen port convention** — Standardize app images on **container port 80** (`EXPOSE 80`, `ENV PORT=80` for Node apps). The `dsoaas-app` chart default **`service.targetPort: 80`** avoids per-repo `chart-values.yaml` port overrides. Document for template authors in `05_deployments.md`.
+- [x] **k3d without ServiceLB** — `bootstrap/k3d-cluster.sh` uses `--k3s-arg "--disable=servicelb@server:*"`. With klipper-lb off, a `LoadBalancer` Service for in-cluster Traefik never gets a reachable “LB” path through `k3d-*-serverlb`. **Mitigation (in repo):** `bootstrap/charts/traefik-values.yaml` sets the Traefik chart Service to **`NodePort`** with fixed **`nodePort: 30080`** on the web port; `bootstrap/k8s-primitives.sh` applies it on install/upgrade.
+- [x] **Outer Traefik → inner Traefik** — `traefik/dynamic/k3d-passthrough.yml` must forward to **`http://k3d-<K3D_CLUSTER_NAME>-server-0:30080`** on `devops-network` (not host port `8081` on the LB container). **Replicability caveat:** the hostname embeds the cluster name (default `dsoaas`). If `K3D_CLUSTER_NAME` is changed, **passthrough URLs must be updated in lockstep** (or templated). Document this in `06_k3d_and_k8s.md`.
+- [x] **Traefik v3 `HostRegexp` syntax** — Outer Traefik is v3.x. Rules must use **Traefik v3 / Go regexp** (e.g. ``HostRegexp(`[a-z0-9-]+\\.dev\\.apps\\.<DOMAIN>`)``). The older **v2 named-group** form ``HostRegexp(`{subdomain:[a-z0-9-]+}.dev.apps.<DOMAIN>`)`` **does not match** in v3, so app-zone traffic silently misses k3d routes and falls through to Traefik’s default handling (typically **404** / “no Route matched”). Capture this in `06_k3d_and_k8s.md` with a before/after example.
+- [x] **No active health check on the k3d passthrough backend** — An `http` health check on `k3d-ingress` that probes **`/ping` on the web NodePort** fails (inner Traefik exposes `/ping` on its **internal** entrypoint, not on the Service’s web port), so Traefik marks the server **DOWN** and clients see **“No Available Server”**. **Mitigation (in repo):** remove the active `healthCheck` from the `k3d-ingress` service; rely on passive upstream handling. Document why in `06_k3d_and_k8s.md`.
+- [x] **GitLab object storage (MinIO)** — GitLab needs a real S3-compatible backend for artifacts (and related object types) in dev; local paths break uploads and can **bootloop** Omnibus if buckets/types are incomplete. **In repo:** `docker-compose.yml` adds `minio` / `minio-init`, env keys in `sample.env`, and `bootstrap/minio-bootstrap.sh` for idempotent buckets. Bootstrap order must ensure MinIO is up before GitLab is relied on for CI artifacts; document in `03_bootstrap.md` / compose notes.
+- [x] **Vault ↔ ExternalSecrets** — Kubernetes auth for Vault (`bootstrap/vault-k8s-auth.sh`) must succeed after k3d + ESO CRDs exist; ESO `ClusterSecretStore` otherwise stays unhealthy. Chart `ExternalSecret` **`dataFrom.extract.key`** must use the **full KV path** (`{{ .Values.project.path }}/{{ .Values.project.env }}`) without an extra hard-coded `projects/` prefix if `project.path` already includes it. Per-environment Vault KV paths must be **seeded for every deploy env** (sentinel keys at minimum) so sync never targets an empty path. Document in `06_ci_cd.md` + management API docs.
+- [x] **Auto DevOps pipeline robustness (GitLab project `configs/auto-devops-pipeline`)** — Deploy jobs need **`kubectl`** (e.g. Alpine image) to create a **`docker-registry`** pull secret from `CI_REGISTRY_*` so the cluster can pull private GitLab images; pass **`imagePullSecrets`** into Helm. Add a **pre-flight** for Helm releases stuck in **`pending-install` / `pending-upgrade` / `pending-rollback`** (rollback or uninstall before `helm upgrade`). Keep **`CHART_VERSION`** aligned with tagged chart releases in `configs/auto-devops-chart`. Document in `06_ci_cd.md`.
+- [x] **Container listen port convention** — Standardize app images on **container port 80** (`EXPOSE 80`, `ENV PORT=80` for Node apps). The `dsoaas-app` chart default **`service.targetPort: 80`** avoids per-repo `chart-values.yaml` port overrides. Document for template authors in `05_deployments.md`.
 
-**Validation**: On a fresh Docker host + fresh checkout: `make bootstrap` completes; smoke test deploys `hello-world` and reaches it at `hello.dev.apps.<DOMAIN>`.
+**Validation**: On a fresh Docker host + fresh checkout: `make bootstrap` completes; `make smoke` verifies k3d context, in-cluster Traefik, ESO CRD, and Management API `GET /health` on the mapped host port. End-to-end app URL checks remain operator responsibility.
 
 **Backward-compat**: Tooling-only phase.
 
@@ -674,6 +675,8 @@ These items were discovered during end-to-end validation (Phase 4.5). They are *
 ### Phase 7 — Frontend (DEFERRED, separate repo)
 
 **Goal**: Web UI on top of the GraphQL API.
+
+**Design doc (milestone):** [`__DOCS__/XX_milestone/02_frontend_console.md`](__DOCS__/XX_milestone/02_frontend_console.md) — shovel-ready scope for a separate repository.
 
 **Scope (sketch only — not in this plan)**:
 
@@ -695,7 +698,7 @@ Phase 7 begins only after Phases 0–6 are stable.
 | ESO → Vault auth misconfig allows cross-namespace secret read | Low | High | Scope Vault policy paths strictly (`secret/data/projects/+/{dev,stg,prod}`); audit role bindings | Revoke Vault role; secrets stop syncing |
 | Outer Traefik wildcard cert renewal fails | Low | Medium | Test with Let's Encrypt staging first; CF DNS-01 already proven | Manual cert load; retry ACME |
 | Apps break when gateway stack changes | Medium | Medium | Phase 5 only after workloads validate on k3d; keep backups of `.vols/*` | Restore volumes + checkout previous git tag |
-| Mongo data loss | Low | High | Daily `make backup`; future: replica set | Restore from latest archive |
+| Mongo data loss | Low | High | Follow [Ongoing operations](__DOCS__/01_infra/04_operations.md) backup guidance; archive `.vols/` regularly; future: replica set | Restore from latest archive |
 | GraphQL DoS via deep / expensive queries | Medium | Low | Depth limit (10), complexity score (100), per-IP rate limit, no public introspection in prod | Disable Sandbox; tighten complexity limit |
 | GitLab CI var leak via `legacyV1` reconciliation | Low | Medium | Reconciliation only reads metadata, never copies secrets between projects | Revert reconciliation; secrets remain in original location |
 | Slug-suffix hash collision (4 hex chars → 65,536 space) | Very low | Low | Resolver throws on second-order collision; admin can call `setHostnameOverride` | Manual override |

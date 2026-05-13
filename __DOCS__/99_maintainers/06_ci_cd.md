@@ -244,4 +244,45 @@ These variables are available in all jobs and are used by the shared configs:
 | `CI_REGISTRY_USER` / `CI_REGISTRY_PASSWORD` | GitLab built-in | Registry auth |
 | `CI_JOB_TOKEN` | GitLab built-in | Short-lived token for package/registry auth |
 
-Project-specific secrets (from OpenBao) are not automatically injected into CI jobs. If a project needs OpenBao secrets in CI, the pipeline must include a step
+Project-specific secrets (from OpenBao) are not automatically injected into CI jobs. If a project needs OpenBao secrets in CI, the pipeline must include an explicit step that reads Vault (for example via `vault` CLI in a job image) or uses another approved secret flow.
+
+---
+
+## Auto DevOps chart, pipeline, and registry (Phase 6.1)
+
+This section captures **operational constraints** for the GitLab projects under `configs/auto-devops-chart` and `configs/auto-devops-pipeline` and for deploy jobs that run **Helm** inside Kubernetes.
+
+### `CHART_VERSION` and tagged chart releases
+
+The packaged Helm chart (`dsoaas-app`) is versioned in `configs/auto-devops-chart` (`Chart.yaml` / Git tags). The pipeline passes **`CHART_VERSION`** (or equivalent) into `helm upgrade` so cluster installs pick a **released** chart artifact. Keep pipeline defaults aligned with the **tagged** chart version you intend clusters to consume; drifting versions produce confusing diffs or failed installs.
+
+### GitLab Container Registry from CI jobs
+
+- **Application image** pulls in the cluster typically use `CI_REGISTRY_IMAGE` and credentials derived from the job environment.
+- **Helm OCI pull** of the platform chart from another project (for example `configs/auto-devops-chart`) often **cannot** use `CI_REGISTRY_USER` / `CI_REGISTRY_PASSWORD` alone, because the job token is scoped to the **running** project. Use a **project deploy token** or **group token** with `read_registry` on the chart project, exposed as masked CI variables (for example `CHART_REGISTRY_USER` / `CHART_REGISTRY_PASSWORD`), and use those in `helm registry login` for the OCI host.
+- **Registry host inside CI jobs on `devops-network`:** use the GitLab Omnibus container hostname and the **registry daemon port** (commonly **`gitlab:5000`** for direct registry API). Port **5005** is an internal nginx alias and is **not** a stable target from the runner network. Keep `helm registry login` and `CHART_OCI_REF` consistent with **`gitlab:5000`** when jobs run on `devops-network`.
+
+### YAML gotcha: `helm registry login` line breaks
+
+In GitLab CI YAML, a **plain-scalar** line that ends with `\` for “bash continuation” can be **folded** by YAML into a single line with a space instead of a newline — producing a broken shell command (extra token, HTML 404 from GitLab, etc.). Prefer a **single-line** `helm registry login ...` or use a **block scalar** (`\|`) for real multiline shell scripts.
+
+### `ExternalSecret` and Vault KV paths
+
+The chart’s `ExternalSecret` **`dataFrom.extract.key`** must match the **full KV path** under your Vault layout (for example `secret/data/<projectPath>/<env>`). If `project.path` in values already includes a prefix such as `projects/acme`, do **not** add another hard-coded `projects/` segment in the chart template — you will point ESO at a non-existent path and sync will fail. The Management API seeds per-environment paths when projects are created; ensure every deploy env has at least a **sentinel** secret so sync never targets an empty path.
+
+### Deploy job: image pull secret and `kubectl`
+
+Private images on the cluster require a **`docker-registry`** secret (or equivalent) in the target namespace, built from registry credentials the cluster understands. The deploy job often needs **`kubectl`** (for example an Alpine-based image with `kubectl` + `helm` installed) to create that secret and to run **`helm upgrade`**. Align `imagePullSecrets` in chart values with the secret name the job creates.
+
+### Helm releases stuck in `pending-install` / `pending-upgrade` / `pending-rollback`
+
+If a prior Helm operation was interrupted, the release can remain **pending** and block upgrades. Add a **pre-flight** in the deploy job: detect pending states and **`helm rollback`**, **`helm uninstall`**, or manual cleanup before `helm upgrade --install`.
+
+### Container listen port convention
+
+Standardize application images on **container port 80** (`EXPOSE 80`, `ENV PORT=80` for Node). The `dsoaas-app` chart defaults **`service.targetPort: 80`**, which avoids per-repo `chart-values.yaml` overrides for port. Document this for template authors (see also [Deployments — developer guide](../../03_devs/05_deployments.md)).
+
+### Related infra
+
+- k3d networking and outer Traefik passthrough: [k3d and Kubernetes](../../01_infra/06_k3d_and_k8s.md)
+- Vault → Kubernetes auth bootstrap: [`bootstrap/vault-k8s-auth.sh`](../../bootstrap/vault-k8s-auth.sh)

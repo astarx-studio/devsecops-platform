@@ -9,6 +9,7 @@ This folder holds **forward-looking feature designs** for the platform — capab
 ## Current milestones
 
 - **[Path-based deployment routing](01_path_based_routing.md)** — Opt-in support for `<domain>/<slug>` URLs alongside the default `<sub>.<sub>.<domain>` pattern. _Status: Proposed._
+- **[Operator console (frontend)](02_frontend_console.md)** — Separate-repo web UI on GraphQL + Keycloak OIDC; deploy as Auto DevOps app at `console.devops.<DOMAIN>`. _Status: Deferred._
 
 ---
 

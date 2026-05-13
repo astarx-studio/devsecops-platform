@@ -43,6 +43,38 @@ The `-d` flag means "detached" — it runs everything in the background so you g
 
 Docker will pull any missing images (this may take a few minutes on first run), create the internal network, and start all containers.
 
+---
+
+## Full stack bootstrap (Docker + k3d + Vault auth)
+
+After the Compose stack is healthy and `.env` contains GitLab and Vault tokens plus `GITLAB_CONFIG_GROUP_ID`, you can run the **orchestrated** bootstrap (Compose is already expected up — the script runs `docker compose up -d` again idempotently, waits for GitLab, then k3d and Kubernetes steps):
+
+```bash
+make bootstrap
+```
+
+Equivalent:
+
+```bash
+./bootstrap/bootstrap.sh
+```
+
+**Optional environment:**
+
+| Variable | Effect |
+|---|---|
+| `COMPOSE_EXTRA_ARGS` | Example: `--profile cftunnel` or `--profile vpnedge` passed to `docker compose up`. |
+| `SKIP_SEED=1` | Skip [`bootstrap/seed-platform-projects.sh`](../../bootstrap/seed-platform-projects.sh) (GitLab API sync of shared config repos). |
+| `SKIP_SMOKE=1` | Skip [`bootstrap/smoke-test.sh`](../../bootstrap/smoke-test.sh). |
+
+**Post-bootstrap checks only:**
+
+```bash
+make smoke
+```
+
+Order inside `bootstrap/bootstrap.sh`: **prereqs** → **docker compose up** → **wait GitLab** → **k3d-cluster** → **k8s-primitives** → **vault-k8s-auth** → **runner-rbac** → **seed** → **smoke**. Compose starts **MinIO** with GitLab; artifact uploads depend on MinIO being healthy (see `docker-compose` service order). Details and pitfalls (NodePort, passthrough, `HostRegexp`) are in [k3d and Kubernetes](06_k3d_and_k8s.md).
+
 > **VPN edge only:** after the stack is up and the `wireguard` container is healthy, continue with the **Edge VM bootstrap** steps in [Networking — VPN edge ingress](../99_maintainers/05_networking.md#edge-vm-bootstrap-fresh-ubuntu) to configure the cloud VM. The platform is reachable locally before this step; the edge VM makes it reachable from the internet.
 
 ---
@@ -152,4 +184,4 @@ GitLab and Keycloak will boot fine even if SMTP is misconfigured — they just w
 
 ---
 
-Once you've confirmed the platform is running, you can start on the [admin setup tasks](../02_admin/index.md), or continue to [day-to-day operations](04_operations.md).
+Once you've confirmed the platform is running, you can start on the [admin setup tasks](../02_admin/index.md), continue to [k3d and Kubernetes](06_k3d_and_k8s.md) if you use Auto DevOps, or move on to [day-to-day operations](04_operations.md).

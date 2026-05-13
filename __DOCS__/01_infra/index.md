@@ -9,8 +9,9 @@ Here's what you'll do, in order:
 1. **[Check prerequisites](01_prereqs.md)** — Make sure your server meets the hardware requirements and has Docker installed.
 2. **[Configure the environment](02_env.md)** — Fill in a single configuration file with your domain, credentials, and API tokens. This is the most important step.
 3. **[Start the platform](03_bootstrap.md)** — Bring everything up with one command and verify it's working.
-4. **[Ongoing operations](04_operations.md)** — How to start, stop, view logs, back up data, and upgrade services.
-5. **[Reset from zero](05_reset_from_zero.md)** — If you ever need to wipe everything and start fresh, this is the procedure.
+4. **[k3d and Kubernetes](06_k3d_and_k8s.md)** — App runtime on the same host: cluster, outer↔inner Traefik, kubectl, and troubleshooting.
+5. **[Ongoing operations](04_operations.md)** — How to start, stop, view logs, back up data, and upgrade services.
+6. **[Reset from zero](05_reset_from_zero.md)** — If you ever need to wipe everything and start fresh, this is the procedure.
 
 ---
 

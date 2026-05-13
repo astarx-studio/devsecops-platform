@@ -4,7 +4,7 @@
 
 The Management API automates project setup: GitLab repository or Auto DevOps project, Vault secrets, MongoDB registry records, and Kubernetes preparation for deployable workloads. **GraphQL** at `POST /graphql` is the supported interface for creates, deletes, and other mutations. REST exposes **read-only** project listing plus **deprecated** stubs that return **410 Gone** for legacy `POST`/`DELETE /projects` callers.
 
----
+For the full controller and DTO reference (including GraphQL behaviour and deprecation payloads), see the maintainer guide: [Management API (maintainer)](../99_maintainers/03_management_api.md).
 
 ## Checking that the API is healthy
 

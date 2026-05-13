@@ -8,7 +8,7 @@ When the Management API provisions a **deployable** project, it writes Auto DevO
 
 ## Where your app listens
 
-The Helm chart / Auto DevOps defaults expect your container to listen on the port configured in GitLab CI (commonly **3000** for Node templates). The Service and Ingress map external HTTP(S) to that container port.
+The **`dsoaas-app`** Helm chart defaults the Service **`targetPort` to 80** so clusters do not need per-repo port overrides. Use **`EXPOSE 80`** and set your process to listen on port **80** inside the container (for Node, `ENV PORT=80` is typical). Older templates that listen on **3000** should either switch to 80 or override chart values consistently. Ingress maps HTTP from inner Traefik to that Service port.
 
 ---
 

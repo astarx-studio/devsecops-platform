@@ -184,7 +184,7 @@ All endpoints are documented via Swagger at `GET /api/docs` (OpenAPI UI). The ra
 
 ### GraphQL (`POST /graphql`)
 
-Primary interface for **project mutations** (create, delete, migrate, hostname overrides, audit queries, and related operations). The schema is **code-first** (see `api/src/projects/graphql/`). Authentication uses the same `CombinedAuthGuard` rules as REST (`X-API-Key` or `Authorization: Bearer`).
+Primary interface for **project mutations** (create, delete, migrate, hostname overrides, audit queries, and related operations). The schema is **code-first** (see `api/src/projects/graphql/`); there is **no separate SDL file URL** — tools discover the schema via **introspection** on `POST /graphql` when `NODE_ENV` is not `production` (introspection is disabled in production). Authentication uses the same `CombinedAuthGuard` rules as REST (`X-API-Key` or `Authorization: Bearer`).
 
 Input types such as `CreateProjectInput` and capability objects live in `api/src/projects/graphql/project.inputs.ts`. Provisioning writes the GitLab repo (fork or Auto DevOps path), seeds Vault, ensures Kubernetes namespaces where kubeconfigs exist, sets CI variables, and persists a `Project` document in MongoDB.
 
