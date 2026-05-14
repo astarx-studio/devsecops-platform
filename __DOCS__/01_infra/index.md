@@ -12,6 +12,7 @@ Here's what you'll do, in order:
 4. **[k3d and Kubernetes](06_k3d_and_k8s.md)** — App runtime on the same host: cluster, outer↔inner Traefik, kubectl, and troubleshooting.
 5. **[Ongoing operations](04_operations.md)** — How to start, stop, view logs, back up data, and upgrade services.
 6. **[Reset from zero](05_reset_from_zero.md)** — If you ever need to wipe everything and start fresh, this is the procedure.
+7. **[Legacy v1 import](07_v1_migration.md)** — Rare operator-only steps if you import old projects; `make migrate-v1` points here.
 
 ---
 

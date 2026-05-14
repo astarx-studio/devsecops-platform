@@ -75,6 +75,16 @@ make smoke
 
 Order inside `bootstrap/bootstrap.sh`: **prereqs** → **docker compose up** → **wait GitLab** → **k3d-cluster** → **k8s-primitives** → **vault-k8s-auth** → **runner-rbac** → **seed** → **smoke**. Compose starts **MinIO** with GitLab; artifact uploads depend on MinIO being healthy (see `docker-compose` service order). Details and pitfalls (NodePort, passthrough, `HostRegexp`) are in [k3d and Kubernetes](06_k3d_and_k8s.md).
 
+### End-to-end smoke deploy (optional)
+
+`make smoke` only checks infrastructure (k3d, Traefik, ESO, Management API `/health`). To validate **provisioning → GitLab CI → deploy → HTTPS** in one go (typically three to eight minutes with a registered runner), run:
+
+```bash
+./bootstrap/smoke-deploy.sh
+```
+
+Optional: `./bootstrap/smoke-deploy.sh --cleanup` deletes the throwaway project from the Management API after a successful URL check. Required `.env` entries include `API_KEY`, `GITLAB_ROOT_TOKEN`, and `GITLAB_DOMAIN`. Override defaults with `SMOKE_SLUG`, `SMOKE_GROUP_PATH` (slash-separated parent path, for example `clients/acme`), `SMOKE_TIMEOUT`, and `API_LOCAL_PORT` if needed. The Make target does not pass flags; invoke the script directly for `--cleanup`.
+
 > **VPN edge only:** after the stack is up and the `wireguard` container is healthy, continue with the **Edge VM bootstrap** steps in [Networking — VPN edge ingress](../99_maintainers/05_networking.md#edge-vm-bootstrap-fresh-ubuntu) to configure the cloud VM. The platform is reachable locally before this step; the edge VM makes it reachable from the internet.
 
 ---

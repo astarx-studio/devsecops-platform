@@ -622,7 +622,7 @@ The Kong stack, Cloudflare Management API integration, and related Traefik catch
 
 ---
 
-### Phase 6 — Replicability (**executed in repo — 2026-05-12**)
+### Phase 6 — Replicability (**executed in repo — 2026-05-12**; **6.5 completion** documented 2026-05-12)
 
 **Goal**: A clean machine goes from zero → fully working v2 platform via one command.
 
@@ -645,7 +645,10 @@ The Kong stack, Cloudflare Management API integration, and related Traefik catch
   ./bootstrap/smoke-test.sh
   ```
 - [x] Add `Makefile`:
-  - `make bootstrap`, `make smoke`; `make reset` / `backup` / `restore` / `migrate-v1` **stub** with pointer to docs (not automated in Make).
+  - `make bootstrap`, `make smoke`, `make smoke-deploy`
+  - `make reset`, `make backup`, `make restore` — implemented via [`bootstrap/reset.sh`](../bootstrap/reset.sh), [`bootstrap/backup.sh`](../bootstrap/backup.sh), [`bootstrap/restore.sh`](../bootstrap/restore.sh) (Phase 6.5)
+  - `make migrate-v1` — prints pointer to [`__DOCS__/01_infra/07_v1_migration.md`](__DOCS__/01_infra/07_v1_migration.md) (doc-only policy; see [`MIGRATION_PLAN_v2_PHASE_6.5.md`](MIGRATION_PLAN_v2_PHASE_6.5.md) §T4)
+- [x] `bootstrap/seed-platform-projects.sh` — nested config repos push with **inline** Git URL (no token persisted in `.git/config`); post-push scrub of remotes (Phase 6.5 / security)
 - [x] Update `__DOCS__/01_infra/03_bootstrap.md` for the one-liner
 - [x] New `__DOCS__/01_infra/06_k3d_and_k8s.md` — kubectl operations, troubleshooting (**Phase 6.1**: ServiceLB off, NodePort 30080, outer↔inner Traefik URL, Traefik v3 `HostRegexp`, passthrough health check pitfall, `K3D_CLUSTER_NAME` vs hostname)
 - [x] Extend `__DOCS__/99_maintainers/06_ci_cd.md` — Auto DevOps pipeline internals (**Phase 6.1**: `CHART_VERSION`, `ExternalSecret` path semantics, registry pull secret + `kubectl` in deploy job, Helm `pending-*` pre-flight, port-80 convention)
@@ -666,9 +669,11 @@ These items were discovered during end-to-end validation (Phase 4.5). They are *
 - [x] **Auto DevOps pipeline robustness (GitLab project `configs/auto-devops-pipeline`)** — Deploy jobs need **`kubectl`** (e.g. Alpine image) to create a **`docker-registry`** pull secret from `CI_REGISTRY_*` so the cluster can pull private GitLab images; pass **`imagePullSecrets`** into Helm. Add a **pre-flight** for Helm releases stuck in **`pending-install` / `pending-upgrade` / `pending-rollback`** (rollback or uninstall before `helm upgrade`). Keep **`CHART_VERSION`** aligned with tagged chart releases in `configs/auto-devops-chart`. Document in `06_ci_cd.md`.
 - [x] **Container listen port convention** — Standardize app images on **container port 80** (`EXPOSE 80`, `ENV PORT=80` for Node apps). The `dsoaas-app` chart default **`service.targetPort: 80`** avoids per-repo `chart-values.yaml` port overrides. Document for template authors in `05_deployments.md`.
 
-**Validation**: On a fresh Docker host + fresh checkout: `make bootstrap` completes; `make smoke` verifies k3d context, in-cluster Traefik, ESO CRD, and Management API `GET /health` on the mapped host port. End-to-end app URL checks remain operator responsibility.
+**Validation**: On a fresh Docker host + fresh checkout: `make bootstrap` completes; `make smoke` verifies k3d context, in-cluster Traefik, ESO CRD, and Management API `GET /health` on the mapped host port. Optional: `make smoke-deploy` exercises provisioning → CI → deploy → app URL (requires a registered GitLab Runner and `API_KEY` / `GITLAB_ROOT_TOKEN` in `.env`). End-to-end app URL checks are otherwise operator responsibility.
 
-**Backward-compat**: Tooling-only phase.
+**Phase 6.5 (plan + execution):** [`MIGRATION_PLAN_v2_PHASE_6.5.md`](MIGRATION_PLAN_v2_PHASE_6.5.md) — closes seed-script token persistence, Makefile parity for reset/backup/restore, `smoke-deploy`, and migrate-v1 doc-only policy (**commit `e17236d`**). Tag **`v2.1.1`** is the suggested post-6.5 release marker (cut by the operator on the merge commit).
+
+**Backward-compat**: Tooling-only phase (Phase 6 and 6.5).
 
 ---
 

@@ -6,6 +6,8 @@ This procedure wipes the platform completely and rebuilds it from scratch. Use i
 
 **Warning: this deletes all data.** That includes all GitLab repositories, all Vault secrets, all Keycloak users, and all CI/CD history. There is no undo.
 
+To **only** tear down the k3d app cluster while keeping Docker volumes, use `make reset` (see [`bootstrap/reset.sh`](../../bootstrap/reset.sh)) instead of this full procedure.
+
 ---
 
 ## Step 1 — Stop the platform
@@ -23,6 +25,8 @@ rm -rf ./.vols
 ```
 
 This removes everything stored by the platform. After this point, all services will start as if they've never run before.
+
+**Optional scripted reset:** `make reset ARGS=--all` runs [`bootstrap/reset.sh`](../../bootstrap/reset.sh) with confirmation, deletes the k3d cluster, and runs `docker compose down -v` (respecting `COMPOSE_EXTRA_ARGS` from `.env`). Take a backup first (`make backup`) if you need to keep any data.
 
 ---
 

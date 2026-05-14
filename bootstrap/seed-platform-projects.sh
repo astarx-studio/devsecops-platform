@@ -6,8 +6,9 @@
 # `.gitlab-ci.yml` in this monorepo (`configs/node-pipeline`, etc.).
 #
 # For `configs/auto-devops-pipeline` and `configs/auto-devops-chart`, if a `.git`
-# directory exists, pushes `main` to `origin` after temporarily setting the
-# remote URL to use `GITLAB_ROOT_TOKEN` (OAuth2 token scheme — no token stored).
+# directory exists, pushes `main` using an **inline** authenticated URL so the
+# PAT is never written into `.git/config` (see `push_git_subtree`). After pushes,
+# nested remotes are scrubbed to token-less HTTPS URLs.
 #
 # Multi-file **templates** (e.g. `templates/nestjs-app`) are not bulk-uploaded here;
 # create or refresh them via the Management API (`POST /templates`) or GitLab UI;
@@ -139,13 +140,31 @@ push_git_subtree() {
   local group_path
   group_path="$(gitlab_get "${GITLAB_API}/groups/${GITLAB_CONFIG_GROUP_ID}" | jq -r '.full_path')"
   [[ -n "${group_path}" && "${group_path}" != "null" ]] || die "Could not resolve config group full_path"
-  local url="https://oauth2:${GITLAB_ROOT_TOKEN}@${GITLAB_DOMAIN}/${group_path}/${slug}.git"
-  git -C "${dir}" remote set-url origin "${url}"
-  if git -C "${dir}" push -u origin main; then
+  # Inline push URL only — never `git remote set-url` with credentials, or the
+  # token is persisted in ${dir}/.git/config (process-list exposure is acceptable
+  # on typical single-operator hosts; use GIT_ASKPASS on shared machines).
+  local push_url="https://oauth2:${GITLAB_ROOT_TOKEN}@${GITLAB_DOMAIN}/${group_path}/${slug}.git"
+  if git -C "${dir}" push "${push_url}" HEAD:main; then
     log "Push OK: ${slug}"
   else
     warn "git push failed for ${slug} — resolve conflicts or push manually"
   fi
+}
+
+# Remove any previously persisted oauth2: remotes under nested config repos.
+scrub_nested_config_remotes() {
+  local group_path slug tokenless d
+  group_path="$(gitlab_get "${GITLAB_API}/groups/${GITLAB_CONFIG_GROUP_ID}" | jq -r '.full_path')"
+  [[ -n "${group_path}" && "${group_path}" != "null" ]] || { warn "Skipping remote scrub: could not resolve config group full_path"; return 0; }
+  for d in configs/auto-devops-pipeline configs/auto-devops-chart; do
+    [[ -d "${REPO_ROOT}/${d}/.git" ]] || continue
+    slug="${d##*/}"
+    tokenless="https://${GITLAB_DOMAIN}/${group_path}/${slug}.git"
+    if git -C "${REPO_ROOT}/${d}" remote get-url origin >/dev/null 2>&1; then
+      git -C "${REPO_ROOT}/${d}" remote set-url origin "${tokenless}" 2>/dev/null || true
+      log "Scrubbed origin in ${d} (credential-free URL)"
+    fi
+  done
 }
 
 # --- Single-file shared configs (idempotent file upsert) ----------------------
@@ -156,6 +175,8 @@ done
 # --- Heavier repos tracked as nested git repositories --------------------------
 push_git_subtree "configs/auto-devops-pipeline" "auto-devops-pipeline"
 push_git_subtree "configs/auto-devops-chart" "auto-devops-chart"
+
+scrub_nested_config_remotes
 
 if [[ -n "${GITLAB_TEMPLATE_GROUP_ID:-}" ]]; then
   log "Template group id is ${GITLAB_TEMPLATE_GROUP_ID}. Multi-file template 'nestjs-app' is not auto-synced by this script; use Management API POST /templates or maintain the repo in GitLab manually."
