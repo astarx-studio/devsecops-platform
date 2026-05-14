@@ -431,7 +431,7 @@ The `remote set-url` writes the token into `${dir}/.git/config`. Anyone with rea
 
 - [x] In the Phase 6 section, update the done-criteria checklist:
   - [x] Mark items shipped in Phase 6 as done with their commit reference (`ea04b77`)
-  - [x] Mark items shipped in Phase 6.5 with commit `e17236d` (see git log for full message)
+  - [x] Mark items shipped in Phase 6.5 in repository history (see `git log --oneline --grep=phase-6.5`)
   - [x] For `migrate-v1`: link to the T4 decision in this plan
 - [x] Add a single line at the end of Phase 6 in `MIGRATION_PLAN_v2.md` pointing readers here for post–Phase 6 completion items.
 - [x] **Document lifecycle:** this supplement file is **retained** as an executed audit trail (original plan called for deletion after merge; repo keeps it for traceability alongside the updated §Phase 6 in the main plan).
@@ -523,7 +523,7 @@ Recommended commit order (one task per commit for auditable history):
 
 ### 6.5 — Cross-references
 
-- Phase 6.5 execution commit: `e17236d feat(phase-6.5): seed inline push, backup/restore/reset, smoke-deploy, migrate-v1 doc`
+- Phase 6.5 implementation: search `git log --oneline --grep=phase-6.5` (single feature commit on this branch)
 - Original review findings: chat thread reviewing Phase 6 execution
 - Related script: `bootstrap/seed-platform-projects.sh` (T1)
 - Related Makefile context: existing `make bootstrap` / `make smoke` targets

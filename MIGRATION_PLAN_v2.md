@@ -671,7 +671,7 @@ These items were discovered during end-to-end validation (Phase 4.5). They are *
 
 **Validation**: On a fresh Docker host + fresh checkout: `make bootstrap` completes; `make smoke` verifies k3d context, in-cluster Traefik, ESO CRD, and Management API `GET /health` on the mapped host port. Optional: `make smoke-deploy` exercises provisioning → CI → deploy → app URL (requires a registered GitLab Runner and `API_KEY` / `GITLAB_ROOT_TOKEN` in `.env`). End-to-end app URL checks are otherwise operator responsibility.
 
-**Phase 6.5 (plan + execution):** [`MIGRATION_PLAN_v2_PHASE_6.5.md`](MIGRATION_PLAN_v2_PHASE_6.5.md) — closes seed-script token persistence, Makefile parity for reset/backup/restore, `smoke-deploy`, and migrate-v1 doc-only policy (**commit `e17236d`**). Tag **`v2.1.1`** is the suggested post-6.5 release marker (cut by the operator on the merge commit).
+**Phase 6.5 (plan + execution):** [`MIGRATION_PLAN_v2_PHASE_6.5.md`](MIGRATION_PLAN_v2_PHASE_6.5.md) — closes seed-script token persistence, Makefile parity for reset/backup/restore, `smoke-deploy`, and migrate-v1 doc-only policy. Tag **`v2.1.1`** is the suggested post-6.5 release marker (cut by the operator on the merge commit).
 
 **Backward-compat**: Tooling-only phase (Phase 6 and 6.5).
 
