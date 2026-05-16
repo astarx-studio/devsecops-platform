@@ -4,6 +4,8 @@
 
 This folder holds **forward-looking feature designs** for the platform — capabilities that have been thought through and documented, but not yet scheduled into a numbered Phase. Each milestone here is "shovel-ready": once an operator chooses to pick one up, the doc serves as the basis for a Phase plan.
 
+When writing a new milestone, start from **[00_template.md](00_template.md)**.
+
 ---
 
 ## Current milestones
@@ -24,4 +26,4 @@ When a feature idea has clearly outgrown a Q&A in chat — typically:
 - Is non-trivial enough to warrant its own Phase
 - Is too immature to scheduled yet, but worth capturing before context is lost
 
-Use the `01_path_based_routing.md` doc as a template for shape: problem → current state → goal/non-goals → architecture → schema + chart changes → operational considerations → migration story → open questions → implementation outline → risks → appendix.
+Copy **[00_template.md](00_template.md)** as your starting point. The standard shape is: problem → current state → goal/non-goals → architecture → API/schema/config changes → operational considerations → migration story → open questions → implementation outline → risks → appendix.

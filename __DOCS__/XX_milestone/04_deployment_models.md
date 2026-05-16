@@ -113,26 +113,27 @@ Docker host
 
 ### 4.1 Side-by-side overview
 
-```
-┌────────────────────────────────────────────────────────────────┐
-│             Operator surface (identical in both modes)         │
-│   dsoctl CLI  ──────►  Management API  ──────►  Vault (secrets)│
-│   Operator Console (milestone 02, optional)                    │
-└────────────────────────┬───────────────────────────────────────┘
-                         │
-          ┌──────────────┴──────────────┐
-          │                             │
-  ┌───────▼──────────┐         ┌────────▼────────────┐
-  │  COMPOSE MODE    │         │  KUBERNETES MODE     │
-  │                  │         │                      │
-  │  Docker host     │         │  k8s cluster         │
-  │  docker-compose  │         │  Helm charts         │
-  │  .vols/ for PV   │         │  PersistentVolumes   │
-  │  k3d inside host │         │  Cluster ingress     │
-  │  for user apps   │         │  for user apps:      │
-  │                  │         │   same cluster (ns)  │
-  └──────────────────┘         │   or separate cluster│
-                               └─────────────────────-┘
+```mermaid
+flowchart TD
+    subgraph OperatorSurface["Operator surface — identical in both modes"]
+        CLI["dsoctl CLI"]
+        Console["Operator Console\n(milestone 02, optional)"]
+        MAPI["Management API"]
+        VaultBox["Vault (secrets)"]
+        CLI --> MAPI --> VaultBox
+        Console --> MAPI
+    end
+
+    OperatorSurface --> ComposeMode
+    OperatorSurface --> K8sMode
+
+    subgraph ComposeMode["COMPOSE MODE"]
+        CM["Docker host · docker-compose\n.vols/ for persistence\nk3d for user apps"]
+    end
+
+    subgraph K8sMode["KUBERNETES MODE"]
+        KM["k8s cluster · Helm charts\nPersistentVolumes · Cluster ingress\nuser apps: same-cluster ns\nor separate cluster"]
+    end
 ```
 
 ### 4.2 What is and isn't mode-specific
@@ -319,33 +320,43 @@ The platform supports two cluster topologies in Kubernetes mode. Both are fully 
 
 ### 7.1 Same-cluster topology
 
-```
-┌─────────────────────────────────────────────────┐
-│  Single k8s cluster                             │
-│                                                 │
-│  namespace: platform                            │
-│    keycloak, vault, gitlab, mongo, api, ...     │
-│                                                 │
-│  namespace: dev  (user workloads — dev env)     │
-│  namespace: stg  (user workloads — staging)     │
-│  namespace: prod (user workloads — prod)        │
-└─────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph cluster["Single k8s cluster"]
+        subgraph platform["namespace: platform"]
+            ps["keycloak · vault · gitlab · mongo · api · traefik · …"]
+        end
+        subgraph dev["namespace: dev"]
+            da["user workloads — dev env"]
+        end
+        subgraph stg["namespace: stg"]
+            sa["user workloads — staging"]
+        end
+        subgraph prod["namespace: prod"]
+            pa["user workloads — prod"]
+        end
+    end
 ```
 
 Simpler infra, lower cost. All traffic stays in-cluster. A misbehaving user workload can affect platform services (resource exhaustion, noisy neighbour). Mitigated by: namespace-level `ResourceQuota`, `NetworkPolicy` denying cross-namespace traffic, and node taints reserving dedicated nodes for the platform namespace.
 
 ### 7.2 Split-cluster topology
 
-```
-┌──────────────────────────────┐    ┌─────────────────────────────────────┐
-│  Platform cluster            │    │  Workload cluster                   │
-│                              │    │                                     │
-│  namespace: platform         │    │  namespace: dev                     │
-│    keycloak, vault, gitlab   │◄───┤  namespace: stg                     │
-│    mongo, api, traefik, ...  │    │  namespace: prod                    │
-│                              │    │                                     │
-└──────────────────────────────┘    └─────────────────────────────────────┘
-       Management API talks to workload cluster via kubeconfig secret
+```mermaid
+flowchart LR
+    subgraph pc["Platform cluster"]
+        subgraph pns["namespace: platform"]
+            psvc["keycloak · vault · gitlab\nmongo · api · traefik · …"]
+        end
+    end
+
+    subgraph wc["Workload cluster"]
+        wdev["namespace: dev"]
+        wstg["namespace: stg"]
+        wprod["namespace: prod"]
+    end
+
+    psvc <-->|"Management API\nvia kubeconfig secret"| wc
 ```
 
 Better isolation — blast radius of user workloads is contained. Platform services are on dedicated infra. The Management API holds a kubeconfig for the workload cluster (stored in Vault at `platform/workload-cluster/kubeconfig`). This is how the platform connects to k3d today in Compose mode — the topology is the same, just at cluster scope rather than Docker-host scope.
