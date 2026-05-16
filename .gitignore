@@ -9,16 +9,17 @@
 /edge/vpn-edge/wg0.conf
 /edge/vpn-edge/systemd/vpn-edge-nat.default
 
+# Nested git metadata under seeded config/smoke sample dirs
+configs/auto-devops-chart/.git/
+configs/auto-devops-pipeline/.git/
+configs/smoke-api/.git/
+configs/smoke-web/.git/
+
 # Docker volumes
 .vols*/
 
 # Phase-0 backups — may contain sensitive volume data; never commit
 backups/
-
-# Configs repos — independently tracked in their own GitLab repos via Auto DevOps;
-# excluded here to prevent accidental embedding as git submodules in the platform repo.
-configs/auto-devops-chart/
-configs/auto-devops-pipeline/
 
 # Node.js
 node_modules/

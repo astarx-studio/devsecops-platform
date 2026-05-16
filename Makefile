@@ -3,45 +3,56 @@
 # =============================================================================
 # Requires: GNU Make, Bash, Docker. Run from repo root (same directory as
 # docker-compose.yml).
+#
+# On Windows, prefer running make from Git Bash. GnuWin32 Make 3.81 breaks
+# recipes when SHELL resolves to a path with spaces (e.g. Program Files/Git).
 # =============================================================================
 
-SHELL := /bin/bash
+# MSYS path has no spaces; avoids GnuWin32 sh -c quoting failures on Windows.
+SHELL := /usr/bin/bash
 ROOT := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
-BOOT := $(ROOT)bootstrap
 
-.PHONY: help bootstrap smoke smoke-deploy reset backup restore migrate-v1
+.PHONY: help bootstrap smoke smoke-deploy smoke-cleanup reset backup restore migrate-v1 verify-sonar
 
 help:
 	@echo "Targets:"
-	@echo "  make bootstrap     - ./bootstrap/bootstrap.sh (compose → k3d → vault auth → RBAC → seed → smoke)"
+	@echo "  make bootstrap     - ./bootstrap/bootstrap.sh (compose + Sonar init → k3d → vault auth → RBAC → seed → smoke)"
+	@echo "  make verify-sonar  - scripts/verify-sonar-setup.sh (Sonar .env, properties, containers)"
 	@echo "  make smoke         - ./bootstrap/smoke-test.sh (lightweight infra checks)"
-	@echo "  make smoke-deploy  - ./bootstrap/smoke-deploy.sh (full provision + pipeline + URL; optional --cleanup via script)"
+	@echo "  make smoke-deploy  - ./bootstrap/smoke-deploy.sh (smoke-api + smoke-web; ARGS='--cleanup' tears down)"
+	@echo "  make smoke-cleanup - ./bootstrap/smoke-cleanup.sh (hard-delete smoke group only)"
 	@echo "  make reset         - ./bootstrap/reset.sh (k3d only; pass ARGS=--all for compose down -v)"
 	@echo "  make backup        - ./bootstrap/backup.sh → backups/platform-<timestamp>.tar.gz"
 	@echo "  make restore       - requires ARCHIVE=backups/platform-....tar.gz (compose stack must be down)"
 	@echo "  make migrate-v1    - prints __DOCS__/01_infra/07_v1_migration.md (manual operator workflow)"
 
 bootstrap:
-	@"$(BOOT)/bootstrap.sh"
+	@cd "$(ROOT)" && bash ./bootstrap/bootstrap.sh
+
+verify-sonar:
+	@cd "$(ROOT)" && bash ./scripts/verify-sonar-setup.sh
 
 smoke:
-	@"$(BOOT)/smoke-test.sh"
+	@cd "$(ROOT)" && bash ./bootstrap/smoke-test.sh
 
 smoke-deploy:
-	@"$(BOOT)/smoke-deploy.sh"
+	@cd "$(ROOT)" && bash ./bootstrap/smoke-deploy.sh $(ARGS)
+
+smoke-cleanup:
+	@cd "$(ROOT)" && bash ./bootstrap/smoke-cleanup.sh
 
 backup:
-	@"$(BOOT)/backup.sh"
+	@cd "$(ROOT)" && bash ./bootstrap/backup.sh
 
 restore:
 	@if [ -z "$(ARCHIVE)" ]; then \
 	  echo "Usage: make restore ARCHIVE=backups/platform-YYYYMMDD-HHMMSS.tar.gz" >&2; \
 	  exit 1; \
 	fi
-	@"$(BOOT)/restore.sh" "$(ARCHIVE)"
+	@cd "$(ROOT)" && bash ./bootstrap/restore.sh "$(ARCHIVE)"
 
 reset:
-	@"$(BOOT)/reset.sh" $(ARGS)
+	@cd "$(ROOT)" && bash ./bootstrap/reset.sh $(ARGS)
 
 migrate-v1:
 	@echo "v1 → Auto DevOps migration is a rare, manual workflow (no bundled script)."

@@ -5,7 +5,7 @@
 # Include in your .gitlab-ci.yml:
 #
 #   include:
-#     - project: "configs/deploy-compose"
+#     - project: "system/devsecops-platform/configs/deploy-compose"
 #       file: "/.gitlab-ci.yml"
 #
 # Then extend:
@@ -20,6 +20,14 @@
 #   - COMPOSE_FILE: path to docker-compose file (default: docker-compose.yml)
 #   - COMPOSE_PROJECT_NAME: override compose project name
 # ==========================================================================
+
+workflow:
+  rules:
+    - if: '$CI_PROJECT_NAMESPACE == "system/devsecops-platform/configs" && $CI_PROJECT_NAME == "deploy-compose"'
+      when: never
+    - if: '$CI_PROJECT_PATH == "system/devsecops-platform/configs/deploy-compose"'
+      when: never
+    - when: always
 
 .deploy-compose:
   stage: deploy

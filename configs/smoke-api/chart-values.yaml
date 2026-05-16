@@ -1,0 +1,2 @@
+# Smoke API — optional Helm overrides (metadata is set by the pipeline --set flags).
+replicaCount: 1

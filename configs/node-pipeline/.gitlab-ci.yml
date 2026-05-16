@@ -5,13 +5,22 @@
 # Include in your .gitlab-ci.yml:
 #
 #   include:
-#     - project: "configs/node-pipeline"
+#     - project: "system/devsecops-platform/configs/node-pipeline"
 #       file: "/.gitlab-ci.yml"
 #
 # Then extend:
 #   lint:
 #     extends: .node-lint
 # ==========================================================================
+
+# Belt-and-suspenders if CI is ever re-enabled on this repo (see seed-platform-projects.sh).
+workflow:
+  rules:
+    - if: '$CI_PROJECT_NAMESPACE == "system/devsecops-platform/configs" && $CI_PROJECT_NAME == "node-pipeline"'
+      when: never
+    - if: '$CI_PROJECT_PATH == "system/devsecops-platform/configs/node-pipeline"'
+      when: never
+    - when: always
 
 .node-lint:
   stage: lint

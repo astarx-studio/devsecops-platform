@@ -1,0 +1,2 @@
+# Shell init scripts must use LF so Alpine containers execute them (Windows clones).
+*.sh text eol=lf
