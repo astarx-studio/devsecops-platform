@@ -293,7 +293,7 @@ docker compose stop keycloak
 docker compose rm -f keycloak
 # Option A: Wipe the database (destructive)
 rm -rf .vols/keycloak-db
-docker compose up -d keycloak-db keycloak
+docker compose up -d postgres keycloak
 # Option B: Apply changes via Keycloak admin console instead
 ```
 

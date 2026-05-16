@@ -53,6 +53,13 @@ kubectl config use-context "k3d-${K3D_CLUSTER_NAME}" >/dev/null \
 [[ -z "${GITLAB_ROOT_TOKEN}" ]]     && die "GITLAB_ROOT_TOKEN is not set."
 [[ -z "${GITLAB_CONFIG_GROUP_ID}" ]] && die "GITLAB_CONFIG_GROUP_ID is not set."
 
+# shellcheck source=lib/gitlab-api.sh
+source "${SCRIPT_DIR}/lib/gitlab-api.sh"
+GITLAB_API="$(gitlab_api_v4_base)"
+if gitlab_api_uses_docker; then
+  log "GitLab API via docker exec ${GITLAB_CONTAINER} (override with GITLAB_API_BASE_URL to use host curl)"
+fi
+
 mkdir -p "${KUBECONFIG_DIR}"
 info "Kubeconfigs will be written to: ${KUBECONFIG_DIR}"
 
@@ -208,9 +215,8 @@ EOF
   #
   # Pre-flight: also warn if more than one variable already exists for this
   # scope (duplicates from prior buggy runs) so they can be cleaned up first.
-  GL_VARS_JSON=$(curl -sf \
-    -H "PRIVATE-TOKEN: ${GITLAB_ROOT_TOKEN}" \
-    "https://${GITLAB_DOMAIN}/api/v4/groups/${GITLAB_CONFIG_GROUP_ID}/variables?per_page=100" \
+  GL_VARS_JSON=$(gitlab_curl_sf "${GITLAB_API_HDR[@]}" \
+    "${GITLAB_API}/groups/${GITLAB_CONFIG_GROUP_ID}/variables?per_page=100" \
     2>/dev/null || echo "[]")
 
   SCOPE_COUNT=$(echo "${GL_VARS_JSON}" \
@@ -221,20 +227,20 @@ EOF
     warn "Found ${SCOPE_COUNT} KUBECONFIG_B64 variables for scope '${GL_SCOPE}' — delete duplicates in GitLab UI before re-running."
   fi
 
-  SCOPE_EXISTS=$(curl -sf -o /dev/null -w "%{http_code}" \
-    -H "PRIVATE-TOKEN: ${GITLAB_ROOT_TOKEN}" \
-    "https://${GITLAB_DOMAIN}/api/v4/groups/${GITLAB_CONFIG_GROUP_ID}/variables/KUBECONFIG_B64?filter%5Benvironment_scope%5D=${GL_SCOPE}" \
+  SCOPE_EXISTS=$(gitlab_curl -s -o /dev/null -w "%{http_code}" \
+    "${GITLAB_API_HDR[@]}" \
+    "${GITLAB_API}/groups/${GITLAB_CONFIG_GROUP_ID}/variables/KUBECONFIG_B64?filter%5Benvironment_scope%5D=${GL_SCOPE}" \
     2>/dev/null || echo "000")
 
   if [[ "${SCOPE_EXISTS}" == "200" ]]; then
     # Variable exists for this scope — update it in place.
-    HTTP_STATUS=$(curl -sf -o /dev/null -w "%{http_code}" \
+    HTTP_STATUS=$(gitlab_curl -s -o /dev/null -w "%{http_code}" \
       --request PUT \
-      --header "PRIVATE-TOKEN: ${GITLAB_ROOT_TOKEN}" \
+      "${GITLAB_API_HDR[@]}" \
       --form "value=${KUBECONFIG_B64}" \
       --form "masked=true" \
       --form "environment_scope=${GL_SCOPE}" \
-      "https://${GITLAB_DOMAIN}/api/v4/groups/${GITLAB_CONFIG_GROUP_ID}/variables/KUBECONFIG_B64?filter%5Benvironment_scope%5D=${GL_SCOPE}" \
+      "${GITLAB_API}/groups/${GITLAB_CONFIG_GROUP_ID}/variables/KUBECONFIG_B64?filter%5Benvironment_scope%5D=${GL_SCOPE}" \
       2>/dev/null || echo "000")
     if [[ "${HTTP_STATUS}" == "200" ]]; then
       info "GitLab CI variable KUBECONFIG_B64 (scope: ${GL_SCOPE}) updated."
@@ -243,14 +249,14 @@ EOF
     fi
   else
     # Variable does not exist for this scope — create it.
-    HTTP_STATUS=$(curl -sf -o /dev/null -w "%{http_code}" \
+    HTTP_STATUS=$(gitlab_curl -s -o /dev/null -w "%{http_code}" \
       --request POST \
-      --header "PRIVATE-TOKEN: ${GITLAB_ROOT_TOKEN}" \
+      "${GITLAB_API_HDR[@]}" \
       --form "key=KUBECONFIG_B64" \
       --form "value=${KUBECONFIG_B64}" \
       --form "masked=true" \
       --form "environment_scope=${GL_SCOPE}" \
-      "https://${GITLAB_DOMAIN}/api/v4/groups/${GITLAB_CONFIG_GROUP_ID}/variables" \
+      "${GITLAB_API}/groups/${GITLAB_CONFIG_GROUP_ID}/variables" \
       2>/dev/null || echo "000")
     if [[ "${HTTP_STATUS}" =~ ^2 ]]; then
       info "GitLab CI variable KUBECONFIG_B64 (scope: ${GL_SCOPE}) created."

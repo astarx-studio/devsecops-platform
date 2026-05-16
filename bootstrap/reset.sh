@@ -20,12 +20,9 @@ cd "${ROOT}"
 
 log() { echo "[reset] $*"; }
 
-if [[ -f .env ]]; then
-  set -a
-  # shellcheck disable=SC1091
-  source .env
-  set +a
-fi
+# shellcheck source=lib/load-env.sh
+source "${SCRIPT_DIR}/lib/load-env.sh"
+[[ -f .env ]] && load_dotenv .env
 
 ALL=0
 [[ "${1:-}" == "--all" ]] && ALL=1

@@ -38,23 +38,38 @@ kubectl config use-context "k3d-${K3D_CLUSTER_NAME}" >/dev/null \
 # -----------------------------------------------------------------------------
 # 1. In-cluster Traefik
 # -----------------------------------------------------------------------------
+TRAEFIK_VALUES="${SCRIPT_DIR}/charts/traefik-values.yaml"
+TRAEFIK_HELM=(traefik traefik/traefik -n kube-system -f "${TRAEFIK_VALUES}" --wait --timeout 5m)
+
+# Helm 4+ uses server-side apply; a Service spec.type patched outside Helm (e.g.
+# kubectl-patch) causes upgrade conflicts. --force/--force-replace cannot be combined
+# with SSA, so delete the Service and run a normal helm upgrade to recreate it.
+delete_traefik_service_for_helm() {
+  if kubectl get svc traefik -n kube-system >/dev/null 2>&1; then
+    kubectl delete svc traefik -n kube-system
+    info "Deleted kube-system/traefik Service — Helm will recreate it on upgrade"
+  fi
+}
+
+helm_install_or_upgrade_traefik() {
+  if helm status traefik -n kube-system >/dev/null 2>&1; then
+    info "Traefik already installed — upgrading..."
+    delete_traefik_service_for_helm
+    if helm upgrade "${TRAEFIK_HELM[@]}"; then
+      return 0
+    fi
+    die "Traefik helm upgrade failed (see output above)"
+  fi
+
+  log "Installing in-cluster Traefik..."
+  helm install "${TRAEFIK_HELM[@]}"
+}
+
 log "Adding Traefik Helm repo..."
 helm repo add traefik https://traefik.github.io/charts --force-update >/dev/null
 helm repo update >/dev/null
 
-if helm status traefik -n kube-system >/dev/null 2>&1; then
-  info "Traefik already installed — upgrading..."
-  helm upgrade traefik traefik/traefik \
-    -n kube-system \
-    -f "${SCRIPT_DIR}/charts/traefik-values.yaml" \
-    --wait --timeout 5m
-else
-  log "Installing in-cluster Traefik..."
-  helm install traefik traefik/traefik \
-    -n kube-system \
-    -f "${SCRIPT_DIR}/charts/traefik-values.yaml" \
-    --wait --timeout 5m
-fi
+helm_install_or_upgrade_traefik
 info "In-cluster Traefik installed."
 
 # -----------------------------------------------------------------------------
@@ -110,8 +125,14 @@ kubectl rollout status deployment/external-secrets -n eso-system --timeout=120s
 info "ESO ready."
 
 log "Waiting for Reloader pod to be ready..."
-kubectl rollout status deployment/reloader -n reloader-system --timeout=120s
-info "Reloader ready."
+RELOADER_DEPLOY="$(kubectl get deploy -n reloader-system \
+  -l 'app.kubernetes.io/name=reloader' \
+  -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
+if [[ -z "${RELOADER_DEPLOY}" ]]; then
+  RELOADER_DEPLOY="reloader-reloader"
+fi
+kubectl rollout status "deployment/${RELOADER_DEPLOY}" -n reloader-system --timeout=120s
+info "Reloader ready (${RELOADER_DEPLOY})."
 
 log "Verifying ESO CRDs..."
 kubectl get crd externalsecrets.external-secrets.io >/dev/null \
