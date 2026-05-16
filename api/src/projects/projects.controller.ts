@@ -1,21 +1,31 @@
 import {
-  Body,
   Controller,
-  Delete,
   Get,
+  GoneException,
   HttpCode,
   HttpStatus,
   Param,
-  ParseIntPipe,
   Post,
+  Delete,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiResponse, ApiSecurity, ApiTags } from '@nestjs/swagger';
 
 import { CombinedAuthGuard } from '../common/guards';
-import { CreateProjectDto, ProjectInfoDto } from './dto';
 import { ProjectsService } from './projects.service';
+import { ProjectResponseDto } from './dto/project-response.dto';
 
+/**
+ * REST shim for the projects resource.
+ *
+ * In v2 all write operations are handled by the GraphQL API (`POST /graphql`).
+ * This controller retains read-only endpoints for backward compatibility and
+ * returns HTTP 410 Gone on any write path, directing clients to GraphQL.
+ *
+ * Write endpoints (`POST /projects`, `DELETE /projects/:id`) are preserved
+ * as stubs so existing integrations receive a clear error message rather
+ * than a 404.
+ */
 @ApiTags('Projects')
 @ApiSecurity('api-key')
 @ApiBearerAuth()
@@ -24,47 +34,66 @@ import { ProjectsService } from './projects.service';
 export class ProjectsController {
   constructor(private readonly projectsService: ProjectsService) {}
 
-  @Post()
-  @ApiOperation({
-    summary: 'Create a new project',
-    description:
-      'Forks a template, injects CI config includes, provisions capabilities ' +
-      '(domain + Kong for deployable, package name for publishable), seeds Vault secrets, ' +
-      'and optionally configures Cloudflare DNS and triggers CI.',
-  })
-  @ApiResponse({ status: 201, type: ProjectInfoDto })
-  @ApiResponse({ status: 400, description: 'Validation error' })
-  @ApiResponse({ status: 401, description: 'Invalid or missing credentials' })
-  async create(@Body() dto: CreateProjectDto): Promise<ProjectInfoDto> {
-    return this.projectsService.createProject(dto);
-  }
-
   @Get()
-  @ApiOperation({ summary: 'List all projects' })
-  @ApiResponse({ status: 200, type: [ProjectInfoDto] })
-  async findAll(): Promise<ProjectInfoDto[]> {
-    return this.projectsService.listProjects();
+  @ApiOperation({
+    summary: 'List all projects (read-only)',
+    description: 'Returns all projects from MongoDB. Write operations require the GraphQL API.',
+  })
+  @ApiResponse({ status: 200, type: [ProjectResponseDto] })
+  async findAll(): Promise<ProjectResponseDto[]> {
+    const docs = await this.projectsService.listProjects();
+    return docs.map((doc) => ProjectResponseDto.fromDocument(doc));
   }
 
   @Get(':id')
-  @ApiOperation({ summary: 'Get project details by ID' })
-  @ApiResponse({ status: 200, type: ProjectInfoDto })
+  @ApiOperation({
+    summary: 'Get project by MongoDB ID',
+    description: 'Returns a single project document.',
+  })
+  @ApiResponse({ status: 200, type: ProjectResponseDto })
   @ApiResponse({ status: 404, description: 'Project not found' })
-  async findOne(@Param('id', ParseIntPipe) id: number): Promise<ProjectInfoDto> {
-    return this.projectsService.getProject(id);
+  async findOne(@Param('id') id: string): Promise<ProjectResponseDto> {
+    const doc = await this.projectsService.findProject({ id });
+    return ProjectResponseDto.fromDocument(doc);
+  }
+
+  @Post()
+  @HttpCode(HttpStatus.GONE)
+  @ApiOperation({
+    summary: 'DEPRECATED — use GraphQL createProject mutation',
+    description:
+      'Project creation has moved to the GraphQL API (mutation createProject). ' +
+      'This endpoint returns 410 Gone.',
+  })
+  @ApiResponse({
+    status: 410,
+    description: 'Write operations have moved to GraphQL. POST /graphql',
+  })
+  createGone(): never {
+    throw new GoneException({
+      message: 'Project write operations have moved to the GraphQL API.',
+      graphqlEndpoint: '/graphql',
+      hint: 'Use mutation createProject(input: CreateProjectInput!): Project!',
+    });
   }
 
   @Delete(':id')
-  @HttpCode(HttpStatus.NO_CONTENT)
+  @HttpCode(HttpStatus.GONE)
   @ApiOperation({
-    summary: 'Delete a project',
+    summary: 'DEPRECATED — use GraphQL deleteProject mutation',
     description:
-      'Removes Kong routes, Cloudflare DNS, Vault secrets, and the GitLab project. ' +
-      'Non-critical cleanup steps continue on failure.',
+      'Project deletion has moved to the GraphQL API (mutation deleteProject). ' +
+      'This endpoint returns 410 Gone.',
   })
-  @ApiResponse({ status: 204, description: 'Project deleted' })
-  @ApiResponse({ status: 404, description: 'Project not found' })
-  async remove(@Param('id', ParseIntPipe) id: number): Promise<void> {
-    return this.projectsService.deleteProject(id);
+  @ApiResponse({
+    status: 410,
+    description: 'Write operations have moved to GraphQL. POST /graphql',
+  })
+  deleteGone(): never {
+    throw new GoneException({
+      message: 'Project write operations have moved to the GraphQL API.',
+      graphqlEndpoint: '/graphql',
+      hint: 'Use mutation deleteProject(id: ID!): Boolean!',
+    });
   }
 }

@@ -35,6 +35,70 @@ If either command returns a "not found" error, you need to install Docker first.
 
 ---
 
+## k3d (Kubernetes in Docker)
+
+The platform uses **k3d** to run a lightweight Kubernetes cluster (`k3s`) inside Docker containers, joined to the same `devops-network` as the rest of the platform stack. Apps are deployed to this cluster via GitLab Auto DevOps.
+
+To check if k3d is installed:
+
+```bash
+k3d version
+```
+
+If it's missing, install it. On Linux:
+
+```bash
+curl -s https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | bash
+```
+
+On Windows (via Scoop):
+
+```bash
+scoop install k3d
+```
+
+On macOS (via Homebrew):
+
+```bash
+brew install k3d
+```
+
+---
+
+## Helm
+
+**Helm** is the Kubernetes package manager used to install in-cluster components (Traefik, External Secrets Operator) and deploy apps via the Auto DevOps chart.
+
+To check if Helm is installed:
+
+```bash
+helm version
+```
+
+If it's missing:
+
+- **Linux**: `curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash`
+- **Windows (Scoop)**: `scoop install helm`
+- **macOS (Homebrew)**: `brew install helm`
+
+---
+
+## kubectl
+
+**kubectl** is used to interact with the k3d cluster directly (namespaces, RBAC, debugging).
+
+To check if kubectl is installed:
+
+```bash
+kubectl version --client
+```
+
+If it's missing, see [https://kubernetes.io/docs/tasks/tools/](https://kubernetes.io/docs/tasks/tools/).
+
+> **Docker Desktop note**: If you're running Docker Desktop on Windows or macOS, the k3d API port (16443) may not be reachable via `host.docker.internal`. The bootstrap script automatically patches the kubeconfig to use `127.0.0.1:16443` instead. The per-environment kubeconfigs written for the GitLab Runner always use `k3d-dsoaas-serverlb:6443` (Docker DNS), which works correctly inside `devops-network`.
+
+---
+
 ## A domain name managed through Cloudflare
 
 The platform uses a wildcard subdomain structure under your chosen domain. For example, if your domain is `example.com`, all platform services will be reachable at addresses like `gitlab.devops.example.com`, `auth.devops.example.com`, and so on.

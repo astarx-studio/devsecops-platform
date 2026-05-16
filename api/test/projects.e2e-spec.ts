@@ -6,12 +6,8 @@ import { GitLabService } from '../src/gitlab/gitlab.service';
 import { createE2eApp } from './helpers/e2e-module';
 import { gitlabProjectFactory } from './helpers/factories';
 
-interface ProjectResponseBody {
-  id: number;
-  name: string;
-  clientName: string;
-  vaultPath: string;
-}
+/** Valid MongoDB ObjectId string used by the e2e Project model mock. */
+const SAMPLE_PROJECT_MONGO_ID = '507f191e810c19729de860ea';
 
 describe('Projects (e2e)', () => {
   let app: INestApplication<App>;
@@ -42,7 +38,7 @@ describe('Projects (e2e)', () => {
   });
 
   describe('POST /projects', () => {
-    it('should create a project and return 201', () => {
+    it('should return 410 Gone (writes use GraphQL)', () => {
       return request(app.getHttpServer())
         .post('/projects')
         .set('X-API-Key', API_KEY)
@@ -51,13 +47,10 @@ describe('Projects (e2e)', () => {
           projectName: 'webapp',
           templateSlug: 'nestjs-app',
         })
-        .expect(201)
+        .expect(410)
         .expect((res) => {
-          const body = res.body as ProjectResponseBody;
-          expect(body.id).toBe(42);
-          expect(body.name).toBe('webapp');
-          expect(body.clientName).toBe('acme');
-          expect(body.vaultPath).toBe('projects/acme/webapp');
+          expect(res.body).toHaveProperty('message');
+          expect(res.body).toHaveProperty('graphqlEndpoint', '/graphql');
         });
     });
 
@@ -71,80 +64,50 @@ describe('Projects (e2e)', () => {
         })
         .expect(401);
     });
-
-    it('should return 400 with invalid body (missing required fields)', () => {
-      return request(app.getHttpServer())
-        .post('/projects')
-        .set('X-API-Key', API_KEY)
-        .send({ clientName: 'acme' })
-        .expect(400);
-    });
-
-    it('should return 400 with invalid clientName format', () => {
-      return request(app.getHttpServer())
-        .post('/projects')
-        .set('X-API-Key', API_KEY)
-        .send({
-          clientName: 'INVALID_NAME',
-          projectName: 'webapp',
-          templateSlug: 'nestjs-app',
-        })
-        .expect(400);
-    });
-
-    it('should return 400 with non-whitelisted properties', () => {
-      return request(app.getHttpServer())
-        .post('/projects')
-        .set('X-API-Key', API_KEY)
-        .send({
-          clientName: 'acme',
-          projectName: 'webapp',
-          templateSlug: 'nestjs-app',
-          unknownField: 'should-fail',
-        })
-        .expect(400);
-    });
   });
 
   describe('GET /projects', () => {
-    it('should return array of projects', () => {
+    it('should return array of projects from MongoDB', () => {
       return request(app.getHttpServer())
         .get('/projects')
         .set('X-API-Key', API_KEY)
         .expect(200)
         .expect((res) => {
           expect(Array.isArray(res.body as unknown[])).toBe(true);
-          expect((res.body as unknown[]).length).toBe(1);
+          expect((res.body as unknown[]).length).toBeGreaterThanOrEqual(1);
+          const first = (res.body as { gitlabProjectId: number }[])[0];
+          expect(first.gitlabProjectId).toBe(42);
         });
     });
   });
 
   describe('GET /projects/:id', () => {
-    it('should return a project by ID', () => {
+    it('should return a project by MongoDB ID', () => {
       return request(app.getHttpServer())
-        .get('/projects/42')
+        .get(`/projects/${SAMPLE_PROJECT_MONGO_ID}`)
         .set('X-API-Key', API_KEY)
         .expect(200)
         .expect((res) => {
-          const body = res.body as ProjectResponseBody;
-          expect(body.id).toBe(42);
+          const body = res.body as { id: string; gitlabProjectId: number };
+          expect(body.id).toBe(SAMPLE_PROJECT_MONGO_ID);
+          expect(body.gitlabProjectId).toBe(42);
         });
     });
 
-    it('should return 400 for non-numeric ID', () => {
+    it('should return 404 when project not found', () => {
       return request(app.getHttpServer())
-        .get('/projects/abc')
+        .get('/projects/64a1b2c3d4e5f6789012345')
         .set('X-API-Key', API_KEY)
-        .expect(400);
+        .expect(404);
     });
   });
 
   describe('DELETE /projects/:id', () => {
-    it('should return 204 on successful delete', () => {
+    it('should return 410 Gone (writes use GraphQL)', () => {
       return request(app.getHttpServer())
-        .delete('/projects/42')
+        .delete(`/projects/${SAMPLE_PROJECT_MONGO_ID}`)
         .set('X-API-Key', API_KEY)
-        .expect(204);
+        .expect(410);
     });
   });
 });

@@ -1,66 +1,37 @@
-# Deployments
+# Deployments and URLs
 
 ← [Back to Developer Guide](index.md)
 
-Once your pipeline builds a Docker image and pushes it to the registry, the next step is deploying it so it's actually running somewhere. This page explains what's available today and where the platform is headed.
+When the Management API provisions a **deployable** project, it writes Auto DevOps (or template) CI, seeds Vault, records hostnames in MongoDB, and ensures Kubernetes namespaces exist. Your running service is exposed through **Ingress** inside k3d; the outer Traefik instance forwards `*.apps.<DOMAIN>` / `*.dev.apps.<DOMAIN>` / `*.stg.apps.<DOMAIN>` traffic into the cluster (see [`traefik/dynamic/k3d-passthrough.yml`](../../traefik/dynamic/k3d-passthrough.yml)).
 
 ---
 
-## What's set up when your project is provisioned
+## Where your app listens
 
-When the Management API creates your project, it registers a **Kong route** for your service. This means there's already a URL in place for your application — requests to that URL will be forwarded to your service once it's running.
-
-Your initial project template may also include a deployment stage in `.gitlab-ci.yml`. Depending on how your project was set up, this might be:
-
-- A **manual trigger** — a play button appears in the pipeline after the build step, and you click it to deploy
-- An **automatic step** — the pipeline deploys automatically after a successful build
-
-Check your pipeline configuration (`.gitlab-ci.yml`) to see what's set up.
+The **`dsoaas-app`** Helm chart defaults the Service **`targetPort` to 80** so clusters do not need per-repo port overrides. Use **`EXPOSE 80`** and set your process to listen on port **80** inside the container (for Node, `ENV PORT=80` is typical). Older templates that listen on **3000** should either switch to 80 or override chart values consistently. Ingress maps HTTP from inner Traefik to that Service port.
 
 ---
 
-## How deployments work in v1
+## Hostnames
 
-In v1, all projects deploy to the **same server** as the platform (called `local` mode). There's no SSH remote deployment or Kubernetes integration in this version — those would require a separate orchestration layer that isn't part of v1.
+Typical patterns (exact values come from your project's `appHosts` in MongoDB and CI variables such as `APP_HOST`):
 
-When the Management API provisions your project, it registers a Kong route for it. This route points to a container it expects to be running on the server at `http://{clientName}-{projectName}:3000`. That's the naming convention — if your client is `acme` and your project is `webapp`, Kong expects to reach your app at `http://acme-webapp:3000` on the platform network.
-
-Your deployment pipeline (configured in `.gitlab-ci.yml`) is responsible for actually starting that container. The `deploy-compose` template handles this: the runner pulls the latest image and runs `docker compose up -d` via the host's Docker socket (the runner has access to the host Docker daemon). This step is a **manual trigger** in the pipeline — it won't run automatically after every push. You click the play button to deploy.
-
----
-
-## Where the gaps are
-
-The current setup works, but it's deliberately minimal. Here's what's honest about it:
-
-There's no automatic rollback if a deployment fails. If a bad image is deployed and the container crashes, you need to manually pull the previous image and restart.
-
-Health checks are basic — the pipeline doesn't wait to confirm your application is healthy after deployment. If your container starts but immediately crashes, the pipeline will still show "success."
-
-There's no environment promotion (dev → staging → production). Every deployment goes to the same server. Building a multi-environment setup would require duplicating the entire platform or adding an environment-aware deployment layer.
-
-Future versions could improve this by adding a deployment job queue, health gate steps, and multi-server support. For v1, the goal is a working pipeline that gets an image running — not a production-grade release system.
+- **Development:** `https://<effectiveSlug>.dev.apps.<DOMAIN>`
+- **Staging:** `https://<effectiveSlug>.stg.apps.<DOMAIN>`
+- **Production:** `https://<effectiveSlug>.apps.<DOMAIN>`
 
 ---
 
-## Checking if your deployment is running
+## Verifying a deployment
 
-Once deployed, your application is reachable at the URL that was registered in Kong during provisioning. The URL format is:
+1. **GitLab pipeline** — the latest pipeline for your default branch should pass build and deploy stages.
+2. **Ingress** — in the target namespace (`dev`, `stg`, or `prod`), `kubectl get ingress` should list a host rule matching your app zone.
+3. **HTTP check** — `curl -vk https://<hostname>/` from a machine that resolves DNS to your platform should return your application response (or a redirect you intentionally configure).
 
-```
-https://{projectName}.apps.yourdomain.com
-```
+---
 
-For example, if your project is `webapp` under client `acme`, it would be:
+## Troubleshooting
 
-```
-https://webapp.apps.yourdomain.com
-```
-
-Ask your platform admin if you're unsure of your exact URL.
-
-If the URL returns a 404, check that:
-1. The Kong route exists — your admin can verify this in the Kong admin UI
-2. Your service container is running — check `docker compose ps` on the server
-3. The container is named correctly (`{clientName}-{projectName}`) and listening on port 3000
-4. Your container is on the platform's Docker network (`devops-network`)
+- **404 from inner Traefik** — Ingress host or path does not match the request; confirm chart values and GitLab environment-scoped variables.
+- **TLS errors on the public hostname** — outer Traefik certificate SANs must cover your devops and apps zones; check `acme.json` / Traefik logs.
+- **Pod not ready** — inspect Deployment events and image pull errors in the namespace.

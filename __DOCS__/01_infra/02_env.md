@@ -51,29 +51,9 @@ The Traefik dashboard is always enabled and accessible at `https://traefik.devop
 
 ---
 
-## Kong (the API gateway)
+## Routing note
 
-```
-KONG_PG_PASSWORD=change-me-kong-db-password
-KONG_LOG_LEVEL=info
-```
-
-`KONG_PG_PASSWORD` — The password for Kong's internal database. Change it to something strong. You won't need to remember this password yourself — it's only used internally between Kong and its database container.
-
-`KONG_LOG_LEVEL` — Controls how much detail Kong writes to its logs. The valid values are defined by Kong itself:
-
-| Value | What gets logged |
-|-------|-----------------|
-| `debug` | Everything, including internal routing decisions — very verbose |
-| `info` | General operational events (recommended for normal use) |
-| `notice` | Significant events only |
-| `warn` | Warnings about unexpected-but-recoverable situations |
-| `error` | Only errors |
-| `crit` | Critical errors only |
-
-For most setups, `info` is the right choice. Use `debug` temporarily if you're troubleshooting a routing or plugin issue. See the [Kong log level documentation](https://docs.konghq.com/gateway/latest/reference/configuration/#log_level) for more detail.
-
-The remaining Kong variables (`KONG_PG_HOST`, `KONG_PG_PORT`, `KONG_PG_DATABASE`, `KONG_PG_USER`, `KONG_PROXY_LISTEN`, `KONG_ADMIN_LISTEN`) are pre-configured for the Docker network and should not be changed unless you're restructuring the network topology. If you need to change them, refer to the [Kong configuration reference](https://docs.konghq.com/gateway/latest/reference/configuration/).
+Application traffic is handled by **Traefik** (TLS termination, Docker label routers, and file-provider snippets such as k3d passthrough) and by **Kubernetes Ingress** inside k3d. There is no separate API gateway container in this compose stack.
 
 ---
 
@@ -94,7 +74,7 @@ KC_HTTP_ENABLED=true
 
 `KEYCLOAK_ADMIN_PASSWORD` is the password for that admin account. **Set this to something strong** — this account has full control over all users and login settings.
 
-`KC_DB_PASSWORD` is the internal database password for Keycloak. Like Kong's database password, you won't type this manually — just make it random and strong.
+`KC_DB_PASSWORD` is the internal database password for Keycloak. You won't type this manually — just make it random and strong.
 
 `KC_HOSTNAME_STRICT` — When set to `true`, Keycloak only accepts requests that match its configured hostname exactly. When set to `false`, it's more permissive and allows connections from different sources (e.g., internal Docker hostnames). This platform sets it to `false` because services communicate with Keycloak internally over Docker's network, which uses different hostnames than the public URL. Changing this to `true` without additional configuration will break internal service-to-service authentication. See [Keycloak's hostname configuration docs](https://www.keycloak.org/server/hostname) for the full explanation.
 
@@ -121,17 +101,11 @@ In v1, OpenBao runs in "dev mode," which means it auto-unseals on startup using 
 ```
 CLOUDFLARE_API_TOKEN=change-me-cloudflare-api-token
 CLOUDFLARE_TUNNEL_TOKEN=change-me-cloudflare-tunnel-token
-CLOUDFLARE_ZONE_ID=
-CLOUDFLARE_TUNNEL_ID=
 ```
 
-**`CLOUDFLARE_API_TOKEN`** — This is the API token you created in the [prerequisites step](01_prereqs.md#a-cloudflare-api-token). Paste it here. It is used by Traefik for ACME DNS-01 challenges and by the Management API for DNS automation.
+**`CLOUDFLARE_API_TOKEN`** — This is the API token you created in the [prerequisites step](01_prereqs.md#a-cloudflare-api-token). Paste it here. Traefik uses it for ACME DNS-01 challenges when certificates are issued for your public hostnames.
 
 **`CLOUDFLARE_TUNNEL_TOKEN`** — The tunnel token from your Cloudflare Tunnel setup. If you're not using a tunnel (direct public IP access only), you can leave this blank. The `cloudflared` service is profile-gated and only starts when you use `docker compose --profile cftunnel up -d`.
-
-**`CLOUDFLARE_ZONE_ID`**, **`CLOUDFLARE_TUNNEL_ID`** — These are optional. They're only needed if you want the Management API to automatically create DNS records when provisioning new projects. You can find these IDs in the Cloudflare dashboard:
-- **Zone ID**: shown in the right sidebar of your domain's overview page
-- **Tunnel ID**: the UUID shown in Zero Trust → Networks → Tunnels next to your tunnel name
 
 ---
 
@@ -251,7 +225,7 @@ The defaults in `sample.env` and `realm-export.json` are intentionally placehold
 OAUTH2_PROXY_COOKIE_SECRET=change-me-32-byte-cookie-secret!
 ```
 
-This is used to sign browser cookies for services that use oauth2-proxy for authentication (the Traefik dashboard and Kong admin panel). It must be exactly 32 bytes. Generate a safe value with:
+This is used to sign browser cookies for services that use oauth2-proxy for authentication (for example the Traefik dashboard and other operator UIs fronted by ForwardAuth). It must be exactly 32 bytes. Generate a safe value with:
 
 ```bash
 openssl rand -base64 32 | head -c 32
@@ -269,7 +243,7 @@ The variable name must be **`OAUTH2_PROXY_ALLOWED_GROUPS`** (plural). A singular
 
 After Keycloak login, oauth2-proxy only allows users whose JWT **`groups`** claim includes at least one of these names (comma-separated means **OR**). The stock realm defines a group named **`admins`** and assigns the bootstrap `admin` user to it; the Keycloak group mapper uses short names (`full.path` is false in `realm-export.json`), so the claim value is `admins`, not `/admins`.
 
-If you omit this variable, `docker-compose.yml` defaults to **`admins`**. Set it explicitly when you add more operator groups (for example `admins,sre`). Users who are not in any listed group can still complete Keycloak login but receive **403** from oauth2-proxy when opening the Traefik dashboard or Kong Admin.
+If you omit this variable, `docker-compose.yml` defaults to **`admins`**. Set it explicitly when you add more operator groups (for example `admins,sre`). Users who are not in any listed group can still complete Keycloak login but receive **403** from oauth2-proxy when opening a protected operator URL.
 
 ---
 

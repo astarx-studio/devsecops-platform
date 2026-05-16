@@ -1,400 +1,458 @@
-import { NotFoundException } from '@nestjs/common';
+import { ConflictException, NotFoundException } from '@nestjs/common';
 
 import { ProjectsService } from './projects.service';
-import { GitLabService, GitLabProject } from '../gitlab/gitlab.service';
-import { KongService } from '../kong/kong.service';
+import { GitLabService } from '../gitlab/gitlab.service';
+import { K8sService } from '../k8s/k8s.service';
 import { VaultService } from '../vault/vault.service';
-import { CloudflareService } from '../cloudflare/cloudflare.service';
-import { CreateProjectDto } from './dto';
+import { SlugService } from './slug.service';
+import { Project } from './schemas/project.schema';
+import { Provisioning } from './graphql/enums';
 import { createMockConfigService } from '../../test/helpers/mock-providers';
 import { gitlabProjectFactory } from '../../test/helpers/factories';
 
+import type { CreateProjectInput } from './graphql/project.inputs';
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function createMockModel(docs: Partial<Project>[] = []) {
+  const mockDoc = {
+    _id: 'mock-doc-id',
+    save: jest.fn().mockResolvedValue(undefined),
+    deleteOne: jest.fn().mockResolvedValue(undefined),
+    ...docs[0],
+  };
+
+  return {
+    find: jest.fn().mockReturnValue({
+      skip: jest.fn().mockReturnThis(),
+      limit: jest.fn().mockReturnThis(),
+      sort: jest.fn().mockReturnThis(),
+      exec: jest.fn().mockResolvedValue([]),
+    }),
+    findOne: jest.fn().mockReturnValue({
+      exec: jest.fn().mockResolvedValue(null),
+    }),
+    findById: jest.fn().mockReturnValue({
+      exec: jest.fn().mockResolvedValue(null),
+    }),
+    countDocuments: jest.fn().mockReturnValue({
+      exec: jest.fn().mockResolvedValue(0),
+    }),
+    create: jest.fn().mockResolvedValue(mockDoc),
+  };
+}
+
+function createMockAuditModel() {
+  return {
+    create: jest.fn().mockResolvedValue({}),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Mocked forked project fixture
+// ---------------------------------------------------------------------------
+
 const forkedProject = gitlabProjectFactory({
   id: 42,
-  name: 'webapp',
-  path_with_namespace: 'clients/acme/webapp',
-  web_url: 'https://gitlab.devops.test.net/clients/acme/webapp',
+  name: 'repoa',
+  path_with_namespace: 'groupa/groupab/repoa',
+  web_url: 'https://gitlab.devops.test.net/groupa/groupab/repoa',
 });
 
 describe('ProjectsService', () => {
   let service: ProjectsService;
 
-  /**
-   * Standalone mock function references for each service method.
-   * Using standalone variables (instead of `service.method`) in `expect()` calls
-   * avoids the @typescript-eslint/unbound-method lint error, which fires when a
-   * method is extracted from its object context.
-   */
+  let projectModel: ReturnType<typeof createMockModel>;
+  let auditLogModel: ReturnType<typeof createMockAuditModel>;
+
   let createGroupHierarchyFn: jest.Mock;
   let forkTemplateFn: jest.Mock;
-  let getFileContentFn: jest.Mock;
-  /** Explicitly typed so mock.calls[0][2] resolves to string, not any. */
-  let upsertFileFn: jest.Mock<Promise<void>, [number, string, string, string, string?]>;
+  let createNewProjectFn: jest.Mock;
+  let upsertFileFn: jest.Mock;
   let triggerPipelineFn: jest.Mock;
   let listProjectsFn: jest.Mock;
-  let getProjectFn: jest.Mock;
   let deleteProjectFn: jest.Mock;
-  let registerServiceFn: jest.Mock;
-  let removeServiceFn: jest.Mock;
+  let setProjectCiVariablesFn: jest.Mock;
   let writeSecretsFn: jest.Mock;
   let deleteSecretsFn: jest.Mock;
-  let addDnsRecordFn: jest.Mock;
-  let removeDnsRecordFn: jest.Mock;
+  let ensureNamespaceFn: jest.Mock;
+  let getKubeconfigB64Fn: jest.Mock;
+  let slugResolveFn: jest.Mock;
+  let slugIsAvailableFn: jest.Mock;
 
   let gitlabService: jest.Mocked<GitLabService>;
-  let kongService: jest.Mocked<KongService>;
   let vaultService: jest.Mocked<VaultService>;
-  let cloudflareService: jest.Mocked<CloudflareService>;
+  let k8sService: jest.Mocked<K8sService>;
+  let slugService: jest.Mocked<SlugService>;
 
   beforeEach(() => {
+    projectModel = createMockModel();
+    auditLogModel = createMockAuditModel();
+
     createGroupHierarchyFn = jest.fn().mockResolvedValue(5);
     forkTemplateFn = jest.fn().mockResolvedValue(forkedProject);
-    getFileContentFn = jest.fn().mockResolvedValue(null);
-    upsertFileFn = jest
-      .fn<Promise<void>, [number, string, string, string, string?]>()
-      .mockResolvedValue(undefined);
+    createNewProjectFn = jest.fn().mockResolvedValue(forkedProject);
+    upsertFileFn = jest.fn().mockResolvedValue(undefined);
     triggerPipelineFn = jest.fn().mockResolvedValue(undefined);
     listProjectsFn = jest.fn().mockResolvedValue([]);
-    getProjectFn = jest.fn().mockResolvedValue(forkedProject);
     deleteProjectFn = jest.fn().mockResolvedValue(undefined);
-    registerServiceFn = jest.fn().mockResolvedValue({ serviceName: 'svc', hosts: [] });
-    removeServiceFn = jest.fn().mockResolvedValue(undefined);
+    setProjectCiVariablesFn = jest.fn().mockResolvedValue(undefined);
     writeSecretsFn = jest.fn().mockResolvedValue(undefined);
     deleteSecretsFn = jest.fn().mockResolvedValue(undefined);
-    addDnsRecordFn = jest.fn().mockResolvedValue(true);
-    removeDnsRecordFn = jest.fn().mockResolvedValue(true);
+    ensureNamespaceFn = jest.fn().mockResolvedValue(undefined);
+    getKubeconfigB64Fn = jest.fn().mockReturnValue('base64-kubeconfig');
+    slugResolveFn = jest.fn().mockImplementation((requested: string) => Promise.resolve(requested));
+    slugIsAvailableFn = jest.fn().mockResolvedValue(true);
 
     gitlabService = {
       createGroupHierarchy: createGroupHierarchyFn,
       forkTemplate: forkTemplateFn,
-      getFileContent: getFileContentFn,
+      createNewProject: createNewProjectFn,
       upsertFile: upsertFileFn,
       triggerPipeline: triggerPipelineFn,
       listProjects: listProjectsFn,
-      getProject: getProjectFn,
       deleteProject: deleteProjectFn,
+      setProjectCiVariables: setProjectCiVariablesFn,
       templateGroup: 10,
       configGroup: 20,
     } as unknown as jest.Mocked<GitLabService>;
-
-    kongService = {
-      registerService: registerServiceFn,
-      removeService: removeServiceFn,
-    } as unknown as jest.Mocked<KongService>;
 
     vaultService = {
       writeSecrets: writeSecretsFn,
       deleteSecrets: deleteSecretsFn,
     } as unknown as jest.Mocked<VaultService>;
 
-    cloudflareService = {
-      addDnsRecord: addDnsRecordFn,
-      removeDnsRecord: removeDnsRecordFn,
-    } as unknown as jest.Mocked<CloudflareService>;
+    k8sService = {
+      ensureNamespace: ensureNamespaceFn,
+      getKubeconfigB64: getKubeconfigB64Fn,
+    } as unknown as jest.Mocked<K8sService>;
+
+    slugService = {
+      resolve: slugResolveFn,
+      isAvailable: slugIsAvailableFn,
+    } as unknown as jest.Mocked<SlugService>;
 
     service = new ProjectsService(
+      projectModel as never,
+      auditLogModel as never,
       gitlabService,
-      kongService,
       vaultService,
-      cloudflareService,
+      k8sService,
+      slugService,
       createMockConfigService(),
     );
   });
 
+  // ---------------------------------------------------------------------------
+  // createProject
+  // ---------------------------------------------------------------------------
+
   describe('createProject', () => {
-    const baseDto: CreateProjectDto = {
-      clientName: 'acme',
-      projectName: 'webapp',
-      templateSlug: 'nestjs-app',
+    const baseInput: CreateProjectInput = {
+      groupPath: ['groupa', 'groupab'],
+      projectSlug: 'repoa',
+      provisioning: Provisioning.AUTO_DEVOPS,
     };
 
-    it('should create a project with no capabilities (plain repo)', async () => {
-      const result = await service.createProject(baseDto);
+    it('should create group hierarchy, GitLab project, vault secrets, and persist to Mongo', async () => {
+      await service.createProject(baseInput);
 
-      expect(createGroupHierarchyFn).toHaveBeenCalledWith(['clients', 'acme']);
-      expect(forkTemplateFn).toHaveBeenCalledWith('nestjs-app', 5, 'webapp');
+      expect(createGroupHierarchyFn).toHaveBeenCalledWith(['groupa', 'groupab']);
+      // displayName defaults to title-case when not provided (T7-N2: "repoa" → "Repoa")
+      expect(createNewProjectFn).toHaveBeenCalledWith(5, 'repoa', 'Repoa', true);
       expect(writeSecretsFn).toHaveBeenCalledWith(
-        'projects/acme/webapp',
+        'projects/groupa/groupab/repoa',
+        expect.objectContaining({ PROJECT_SLUG: 'repoa', EFFECTIVE_SLUG: 'repoa' }),
+      );
+      // F2: per-env sentinel paths are always written, even without envScopedVars
+      expect(writeSecretsFn).toHaveBeenCalledWith(
+        'projects/groupa/groupab/repoa/dev',
         expect.objectContaining({
-          PROJECT_NAME: 'webapp',
-          CLIENT_NAME: 'acme',
+          DEPLOY_ENV: 'dev',
+          VAULT_PROJECT_PATH: 'projects/groupa/groupab/repoa',
         }),
       );
-      expect(registerServiceFn).not.toHaveBeenCalled();
-      expect(addDnsRecordFn).not.toHaveBeenCalled();
-
-      expect(result.id).toBe(42);
-      expect(result.name).toBe('webapp');
-      expect(result.appUrl).toBeUndefined();
-      expect(result.packageName).toBeUndefined();
-    });
-
-    it('should create a deployable project with Kong + Cloudflare + pipeline', async () => {
-      const dto: CreateProjectDto = {
-        ...baseDto,
-        capabilities: { deployable: { autoDeploy: true } },
-      };
-
-      const result = await service.createProject(dto);
-
-      expect(registerServiceFn).toHaveBeenCalledWith(
-        'acme-webapp-service',
-        'http://acme-webapp:3000',
-        ['webapp.apps.test.net'],
+      expect(writeSecretsFn).toHaveBeenCalledWith(
+        'projects/groupa/groupab/repoa/stg',
+        expect.objectContaining({
+          DEPLOY_ENV: 'stg',
+          VAULT_PROJECT_PATH: 'projects/groupa/groupab/repoa',
+        }),
       );
-      expect(addDnsRecordFn).toHaveBeenCalledWith('webapp.apps.test.net');
-      expect(triggerPipelineFn).toHaveBeenCalledWith(42);
-      expect(result.appUrl).toBe('webapp.apps.test.net');
-      expect(result.kongServiceName).toBe('acme-webapp-service');
-      expect(result.cloudflareConfigured).toBe(true);
+      expect(writeSecretsFn).toHaveBeenCalledWith(
+        'projects/groupa/groupab/repoa/prod',
+        expect.objectContaining({
+          DEPLOY_ENV: 'prod',
+          VAULT_PROJECT_PATH: 'projects/groupa/groupab/repoa',
+        }),
+      );
+      expect(ensureNamespaceFn).toHaveBeenCalledTimes(3); // dev, stg, prod
+      expect(projectModel.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          gitlabPath: 'groupa/groupab/repoa',
+          effectiveSlug: 'repoa',
+          hostnameOverrides: {},
+          legacyV1: false,
+        }),
+      );
     });
 
-    it('should create a deployable project with custom domain', async () => {
-      const dto: CreateProjectDto = {
-        ...baseDto,
-        capabilities: { deployable: { domain: 'custom.example.com' } },
-      };
+    it('should write .gitlab-ci.yml and chart-values.yaml for auto-devops', async () => {
+      await service.createProject(baseInput);
 
-      const result = await service.createProject(dto);
-
-      expect(registerServiceFn).toHaveBeenCalledWith('acme-webapp-service', expect.any(String), [
-        'custom.example.com',
-      ]);
-      expect(result.appUrl).toBe('custom.example.com');
-    });
-
-    it('should create a publishable project', async () => {
-      const dto: CreateProjectDto = {
-        ...baseDto,
-        capabilities: { publishable: {} },
-      };
-
-      const result = await service.createProject(dto);
-
-      expect(registerServiceFn).not.toHaveBeenCalled();
-      expect(result.packageName).toBe('@acme/webapp');
-      expect(result.registryUrl).toContain('/-/packages');
-    });
-
-    it('should create a project with both capabilities', async () => {
-      const dto: CreateProjectDto = {
-        ...baseDto,
-        capabilities: { deployable: {}, publishable: { packageName: '@acme/web-ui' } },
-      };
-
-      const result = await service.createProject(dto);
-
-      expect(registerServiceFn).toHaveBeenCalled();
-      expect(result.appUrl).toBeDefined();
-      expect(result.packageName).toBe('@acme/web-ui');
-    });
-
-    it('should inject config includes into .gitlab-ci.yml', async () => {
-      const dto: CreateProjectDto = {
-        ...baseDto,
-        configs: ['node-pipeline', 'docker-pipeline'],
-      };
-
-      await service.createProject(dto);
-
-      expect(getFileContentFn).toHaveBeenCalledWith(42, '.gitlab-ci.yml');
+      // .gitlab-ci.yml includes the pipeline template path from config (T5)
       expect(upsertFileFn).toHaveBeenCalledWith(
         42,
         '.gitlab-ci.yml',
-        expect.stringContaining('configs/node-pipeline'),
-        expect.stringContaining('inject config includes'),
+        expect.stringContaining('auto-devops-pipeline'),
+        expect.any(String),
+      );
+      // chart-values.yaml is a comment-only override file (T4 Option A)
+      expect(upsertFileFn).toHaveBeenCalledWith(
+        42,
+        'chart-values.yaml',
+        expect.stringContaining('dsoaas-app Helm chart'),
+        expect.any(String),
       );
     });
 
-    it('should merge with existing CI includes without duplicating', async () => {
-      const existingCi = `include:\n  - project: "configs/node-pipeline"\n    file: "/.gitlab-ci.yml"\n`;
-      getFileContentFn.mockResolvedValueOnce(existingCi);
-
-      const dto: CreateProjectDto = {
-        ...baseDto,
-        configs: ['node-pipeline', 'docker-pipeline'],
+    it('should write per-env Vault secrets with caller values merged on top of sentinels when envScopedVars is provided (T1+F2)', async () => {
+      const input: CreateProjectInput = {
+        ...baseInput,
+        envScopedVars: {
+          dev: JSON.stringify({ FEATURE_FLAG: 'on' }),
+          prod: JSON.stringify({ FEATURE_FLAG: 'off' }),
+        },
       };
 
-      await service.createProject(dto);
+      await service.createProject(input);
 
-      const writtenContent = upsertFileFn.mock.calls[0][2];
-      const nodeMatches = writtenContent.match(/configs\/node-pipeline/g);
-      expect(nodeMatches).toHaveLength(1);
-      expect(writtenContent).toContain('configs/docker-pipeline');
-    });
-
-    it('should continue when Cloudflare DNS fails (non-critical)', async () => {
-      addDnsRecordFn.mockRejectedValueOnce(new Error('CF error'));
-
-      const dto: CreateProjectDto = {
-        ...baseDto,
-        capabilities: { deployable: {} },
-      };
-
-      const result = await service.createProject(dto);
-
-      expect(result.cloudflareConfigured).toBe(false);
-      expect(result.id).toBe(42);
-    });
-
-    it('should continue when pipeline trigger fails (non-critical)', async () => {
-      triggerPipelineFn.mockRejectedValueOnce(new Error('Pipeline error'));
-
-      const dto: CreateProjectDto = {
-        ...baseDto,
-        capabilities: { deployable: { autoDeploy: true } },
-      };
-
-      const result = await service.createProject(dto);
-
-      expect(result.id).toBe(42);
-    });
-
-    it('should skip pipeline trigger when autoDeploy is false', async () => {
-      const dto: CreateProjectDto = {
-        ...baseDto,
-        capabilities: { deployable: { autoDeploy: false } },
-      };
-
-      await service.createProject(dto);
-
-      expect(triggerPipelineFn).not.toHaveBeenCalled();
-    });
-
-    it('should use custom groupPath when provided', async () => {
-      const dto: CreateProjectDto = {
-        ...baseDto,
-        groupPath: ['org', 'team', 'frontend'],
-      };
-
-      await service.createProject(dto);
-
-      expect(createGroupHierarchyFn).toHaveBeenCalledWith(['org', 'team', 'frontend']);
-    });
-
-    it('should pass envVars to vault secrets', async () => {
-      const dto: CreateProjectDto = {
-        ...baseDto,
-        envVars: { DATABASE_URL: 'pg://...', JWT_SECRET: 'secret' },
-      };
-
-      await service.createProject(dto);
-
+      // Base path still written
       expect(writeSecretsFn).toHaveBeenCalledWith(
-        'projects/acme/webapp',
+        'projects/groupa/groupab/repoa',
+        expect.objectContaining({ PROJECT_SLUG: 'repoa' }),
+      );
+      // dev — sentinel keys present + caller value merged
+      expect(writeSecretsFn).toHaveBeenCalledWith(
+        'projects/groupa/groupab/repoa/dev',
+        expect.objectContaining({ DEPLOY_ENV: 'dev', FEATURE_FLAG: 'on' }),
+      );
+      // stg — no caller value; sentinels only
+      expect(writeSecretsFn).toHaveBeenCalledWith(
+        'projects/groupa/groupab/repoa/stg',
+        expect.objectContaining({ DEPLOY_ENV: 'stg' }),
+      );
+      // prod — sentinel keys present + caller value merged
+      expect(writeSecretsFn).toHaveBeenCalledWith(
+        'projects/groupa/groupab/repoa/prod',
+        expect.objectContaining({ DEPLOY_ENV: 'prod', FEATURE_FLAG: 'off' }),
+      );
+    });
+
+    it('should fall back to sentinels only for invalid JSON envScopedVars (T1+F2)', async () => {
+      const input: CreateProjectInput = {
+        ...baseInput,
+        envScopedVars: { dev: 'not-json', stg: JSON.stringify({ KEY: 'val' }) },
+      };
+
+      await service.createProject(input);
+
+      // dev — invalid JSON: sentinels written, caller value silently dropped
+      expect(writeSecretsFn).toHaveBeenCalledWith(
+        'projects/groupa/groupab/repoa/dev',
         expect.objectContaining({
-          DATABASE_URL: 'pg://...',
-          JWT_SECRET: 'secret',
+          DEPLOY_ENV: 'dev',
+          VAULT_PROJECT_PATH: 'projects/groupa/groupab/repoa',
         }),
+      );
+      // stg — valid JSON merged on top of sentinels
+      expect(writeSecretsFn).toHaveBeenCalledWith(
+        'projects/groupa/groupab/repoa/stg',
+        expect.objectContaining({ KEY: 'val', DEPLOY_ENV: 'stg' }),
+      );
+    });
+
+    it('should record envScopedVars envs in audit log metadata (T1)', async () => {
+      const input: CreateProjectInput = {
+        ...baseInput,
+        envScopedVars: { dev: JSON.stringify({ FOO: 'bar' }) },
+      };
+
+      await service.createProject(input);
+
+      expect(auditLogModel.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          eventType: 'project.created',
+          metadata: expect.objectContaining({ envScopedVars: ['dev'] }),
+        }),
+      );
+    });
+
+    it('should use slugOverride instead of hostnameOverride for slug resolution (T2)', async () => {
+      const input: CreateProjectInput = {
+        ...baseInput,
+        slugOverride: 'my-custom-slug',
+      };
+
+      await service.createProject(input);
+
+      expect(slugResolveFn).toHaveBeenCalledWith('repoa', ['groupa', 'groupab'], 'my-custom-slug');
+    });
+
+    it('should persist hostnameOverrides as empty object at create time (T2)', async () => {
+      await service.createProject(baseInput);
+
+      expect(projectModel.create).toHaveBeenCalledWith(
+        expect.objectContaining({ hostnameOverrides: {} }),
+      );
+    });
+
+    it('should derive displayName from slug when not provided (T7-N2)', async () => {
+      await service.createProject({ ...baseInput, projectSlug: 'my-app' });
+
+      expect(createNewProjectFn).toHaveBeenCalledWith(5, 'my-app', 'My App', true);
+    });
+
+    it('should set env-scoped CI variables for deployable projects', async () => {
+      await service.createProject(baseInput);
+
+      expect(setProjectCiVariablesFn).toHaveBeenCalledWith(
+        42,
+        expect.arrayContaining([
+          expect.objectContaining({ key: 'KUBE_NAMESPACE', value: 'dev', environmentScope: 'dev' }),
+          expect.objectContaining({ key: 'APP_HOST', environmentScope: 'dev' }),
+          expect.objectContaining({ key: 'VAULT_PROJECT_PATH', environmentScope: 'dev' }),
+          expect.objectContaining({ key: 'KUBECONFIG_B64', environmentScope: 'dev' }),
+        ]),
+      );
+    });
+
+    it('should fork template when provisioning=TEMPLATE', async () => {
+      const input: CreateProjectInput = {
+        ...baseInput,
+        provisioning: Provisioning.TEMPLATE,
+        templateSlug: 'nestjs-app',
+      };
+
+      await service.createProject(input);
+
+      expect(forkTemplateFn).toHaveBeenCalledWith('nestjs-app', 5, 'repoa');
+      expect(createNewProjectFn).not.toHaveBeenCalled();
+    });
+
+    it('should throw ConflictException when TEMPLATE provisioning has no templateSlug', async () => {
+      await expect(
+        service.createProject({ ...baseInput, provisioning: Provisioning.TEMPLATE }),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('should skip CI vars when capabilities.deployable=false', async () => {
+      const input: CreateProjectInput = {
+        ...baseInput,
+        capabilities: { deployable: false, publishable: false },
+      };
+
+      await service.createProject(input);
+
+      expect(setProjectCiVariablesFn).not.toHaveBeenCalled();
+    });
+
+    it('should write audit log entry on success', async () => {
+      await service.createProject(baseInput);
+
+      expect(auditLogModel.create).toHaveBeenCalledWith(
+        expect.objectContaining({ eventType: 'project.created' }),
       );
     });
   });
 
-  describe('listProjects', () => {
-    it('should map GitLab projects to DTOs', async () => {
-      listProjectsFn.mockResolvedValueOnce([
-        gitlabProjectFactory({
-          id: 1,
-          name: 'webapp',
-          path_with_namespace: 'clients/acme/webapp',
-          web_url: 'https://gitlab.devops.test.net/clients/acme/webapp',
-        }),
-      ]);
+  // ---------------------------------------------------------------------------
+  // findProject
+  // ---------------------------------------------------------------------------
 
-      const result = await service.listProjects();
+  describe('findProject', () => {
+    it('should find by MongoDB id', async () => {
+      const mockDoc = { _id: 'abc', effectiveSlug: 'repoa', save: jest.fn(), deleteOne: jest.fn() };
+      projectModel.findById.mockReturnValue({ exec: jest.fn().mockResolvedValue(mockDoc) });
 
-      expect(result).toHaveLength(1);
-      expect(result[0]).toEqual(
-        expect.objectContaining({
-          id: 1,
-          name: 'webapp',
-          clientName: 'acme',
-          vaultPath: 'projects/acme/webapp',
-        }),
-      );
+      const result = await service.findProject({ id: 'abc' });
+
+      expect(result.effectiveSlug).toBe('repoa');
     });
 
-    it('should default clientName to "unknown" for shallow paths', async () => {
-      listProjectsFn.mockResolvedValueOnce([
-        gitlabProjectFactory({
-          id: 2,
-          name: 'solo',
-          path_with_namespace: 'root/solo',
-          web_url: 'https://gitlab.devops.test.net/root/solo',
-        }),
-      ]);
-
-      const result = await service.listProjects();
-
-      expect(result[0].clientName).toBe('unknown');
+    it('should throw NotFoundException when project not found', async () => {
+      await expect(service.findProject({ id: 'not-exist' })).rejects.toThrow(NotFoundException);
     });
   });
 
-  describe('getProject', () => {
-    it('should return a ProjectInfoDto', async () => {
-      const result = await service.getProject(42);
-
-      expect(result.id).toBe(42);
-      expect(result.name).toBe('webapp');
-      expect(result.clientName).toBe('acme');
-    });
-
-    it('should throw NotFoundException when project is null', async () => {
-      getProjectFn.mockResolvedValueOnce(null as unknown as GitLabProject);
-
-      await expect(service.getProject(999)).rejects.toThrow(NotFoundException);
-    });
-  });
+  // ---------------------------------------------------------------------------
+  // deleteProject
+  // ---------------------------------------------------------------------------
 
   describe('deleteProject', () => {
-    it('should clean up Kong, Cloudflare, Vault, and GitLab in order', async () => {
-      await service.deleteProject(42);
+    it('should delete GitLab project and remove MongoDB document', async () => {
+      const mockDoc = {
+        _id: 'abc',
+        gitlabProjectId: 42,
+        gitlabPath: 'groupa/repoa',
+        effectiveSlug: 'repoa',
+        vaultBasePath: 'projects/groupa/repoa',
+        save: jest.fn(),
+        deleteOne: jest.fn().mockResolvedValue(undefined),
+      };
+      projectModel.findById.mockReturnValue({ exec: jest.fn().mockResolvedValue(mockDoc) });
 
-      expect(removeServiceFn).toHaveBeenCalledWith('acme-webapp-service');
-      expect(removeDnsRecordFn).toHaveBeenCalledWith('webapp.apps.test.net');
-      expect(deleteSecretsFn).toHaveBeenCalledWith('projects/acme/webapp');
+      const result = await service.deleteProject('abc');
+
       expect(deleteProjectFn).toHaveBeenCalledWith(42);
+      expect(deleteSecretsFn).toHaveBeenCalledWith('projects/groupa/repoa');
+      expect(mockDoc.deleteOne).toHaveBeenCalled();
+      expect(result).toBe(true);
     });
 
-    it('should continue when Kong cleanup fails (non-critical)', async () => {
-      removeServiceFn.mockRejectedValueOnce(new Error('Kong error'));
-
-      await expect(service.deleteProject(42)).resolves.toBeUndefined();
-      expect(deleteProjectFn).toHaveBeenCalledWith(42);
-    });
-
-    it('should continue when Cloudflare cleanup fails (non-critical)', async () => {
-      removeDnsRecordFn.mockRejectedValueOnce(new Error('CF error'));
-
-      await expect(service.deleteProject(42)).resolves.toBeUndefined();
-      expect(deleteProjectFn).toHaveBeenCalledWith(42);
-    });
-
-    it('should continue when Vault cleanup fails (non-critical)', async () => {
+    it('should continue when Vault deletion fails (non-critical)', async () => {
+      const mockDoc = {
+        _id: 'abc',
+        gitlabProjectId: 42,
+        gitlabPath: 'groupa/repoa',
+        effectiveSlug: 'repoa',
+        vaultBasePath: 'projects/groupa/repoa',
+        save: jest.fn(),
+        deleteOne: jest.fn().mockResolvedValue(undefined),
+      };
+      projectModel.findById.mockReturnValue({ exec: jest.fn().mockResolvedValue(mockDoc) });
       deleteSecretsFn.mockRejectedValueOnce(new Error('Vault error'));
 
-      await expect(service.deleteProject(42)).resolves.toBeUndefined();
-      expect(deleteProjectFn).toHaveBeenCalledWith(42);
+      const result = await service.deleteProject('abc');
+
+      expect(result).toBe(true);
+      expect(deleteProjectFn).toHaveBeenCalled();
     });
   });
 
-  describe('resolveUpstreamUrl (via createProject)', () => {
-    it('should use local mode by default', async () => {
-      const dto: CreateProjectDto = {
-        clientName: 'acme',
-        projectName: 'webapp',
-        templateSlug: 'nestjs-app',
-        capabilities: { deployable: {} },
+  // ---------------------------------------------------------------------------
+  // setPinnedV1
+  // ---------------------------------------------------------------------------
+
+  describe('setPinnedV1', () => {
+    it('should update pinnedV1 flag and save', async () => {
+      const saveFn = jest.fn().mockResolvedValue(undefined);
+      const mockDoc = {
+        _id: 'abc',
+        gitlabPath: 'groupa/repoa',
+        effectiveSlug: 'repoa',
+        pinnedV1: false,
+        save: saveFn,
+        deleteOne: jest.fn(),
       };
+      projectModel.findById.mockReturnValue({ exec: jest.fn().mockResolvedValue(mockDoc) });
 
-      await service.createProject(dto);
+      const result = await service.setPinnedV1('abc', true);
 
-      expect(registerServiceFn).toHaveBeenCalledWith(
-        expect.any(String),
-        'http://acme-webapp:3000',
-        expect.any(Array),
-      );
+      expect(saveFn).toHaveBeenCalled();
+      expect(result.pinnedV1).toBe(true);
     });
-
   });
 });

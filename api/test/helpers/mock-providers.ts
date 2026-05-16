@@ -5,7 +5,7 @@ import type { AppConfiguration } from '../../src/config';
 
 /**
  * Default test configuration values used across all unit tests.
- * Mirrors the shape of AppConfiguration.
+ * Mirrors the shape of AppConfiguration (Mongo + K8s defaults for tests).
  */
 const TEST_CONFIG: Record<string, unknown> = {
   port: 3000,
@@ -19,12 +19,14 @@ const TEST_CONFIG: Record<string, unknown> = {
   'gitlab.token': 'test-gitlab-token',
   'gitlab.templateGroupId': 10,
   'gitlab.configGroupId': 20,
-  'kong.adminUrl': 'http://kong:8001',
+  'mongo.url': 'mongodb://localhost:27017',
+  'mongo.dbName': 'platform-test',
   'vault.url': 'http://vault:8200',
   'vault.token': 'test-vault-token',
-  'cloudflare.apiToken': 'test-cf-token',
-  'cloudflare.zoneId': 'test-cf-zone',
-  'cloudflare.tunnelId': 'test-cf-tunnel',
+  'kube.apiUrl': 'https://k3d-dsoaas-server-0:6443',
+  'kube.configDir': '/tmp/test-kubeconfigs',
+  'autoDevops.pipelineProject': 'configs/auto-devops-pipeline',
+  'autoDevops.pipelineFile': '/.gitlab-ci.yml',
   'oidc.issuerUrl': undefined,
   'oidc.jwksUrl': undefined,
   'oidc.audience': undefined,

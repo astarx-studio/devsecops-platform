@@ -14,6 +14,16 @@ export interface GitLabProject {
   description: string | null;
   default_branch: string;
   last_activity_at: string;
+  /**
+   * The immediate parent namespace (group or user) of this project.
+   * Returned by the GitLab REST API `/projects` and `/groups/:id/projects` endpoints.
+   * Used in reconciliation to filter out platform-owned meta-groups by stable ID
+   * rather than fragile path-string prefix matching.
+   */
+  namespace?: {
+    id: number;
+    full_path: string;
+  };
 }
 
 export interface GitLabGroup {
@@ -178,15 +188,21 @@ export class GitLabService {
   }
 
   /**
-   * Permanently deletes a GitLab project.
+   * Permanently deletes a GitLab project immediately.
+   *
+   * GitLab 15.2+ soft-deletes projects by renaming and scheduling them for
+   * later removal. The `permanently_delete=true` query param bypasses the
+   * delayed-deletion queue so the project path is freed straight away,
+   * allowing a project with the same name to be recreated without conflict.
    *
    * @param projectId - GitLab project ID to delete
    */
   async deleteProject(projectId: number): Promise<void> {
-    this.logger.warn(`Deleting GitLab project id=${projectId}`);
+    this.logger.warn(`Permanently deleting GitLab project id=${projectId}`);
     await firstValueFrom(
       this.httpService.delete(`${this.baseUrl}/api/v4/projects/${projectId}`, {
         headers: this.headers,
+        params: { permanently_delete: true },
       }),
     );
   }
@@ -408,8 +424,7 @@ export class GitLabService {
   }
 
   /**
-   * Checks whether a route/service hostname already exists in Kong
-   * by querying the GitLab projects list (used for domain conflict detection).
+   * Finds a project by slug in the specified group.
    *
    * @param groupId - Group to search in
    * @param projectSlug - Project slug to look for
@@ -420,6 +435,104 @@ export class GitLabService {
     projectSlug: string,
   ): Promise<GitLabProject | undefined> {
     return this.findProjectInGroup(groupId, projectSlug);
+  }
+
+  /**
+   * Sets (or updates) an environment-scoped, masked CI variable on a GitLab project.
+   *
+   * Uses a GET-check-first approach to decide between PUT (update) and POST (create),
+   * which avoids GitLab's silent behaviour of ignoring scope filters on PUT.
+   *
+   * @param projectId - GitLab project ID
+   * @param key - CI variable name (e.g. "KUBE_NAMESPACE")
+   * @param value - Variable value (stored masked)
+   * @param environmentScope - Environment scope pattern (e.g. "dev", "stg", "prod", or "*")
+   * @param masked - Whether the variable should be masked in CI job logs (defaults to true)
+   */
+  async setProjectCiVariable(
+    projectId: number,
+    key: string,
+    value: string,
+    environmentScope = '*',
+    masked = true,
+  ): Promise<void> {
+    const baseUrl = `${this.baseUrl}/api/v4/projects/${projectId}/variables`;
+
+    this.logger.debug(
+      `setProjectCiVariable: project=${projectId} key=${key} scope="${environmentScope}"`,
+    );
+
+    // GET: check if this key+scope combination already exists
+    let exists = false;
+    try {
+      const { data } = await firstValueFrom(
+        this.httpService.get<Array<{ key: string; environment_scope: string }>>(baseUrl, {
+          headers: this.headers,
+          params: { filter: { environment_scope: environmentScope } },
+        }),
+      );
+      exists = data.some((v) => v.key === key && v.environment_scope === environmentScope);
+    } catch (error) {
+      const status = (error as { response?: { status?: number } }).response?.status;
+      if (status !== 404) {
+        throw error;
+      }
+    }
+
+    const payload = {
+      key,
+      value,
+      variable_type: 'env_var',
+      protected: false,
+      masked,
+      environment_scope: environmentScope,
+    };
+
+    if (exists) {
+      this.logger.debug(
+        `Updating CI variable "${key}" [${environmentScope}] on project ${projectId}`,
+      );
+      await firstValueFrom(
+        this.httpService.put(`${baseUrl}/${key}`, payload, {
+          headers: this.headers,
+          params: { filter: { environment_scope: environmentScope } },
+        }),
+      );
+    } else {
+      this.logger.log(
+        `Creating CI variable "${key}" [${environmentScope}] on project ${projectId}`,
+      );
+      await firstValueFrom(this.httpService.post(baseUrl, payload, { headers: this.headers }));
+    }
+  }
+
+  /**
+   * Sets multiple environment-scoped CI variables on a project in a single call sequence.
+   * Variables are set sequentially to avoid GitLab API rate limits.
+   *
+   * @param projectId - GitLab project ID
+   * @param variables - Array of variable definitions
+   */
+  async setProjectCiVariables(
+    projectId: number,
+    variables: Array<{
+      key: string;
+      value: string;
+      environmentScope: string;
+      masked?: boolean;
+    }>,
+  ): Promise<void> {
+    this.logger.log(`Setting ${variables.length} CI variable(s) on project ${projectId}`);
+    for (const variable of variables) {
+      await this.setProjectCiVariable(
+        projectId,
+        variable.key,
+        variable.value,
+        variable.environmentScope,
+        variable.masked ?? true,
+      );
+    }
+    this.logger.log(`All ${variables.length} CI variable(s) set on project ${projectId}`);
   }
 
   private async findGroup(name: string, parentId?: number): Promise<GitLabGroup | undefined> {

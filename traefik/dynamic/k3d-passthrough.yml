@@ -1,0 +1,76 @@
+# =============================================================================
+# Traefik Dynamic Configuration — k3d In-Cluster Passthrough
+# =============================================================================
+# Routes app-zone traffic from the outer (Docker) Traefik to the in-cluster
+# Traefik running inside the k3d LoadBalancer container.
+#
+# App zones (three wildcard domains):
+#   *.apps.<DOMAIN>         — prod  (no env prefix)
+#   *.stg.apps.<DOMAIN>     — staging
+#   *.dev.apps.<DOMAIN>     — development
+#
+# How it works:
+#   1. Outer Traefik matches Host headers for the three zones via HostRegexp.
+#   2. Traffic is forwarded to k3d-dsoaas-serverlb:8081 (host port 8081 maps
+#      to the in-cluster Traefik :80 via klipper-LB).  The inner Traefik then
+#      routes by Ingress host.
+#   3. Priority 10 — higher than generic low-priority routers so these
+#      routes take precedence for app-zone hostnames.
+#   4. TLS is terminated at the outer Traefik; the in-cluster Traefik receives
+#      plain HTTP. From devops-network, the LB container is reachable at
+#      k3d-dsoaas-serverlb:8081 (klipper-LB forwards to the in-cluster Service).
+#
+# __DOMAIN__ placeholder is substituted at container startup by the traefik
+# entrypoint sed command (same mechanism as traefik.yml).
+# =============================================================================
+
+http:
+  routers:
+    # -------------------------------------------------------------------------
+    # prod zone: *.apps.<DOMAIN>
+    # Traefik v3 HostRegexp uses pure Go regexp (no named-group syntax).
+    # -------------------------------------------------------------------------
+    k3d-prod:
+      rule: "HostRegexp(`[a-z0-9-]+\\.apps\\.__DOMAIN__`)"
+      entryPoints:
+        - websecure
+      service: k3d-ingress
+      priority: 10
+
+    # -------------------------------------------------------------------------
+    # staging zone: *.stg.apps.<DOMAIN>
+    # -------------------------------------------------------------------------
+    k3d-stg:
+      rule: "HostRegexp(`[a-z0-9-]+\\.stg\\.apps\\.__DOMAIN__`)"
+      entryPoints:
+        - websecure
+      service: k3d-ingress
+      priority: 10
+
+    # -------------------------------------------------------------------------
+    # dev zone: *.dev.apps.<DOMAIN>
+    # -------------------------------------------------------------------------
+    k3d-dev:
+      rule: "HostRegexp(`[a-z0-9-]+\\.dev\\.apps\\.__DOMAIN__`)"
+      entryPoints:
+        - websecure
+      service: k3d-ingress
+      priority: 10
+
+  services:
+    # -------------------------------------------------------------------------
+    # Target: in-cluster Traefik via fixed NodePort on the k3d server node.
+    # klipper-LB is disabled in this cluster so the LoadBalancer service never
+    # gets an external IP.  The inner Traefik is exposed as a NodePort service
+    # on port 30080, reachable from devops-network via the k3d server's Docker
+    # hostname.
+    # -------------------------------------------------------------------------
+    k3d-ingress:
+      loadBalancer:
+        passHostHeader: true
+        servers:
+          - url: "http://k3d-dsoaas-server-0:30080"
+        # No active health check — inner Traefik serves /ping on its internal
+        # port (8080), not the web NodePort (30080), so an active check would
+        # always return 404 and mark the server DOWN.  Traefik's passive health
+        # checking is sufficient here.

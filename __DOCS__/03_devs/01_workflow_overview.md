@@ -18,9 +18,11 @@ When a new project is set up for you through the Management API, several things 
 
 - A **GitLab repository** is created for you, pre-populated from a template. The template includes a `Dockerfile`, a basic `.gitlab-ci.yml` pipeline configuration, and a skeleton application structure.
 - A **secrets path in Vault** is created at `projects/<client>/<project>`. You can store and read your application's sensitive values here.
-- A **Kong route** is registered so your service has a URL once it's deployed.
+- **Ingress hostnames** are recorded for each environment so your service has stable URLs under the `*.apps.<DOMAIN>` zones once CI deploys to k3d.
 
 Your repository lives under a group path like `clients/<your-client>/<your-project>`. You can find it in GitLab by browsing to your client's group.
+
+If you have an existing repository that you'd like to bring onto the platform without re-provisioning it through the API, see [Manual onboarding](06_manual_onboarding.md) for the opt-in recipe.
 
 ---
 

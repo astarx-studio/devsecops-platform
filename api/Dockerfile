@@ -8,8 +8,9 @@
 # ==========================================================================
 
 # -- Base --
+# pnpm 10.x is the latest version compatible with Node.js 20; pnpm 11+ requires Node >= 22.
 FROM node:20-alpine AS base
-RUN corepack enable && corepack prepare pnpm@latest --activate
+RUN corepack enable && corepack prepare pnpm@10 --activate
 WORKDIR /app
 
 # -- Build --

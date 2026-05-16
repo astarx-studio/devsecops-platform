@@ -49,6 +49,26 @@ export class VaultService {
   }
 
   /**
+   * Pings the Vault/OpenBao instance by calling the sys/health endpoint.
+   * Returns true when Vault is initialized, unsealed, and active.
+   * Returns false (never throws) on any network or HTTP error.
+   *
+   * @returns true if Vault is healthy, false otherwise
+   */
+  async ping(): Promise<boolean> {
+    try {
+      // sys/health returns 200 when initialized + unsealed + active.
+      // Non-200 responses (standby, sealed, etc.) surface as Axios errors.
+      await firstValueFrom(
+        this.httpService.get(`${this.baseUrl}/v1/sys/health`, { headers: this.headers }),
+      );
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
    * Deletes all versions of secrets at a KV v2 path.
    *
    * @param path - Vault path to permanently delete

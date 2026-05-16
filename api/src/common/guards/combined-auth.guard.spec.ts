@@ -5,6 +5,7 @@ import { createMockConfigService } from '../../../test/helpers/mock-providers';
 
 function createMockContext(headers: Record<string, string> = {}): ExecutionContext {
   return {
+    getType: () => 'http',
     switchToHttp: () => ({
       getRequest: () => ({ headers }),
     }),

@@ -4,7 +4,7 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
  * Response object returned after project creation or retrieval.
  *
  * Fields vary by capability:
- * - Deployable projects include appUrl, kongServiceName
+ * - Deployable projects include appUrl
  * - Publishable projects include packageName, registryUrl
  * - All projects include id, name, clientName, gitlabUrl, vaultPath
  */
@@ -37,12 +37,6 @@ export class ProjectInfoDto {
   appUrl?: string;
 
   @ApiPropertyOptional({
-    example: 'acme-webapp-service',
-    description: 'Kong service name (only for deployable projects)',
-  })
-  kongServiceName?: string;
-
-  @ApiPropertyOptional({
     example: '@acme/webapp',
     description: 'Package name (only for publishable projects)',
   })
@@ -59,10 +53,4 @@ export class ProjectInfoDto {
     description: 'Config repos injected into this project',
   })
   configs?: string[];
-
-  @ApiPropertyOptional({
-    example: true,
-    description: 'Whether Cloudflare DNS was configured',
-  })
-  cloudflareConfigured?: boolean;
 }

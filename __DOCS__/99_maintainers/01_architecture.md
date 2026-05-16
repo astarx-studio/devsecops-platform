@@ -40,10 +40,8 @@ graph LR
         oauth2proxy["oauth2-proxy\nOIDC session broker"]
     end
 
-    subgraph gateway ["API Gateway"]
-        kong["Kong 3.9\nHost-based routing\nRate limiting\nPlugin chain"]
-        kongdb["PostgreSQL 17\nKong state"]
-        deckSync["kong-deck-sync\nDeclarative config sync\n(one-shot)"]
+    subgraph data ["Platform data"]
+        mongo["MongoDB 7\nProject registry"]
     end
 
     subgraph identity ["Identity"]
@@ -62,29 +60,28 @@ graph LR
     end
 
     subgraph api ["Management API"]
-        mgmtapi["NestJS API\nProject provisioning\nTemplate/Config CRUD"]
+        mgmtapi["NestJS API\nGraphQL + REST read model\nTemplate/Config CRUD"]
     end
 
-    CFAPI["Cloudflare API\n(cloud — api.cloudflare.com)"]
+    subgraph k8s ["Kubernetes (k3d)"]
+        k3d["Cluster Traefik\nIngress + workloads"]
+    end
 
     cloudflared -->|"forwards traffic"| traefik
-    traefik -->|"kong-catchall rule"| kong
+    traefik -->|"Docker labels + file provider"| keycloak
+    traefik -->|"Docker labels + file provider"| vault
+    traefik -->|"Docker labels + file provider"| gitlab
+    traefik -->|"Docker labels + file provider"| mgmtapi
     traefik -->|"ForwardAuth check"| oauth2proxy
+    traefik -->|"k3d passthrough routers"| k3d
     oauth2proxy -->|"token validation"| keycloak
-    kong -->|"host-based routes"| keycloak
-    kong -->|"host-based routes"| vault
-    kong -->|"host-based routes"| gitlab
-    kong -->|"host-based routes"| mgmtapi
-    kong -->|"host-based routes"| oauth2proxy
-    kong --- kongdb
     keycloak --- keycloakdb
-    deckSync -->|"deck gateway sync"| kong
     vaultOidcInit -->|"vault write"| vault
     keycloak -->|"OIDC tokens"| mgmtapi
-    mgmtapi -->|"REST API"| gitlab
-    mgmtapi -->|"REST API"| kong
-    mgmtapi -->|"REST API"| vault
-    mgmtapi -->|"REST API (DNS records)"| CFAPI
+    mgmtapi -->|"GitLab REST"| gitlab
+    mgmtapi -->|"Vault REST"| vault
+    mgmtapi -->|"MongoDB"| mongo
+    mgmtapi -->|"Kubernetes API"| k3d
     runner -->|"pull/push images"| gitlab
     runner -->|"run jobs"| gitlab
 ```
@@ -98,24 +95,21 @@ graph LR
 - Terminates TLS using Let's Encrypt ACME DNS-01 challenge via Cloudflare.
 - Issues a single wildcard certificate for `*.devops.<DOMAIN>`.
 - Redirects all `http://` traffic to `https://`.
-- Defines a `kong-catchall` dynamic rule (priority 1) that forwards all HTTPS traffic to Kong unless a higher-priority route matches first.
-- Defines an `oidc-auth` ForwardAuth middleware that delegates session checks to `oauth2-proxy`.
-- Exposes its own dashboard at `${TRAEFIK_DOMAIN}` behind the `oidc-auth` middleware.
+- Loads shared middlewares from `traefik/dynamic/forward-auth.yml` and app-zone passthrough rules from `traefik/dynamic/k3d-passthrough.yml` (after entrypoint `sed` substitution).
+- Routes operator services via **Docker labels** on each upstream container and publishes the dashboard at `${TRAEFIK_DOMAIN}` behind `oidc-auth@file`.
 
 ### oauth2-proxy
 
 - Brokers OIDC authentication for services that have no native OIDC client.
 - Keycloak is the OIDC provider. `oauth2-proxy` redirects unauthenticated users to the Keycloak login page and stores the session in a cookie scoped to `.devops.<DOMAIN>`.
 - On successful auth, injects `X-Auth-Request-User`, `X-Auth-Request-Email`, and `X-Auth-Request-Access-Token` headers for downstream services.
-- The Traefik `oidc-auth` ForwardAuth middleware calls `oauth2-proxy` at `/oauth2/auth` for every protected request.
+- The Traefik `oidc-auth` ForwardAuth middleware calls `oauth2-proxy` at its root URL for each protected request.
 
-### Kong
+### Application ingress (k3d)
 
-- Routes traffic to upstream services by matching the `Host` header.
-- All public-facing services (Keycloak, Vault, GitLab, Management API, oauth2-proxy) are declared as Kong services in `kong/kong.template.yml`.
-- Deployed applications are registered dynamically via the Management API and appear as additional Kong services.
-- Kong Admin API (`${KONG_ADMIN_DOMAIN}`) is exposed via a Docker label-defined Traefik route, protected by the `oidc-auth` middleware.
-- `kong-deck-sync` runs once at startup to apply the declarative config via `deck gateway sync`.
+- Team workloads run in k3d; **Kubernetes Ingress** (via in-cluster Traefik) routes HTTP to pods.
+- The outer Traefik instance forwards `*.apps.<DOMAIN>` / `*.dev.apps.<DOMAIN>` / `*.stg.apps.<DOMAIN>` hostnames to the cluster using file-provider `HostRegexp` routers.
+- The Management API provisions namespaces, Helm releases, and CI variables—there is no separate compose-level API gateway for app traffic.
 
 ### Keycloak
 
@@ -151,8 +145,8 @@ graph LR
 ### Management API
 
 - NestJS application. Acts as the orchestration layer for project lifecycle management.
-- Exposes a REST API authenticated via API key and/or OIDC JWT.
-- Full provisioning logic: GitLab fork → CI inject → Vault secrets → Kong route → Cloudflare DNS → pipeline trigger.
+- Exposes **GraphQL** at `/graphql` (primary write path) and a small **REST** surface (`GET /projects`, `GET /health`, deprecated 410 stubs for legacy POST/DELETE).
+- Provisioning flow: GitLab project or fork → CI inject → Vault secrets → Kubernetes namespaces / Helm → MongoDB persistence → optional pipeline trigger.
 - Manages the `templates` group (project skeletons) and `configs` group (shared CI/CD config repos) via GitLab API.
 - Exposes Swagger UI at `/api/docs`.
 
@@ -171,12 +165,13 @@ graph LR
 | Component | Technology | Why |
 |---|---|---|
 | Reverse proxy | Traefik v3.6 | Native Docker label integration, automatic TLS with ACME, ForwardAuth middleware |
-| API Gateway | Kong 3.9 | Mature plugin ecosystem, declarative config via decK, host-based routing |
+| Ingress (apps) | k3d + Traefik (in-cluster) | Standard Kubernetes networking for deployable workloads |
 | Identity | Keycloak 26.6 | Industry-standard OIDC/OAuth2, configurable client scopes, realm import |
 | Secrets | OpenBao 2 | KV v2 versioning, OIDC auth, fine-grained policies |
 | SCM | GitLab CE 18.10 | Integrated registry, package manager, CI/CD, OIDC SSO |
-| Management API | NestJS 11 | TypeScript, decorator-driven, built-in Swagger, modular |
-| Database | PostgreSQL 17 | Separate instances for Kong and Keycloak; Alpine for smaller image size |
+| Management API | NestJS 11 | TypeScript, GraphQL + REST, modular services |
+| Registry data | MongoDB 7 | Document store for projects, audit log, catalog metadata |
+| Database | PostgreSQL 17 | Keycloak state; Alpine image for smaller footprint |
 | Tunneling | cloudflared | Zero-trust ingress without firewall rules |
 | OIDC proxy | oauth2-proxy | Lightweight session broker for services without native OIDC |
 
@@ -189,7 +184,7 @@ graph TB
     subgraph host ["Host Machine"]
         subgraph docker ["Docker Compose — devops-network bridge"]
             traefik
-            kong
+            mongo
             keycloak
             vault
             gitlab
@@ -198,7 +193,7 @@ graph TB
             oauth2proxy["oauth2-proxy"]
             cloudflared
         end
-        vols[".vols/ — persistent volumes\ntraefik/certs, kong-db, keycloak-db\ngitlab/{config,logs,data}, vault, gitlab-runner"]
+        vols[".vols/ — persistent volumes\ntraefik/certs, mongo, keycloak-db\ngitlab/{config,logs,data}, vault, gitlab-runner, kubeconfigs"]
     end
 
     subgraph cf ["Cloudflare Edge"]
@@ -219,10 +214,7 @@ The Docker Compose `depends_on` graph forms a strict boot sequence:
 
 ```mermaid
 graph TD
-    kongdb["kong-db\n(healthy)"]
-    kongmig["kong-migration\n(completed)"]
-    kong_svc["kong\n(healthy)"]
-    deckSync["kong-deck-sync"]
+    mongodb["mongo\n(healthy)"]
     keycloakdb["keycloak-db\n(healthy)"]
     keycloak_svc["keycloak\n(healthy)"]
     vault_svc["vault\n(healthy)"]
@@ -231,8 +223,7 @@ graph TD
     runner_svc["gitlab-runner"]
     api_svc["api\n(healthy)"]
 
-    kongdb --> kongmig --> kong_svc --> deckSync
-    kong_svc --> api_svc
+    mongodb --> api_svc
     vault_svc --> api_svc
     keycloakdb --> keycloak_svc
     keycloak_svc --> vaultInit

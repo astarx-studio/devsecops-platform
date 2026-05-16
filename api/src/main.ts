@@ -52,9 +52,13 @@ async function bootstrap(): Promise<void> {
   app.useGlobalInterceptors(new LoggingInterceptor());
 
   const swaggerConfig = new DocumentBuilder()
-    .setTitle('DevOps Platform — Management API')
-    .setDescription('Orchestrates project provisioning across GitLab, Vault, Kong, and Cloudflare.')
-    .setVersion('1.0')
+    .setTitle('DevOps Platform — Management API (v2)')
+    .setDescription(
+      'Orchestrates project provisioning across GitLab, Vault, MongoDB, and k3d Kubernetes. ' +
+        'Primary interface: GraphQL at /graphql (Apollo Sandbox in non-prod). ' +
+        'REST shim: read-only GET /projects endpoints for backward compatibility.',
+    )
+    .setVersion('2.0')
     .addApiKey({ type: 'apiKey', name: 'X-API-Key', in: 'header' }, 'api-key')
     .addBearerAuth({ type: 'http', scheme: 'bearer', bearerFormat: 'JWT' })
     .build();

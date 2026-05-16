@@ -88,7 +88,7 @@ All persistent data is stored under `.vols/` in the project root. This folder is
 - `.vols/gitlab-runner/` — GitLab Runner configuration and build cache
 - `.vols/vault/` — OpenBao secrets storage
 - `.vols/keycloak-db/` — Keycloak database (users, realm configuration, OIDC clients)
-- `.vols/kong-db/` — Kong database (routes, services, plugins)
+- `.vols/mongo/` — MongoDB data (Management API registry)
 - `.vols/traefik/` — ACME certificate storage (your Let's Encrypt certificates)
 
 Treat this entire folder as sensitive. Anyone with access to these files can potentially extract secrets or impersonate users.
@@ -97,17 +97,36 @@ Treat this entire folder as sensitive. Anyone with access to these files can pot
 
 ## Backups
 
-There's no automated backup system in v1. At minimum, periodically copy the `.vols/` folder to a separate location (an external drive, object storage, or a different server).
+The platform stores all durable state under **`.vols/`** plus your **`.env`** at the repo root. Both are git-ignored.
 
-If the platform goes down and you restore `.vols/` from a backup, you can bring the stack back up with `docker compose up -d` and pick up from where you left off — as long as the `.env` file is also preserved.
+### Creating an archive
 
-The most critical folders to back up are:
+From the repository root:
 
-- `.vols/gitlab/` — losing this means losing all repositories
-- `.vols/vault/` — losing this means losing stored OpenBao secrets
-- `.vols/keycloak-db/` — losing this means losing users and SSO configuration
+```bash
+make backup
+```
 
-If you lose `.vols/kong-db/` or `.vols/traefik/`, Kong and Traefik will reinitialize from their configuration files, and Traefik will request new certificates automatically.
+This runs [`bootstrap/backup.sh`](../../bootstrap/backup.sh), which writes `backups/platform-<timestamp>.tar.gz` containing `.env` (if present) and `.vols/`, while skipping bulky rebuildable paths (for example GitLab build caches and logs, and local `node_modules`). The `backups/` directory is listed in `.gitignore` — treat archives as **sensitive** (they include secrets and full GitLab data).
+
+**Retention:** keep a small number of recent archives on separate storage (external disk or object storage). Rotate old files manually; there is no built-in retention job.
+
+### Restoring
+
+1. Stop the stack so files are not locked: `docker compose down` (include `--profile …` if you use Cloudflare Tunnel or VPN edge).
+2. Extract the archive:
+
+```bash
+make restore ARCHIVE=backups/platform-YYYYMMDD-HHMMSS.tar.gz
+```
+
+3. Start Compose again (`docker compose up -d` with the right profile), then re-run Kubernetes bootstrap steps if needed (`./bootstrap/bootstrap.sh` or the individual `bootstrap/*.sh` scripts after k3d).
+
+`restore.sh` refuses to run while any Compose container for this project is still running.
+
+### Reset without a backup
+
+If you only need to wipe Kubernetes state but keep GitLab/Vault volumes, use `make reset`. For a full wipe including `.vols`, see [Reset from zero](05_reset_from_zero.md) and `make reset ARGS=--all` (interactive confirmation).
 
 ---
 

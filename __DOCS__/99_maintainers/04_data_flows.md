@@ -6,9 +6,9 @@ This document traces the key runtime flows through the platform using sequence d
 
 ---
 
-## 1. Project provisioning (`POST /projects`)
+## 1. Project provisioning (GraphQL `createProject`)
 
-This is the central flow of the platform. An operator (or automated system) calls the Management API to create a new project, which cascades into GitLab, Vault, Kong, and optionally Cloudflare.
+This is the central flow of the platform. An operator (or automated system) calls the Management API via **`POST /graphql`** with the `createProject` mutation, which cascades into GitLab, OpenBao (Vault), Kubernetes (k3d), and MongoDB.
 
 ```mermaid
 sequenceDiagram
@@ -16,10 +16,10 @@ sequenceDiagram
     participant API as Management API
     participant GitLab
     participant Vault
-    participant Kong
-    participant CF as Cloudflare API
+    participant K8s as Kubernetes (k3d)
+    participant Mongo as MongoDB
 
-    Operator->>API: POST /projects {clientName, projectName, templateSlug, capabilities}
+    Operator->>API: POST /graphql mutation createProject
     Note over API: CombinedAuthGuard validates API key or JWT
 
     API->>GitLab: GET /groups (find or create groupPath[0])
@@ -27,101 +27,81 @@ sequenceDiagram
     API->>GitLab: GET/POST /groups (walk groupPath segments)
     GitLab-->>API: leaf group ID
 
-    API->>GitLab: GET /projects (find template by slug)
-    GitLab-->>API: template project
-    API->>GitLab: POST /projects/:templateId/fork {namespace_id, name}
-    GitLab-->>API: forked project {id, web_url}
+    API->>GitLab: GET /projects (find template by slug) / create project
+    GitLab-->>API: GitLab project
 
     opt configs[] is not empty
-        API->>GitLab: GET /projects/:id/repository/files/.gitlab-ci.yml
-        GitLab-->>API: existing CI YAML (or 404)
-        Note over API: merge include entries (deduplicate)
-        API->>GitLab: PUT /projects/:id/repository/files/.gitlab-ci.yml
+        API->>GitLab: GET/PUT .gitlab-ci.yml (merge includes)
         GitLab-->>API: 200
     end
 
-    API->>Vault: POST /v1/secret/data/projects/{clientName}/{projectName}
-    Note over API,Vault: {PROJECT_NAME, CLIENT_NAME, GITLAB_PROJECT_ID, DEPLOYMENT_ENV, ...envVars}
+    API->>Vault: POST /v1/secret/data/projects/...
+    Note over API,Vault: env + template defaults
     Vault-->>API: 200
-    Note over API,Vault: OpenBao handles this request
 
-    opt capabilities.deployable is set
-        API->>Kong: PUT /services/{clientName}-{projectName}-service
-        Note over API,Kong: upstream = http://{clientName}-{projectName}:3000
-        Kong-->>API: 200
-        API->>Kong: PUT /services/{name}/routes/{name}-route
-        Note over API,Kong: hosts = [domain]
-        Kong-->>API: 200
-
-        opt Cloudflare configured
-            API->>CF: POST /zones/{zoneId}/dns_records
-            Note over API,CF: CNAME {hostname} → {tunnelId}.cfargotunnel.com
-            CF-->>API: 200 (or error — non-critical)
-        end
-
-        opt autoDeploy = true
-            API->>GitLab: POST /projects/:id/pipeline {ref: main}
-            GitLab-->>API: 201 (or error — non-critical)
-        end
+    opt deployable capability
+        API->>K8s: ensure namespaces / cluster prep
+        K8s-->>API: ok (or skipped if kubeconfig missing)
+        API->>GitLab: set CI variables, trigger pipeline (optional)
+        GitLab-->>API: 200 / 201
     end
 
-    API-->>Operator: 201 ProjectInfoDto
+    API->>Mongo: persist Project document
+    Mongo-->>API: acknowledged
+
+    API-->>Operator: Project (GraphQL response)
 ```
 
 **Key behaviors:**
 - The group hierarchy walk is idempotent. If the group already exists, it is reused.
-- The fork operation is not idempotent. If a project with the same name already exists in the group, GitLab returns 409 and the provisioning fails.
-- Vault write is always performed regardless of capabilities.
-- Cloudflare and pipeline trigger failures are logged as warnings and do not fail the overall request.
+- GitLab project creation or fork must succeed; duplicate names in the same namespace still fail with GitLab `409`.
+- Vault write is always performed for the project secret path.
+- Kubernetes steps degrade gracefully when an environment's kubeconfig is absent.
 
 ---
 
-## 2. Inbound request routing (browser → deployed app)
+## 2. Inbound request routing (browser → deployed app on k3d)
 
-How an HTTP request from a developer's browser reaches a deployed application.
+How an HTTPS request reaches an application pod when using the **outer Traefik → k3d passthrough → inner Traefik → Ingress** path.
 
 ```mermaid
 sequenceDiagram
     actor Browser
     participant CF as Cloudflare Edge
     participant cloudflared as cloudflared agent
-    participant Traefik
-    participant oauth2proxy as oauth2-proxy
-    participant Keycloak
-    participant Kong
-    participant App as Deployed App Container
+    participant Outer as Traefik (compose)
+    participant Inner as Traefik (k3d)
+    participant Ing as Ingress / Service
+    participant Pod as Application Pod
 
-    Browser->>CF: HTTPS GET https://myapp.apps.yourdomain.com/api
-    CF->>cloudflared: forward via tunnel (outbound connection)
-    cloudflared->>Traefik: HTTP GET http://traefik:80/api\nHost: myapp.apps.yourdomain.com
+    Browser->>CF: HTTPS GET https://myapp.dev.apps.yourdomain.com/
+    CF->>cloudflared: tunnel forward (optional)
+    cloudflared->>Outer: HTTPS GET (Host: myapp.dev.apps.yourdomain.com)
 
-    Note over Traefik: kong-catchall rule (priority 1) matches
-    Note over Traefik: no oidc-auth middleware on catchall
+    Note over Outer: HostRegexp matches app zone (see traefik/dynamic/k3d-passthrough.yml)
+    Outer->>Inner: HTTP (TLS already terminated) to in-cluster Traefik NodePort
 
-    Traefik->>Kong: HTTP GET http://kong:8000/api\nHost: myapp.apps.yourdomain.com
+    Inner->>Ing: route by Ingress host + path
+    Ing->>Pod: HTTP to workload Service
 
-    Note over Kong: host-based route matches myapp.apps.yourdomain.com
-    Note over Kong: upstream = http://{clientName}-{projectName}:3000
-
-    Kong->>App: HTTP GET http://{clientName}-{projectName}:3000/api
-
-    App-->>Kong: 200
-    Kong-->>Traefik: 200
-    Traefik-->>cloudflared: 200
+    Pod-->>Ing: 200
+    Ing-->>Inner: 200
+    Inner-->>Outer: 200
+    Outer-->>cloudflared: 200
     cloudflared-->>CF: 200
-    CF-->>Browser: 200 (HTTPS)
+    CF-->>Browser: 200
 ```
 
 **Notes:**
-- The `kong-catchall` router does **not** have the `oidc-auth` middleware attached. Only the Traefik dashboard and Kong Admin routes are OIDC-protected. Deployed applications must implement their own authentication.
-- TLS is terminated at the Cloudflare edge (CDN mode) or by Traefik (if using direct DNS). In both cases, internal traffic is plain HTTP.
-- The deployed app container must be on the `devops-network` and use the naming convention `{clientName}-{projectName}` as the container name.
+- App-zone routers generally do **not** attach `oidc-auth@file`; applications implement their own auth. Operator tools (Traefik dashboard, MinIO console, etc.) attach ForwardAuth via Docker labels.
+- When not using Cloudflare Tunnel, traffic can reach Traefik directly on `10443` with the same Host-based routing model.
+- Inner routing is standard Kubernetes; the platform CI templates produce the Ingress and Helm release.
 
 ---
 
-## 3. Authentication flow (browser → OIDC-protected service)
+## 3. Authentication flow (browser → OIDC-protected operator UI)
 
-How a user authenticates to a platform service protected by the `oidc-auth` ForwardAuth middleware (e.g. Traefik dashboard, Kong Admin).
+How a user authenticates to a platform surface protected by the `oidc-auth` ForwardAuth middleware (for example the Traefik dashboard).
 
 ```mermaid
 sequenceDiagram
@@ -129,10 +109,10 @@ sequenceDiagram
     participant Traefik
     participant oauth2proxy as oauth2-proxy
     participant Keycloak
-    participant Service as Protected Service (e.g. Kong Admin)
+    participant Service as Protected upstream (e.g. Traefik dashboard)
 
-    User->>Traefik: GET https://gw-admin.devops.yourdomain.com
-    Traefik->>oauth2proxy: GET http://oauth2-proxy:4180/oauth2/auth\n(ForwardAuth check)
+    User->>Traefik: GET https://traefik.devops.yourdomain.com
+    Traefik->>oauth2proxy: GET http://oauth2-proxy:4180/ (ForwardAuth check)
     Note over oauth2proxy: no session cookie found
     oauth2proxy-->>Traefik: 401 + redirect headers
     Traefik-->>User: 302 → https://oauth.devops.yourdomain.com/oauth2/sign_in
@@ -152,10 +132,10 @@ sequenceDiagram
     Note over oauth2proxy: encrypt session → Set-Cookie: _oauth2_proxy=...
     oauth2proxy-->>User: 302 → original URL + session cookie
 
-    User->>Traefik: GET https://gw-admin.devops.yourdomain.com (+ cookie)
-    Traefik->>oauth2proxy: GET /oauth2/auth (+ cookie)
+    User->>Traefik: GET https://traefik.devops.yourdomain.com (+ cookie)
+    Traefik->>oauth2proxy: GET / (+ cookie)
     Note over oauth2proxy: valid session cookie → inject X-Auth-Request-* headers
-    oauth2proxy-->>Traefik: 200 + auth headers
+    oauth2proxy-->>Traefik: 202 + auth headers
     Traefik->>Service: GET (+ forwarded auth headers)
     Service-->>Traefik: 200
     Traefik-->>User: 200
@@ -177,14 +157,14 @@ sequenceDiagram
     CI->>Keycloak: POST /realms/devops/protocol/openid-connect/token\n{grant_type=client_credentials, client_id=management-api, client_secret=...}
     Keycloak-->>CI: {access_token: "eyJ...", expires_in: 300}
 
-    CI->>API: POST /projects\nAuthorization: Bearer eyJ...
+    CI->>API: POST /graphql (Bearer)\nmutation or query as needed
     Note over API: CombinedAuthGuard detects Bearer token
     Note over API: OidcJwtStrategy fetches JWKS from\nhttp://keycloak:8080/realms/devops/protocol/openid-connect/certs
     Note over API: Validates: signature, issuer, audience, expiry
     API->>Vault: POST /v1/secret/data/projects/...
     Note over API,Vault: OpenBao handles this request
     Vault-->>API: 200
-    API-->>CI: 201 ProjectInfoDto
+    API-->>CI: 200 GraphQL payload
 ```
 
 **Notes:**
@@ -227,41 +207,33 @@ sequenceDiagram
 
 ---
 
-## 6. Project deletion (`DELETE /projects/:id`)
+## 6. Project deletion (GraphQL `deleteProject`)
 
 ```mermaid
 sequenceDiagram
     actor Operator
     participant API as Management API
     participant GitLab
-    participant Kong
-    participant CF as Cloudflare API
     participant Vault
+    participant Mongo as MongoDB
 
-    Operator->>API: DELETE /projects/:id
+    Operator->>API: POST /graphql mutation deleteProject
 
-    API->>GitLab: GET /projects/:id
-    GitLab-->>API: {path_with_namespace: "clients/acme/webapp", ...}
-    Note over API: derive clientName, projectName, hostname
-
-    API->>Kong: DELETE /services/{name}/routes/{name}-route
-    Note over API: non-critical — continues on error
-    API->>Kong: DELETE /services/{name}
-    Note over API: non-critical — continues on error
-
-    API->>CF: GET /zones/{zoneId}/dns_records?name={hostname}&type=CNAME
-    CF-->>API: [{id: "abc"}]
-    API->>CF: DELETE /zones/{zoneId}/dns_records/abc
-    Note over API: non-critical — continues on error
-
-    API->>Vault: DELETE /v1/secret/metadata/projects/{clientName}/{projectName}
-    Note over API,Vault: OpenBao metadata deletion (all versions)
-    Note over API: non-critical — continues on error
+    API->>GitLab: GET /projects/:id (resolve paths)
+    GitLab-->>API: project metadata
 
     API->>GitLab: DELETE /projects/:id
     GitLab-->>API: 202 (async deletion)
 
-    API-->>Operator: 204
+    API->>Vault: DELETE /v1/secret/metadata/projects/...
+    Note over API: non-critical — continues on error
+
+    API->>Mongo: remove Project / audit records
+    Mongo-->>API: acknowledged
+
+    API-->>Operator: Boolean
 ```
 
-**Note:** GitLab project deletion is asynchronous. The API returns 202 from GitLab and the Management API immediately returns 204. The actual deletion completes in the background. The OpenBao path deletion (`/metadata/`) remove
+**Note:** GitLab project deletion is asynchronous. The API receives `202` from GitLab while MongoDB and Vault cleanup are attempted in the service implementation; callers should treat the mutation as logically complete once the API returns.
+
+---

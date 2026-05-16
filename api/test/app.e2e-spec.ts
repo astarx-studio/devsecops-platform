@@ -23,8 +23,11 @@ describe('App (e2e)', () => {
   });
 
   describe('GET /health', () => {
-    it('should return { status: "ok" }', () => {
-      return request(app.getHttpServer()).get('/health').expect(200).expect({ status: 'ok' });
+    it('should return ok when mongo and vault are healthy', () => {
+      return request(app.getHttpServer())
+        .get('/health')
+        .expect(200)
+        .expect({ status: 'ok', mongo: 'ok', vault: 'ok' });
     });
   });
 

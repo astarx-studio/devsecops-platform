@@ -43,6 +43,48 @@ The `-d` flag means "detached" — it runs everything in the background so you g
 
 Docker will pull any missing images (this may take a few minutes on first run), create the internal network, and start all containers.
 
+---
+
+## Full stack bootstrap (Docker + k3d + Vault auth)
+
+After the Compose stack is healthy and `.env` contains GitLab and Vault tokens plus `GITLAB_CONFIG_GROUP_ID`, you can run the **orchestrated** bootstrap (Compose is already expected up — the script runs `docker compose up -d` again idempotently, waits for GitLab, then k3d and Kubernetes steps):
+
+```bash
+make bootstrap
+```
+
+Equivalent:
+
+```bash
+./bootstrap/bootstrap.sh
+```
+
+**Optional environment:**
+
+| Variable | Effect |
+|---|---|
+| `COMPOSE_EXTRA_ARGS` | Example: `--profile cftunnel` or `--profile vpnedge` passed to `docker compose up`. |
+| `SKIP_SEED=1` | Skip [`bootstrap/seed-platform-projects.sh`](../../bootstrap/seed-platform-projects.sh) (GitLab API sync of shared config repos). |
+| `SKIP_SMOKE=1` | Skip [`bootstrap/smoke-test.sh`](../../bootstrap/smoke-test.sh). |
+
+**Post-bootstrap checks only:**
+
+```bash
+make smoke
+```
+
+Order inside `bootstrap/bootstrap.sh`: **prereqs** → **docker compose up** → **wait GitLab** → **k3d-cluster** → **k8s-primitives** → **vault-k8s-auth** → **runner-rbac** → **seed** → **smoke**. Compose starts **MinIO** with GitLab; artifact uploads depend on MinIO being healthy (see `docker-compose` service order). Details and pitfalls (NodePort, passthrough, `HostRegexp`) are in [k3d and Kubernetes](06_k3d_and_k8s.md).
+
+### End-to-end smoke deploy (optional)
+
+`make smoke` only checks infrastructure (k3d, Traefik, ESO, Management API `/health`). To validate **provisioning → GitLab CI → deploy → HTTPS** in one go (typically three to eight minutes with a registered runner), run:
+
+```bash
+./bootstrap/smoke-deploy.sh
+```
+
+Optional: `./bootstrap/smoke-deploy.sh --cleanup` deletes the throwaway project from the Management API after a successful URL check. Required `.env` entries include `API_KEY`, `GITLAB_ROOT_TOKEN`, and `GITLAB_DOMAIN`. Override defaults with `SMOKE_SLUG`, `SMOKE_GROUP_PATH` (slash-separated parent path, for example `clients/acme`), `SMOKE_TIMEOUT`, and `API_LOCAL_PORT` if needed. The Make target does not pass flags; invoke the script directly for `--cleanup`.
+
 > **VPN edge only:** after the stack is up and the `wireguard` container is healthy, continue with the **Edge VM bootstrap** steps in [Networking — VPN edge ingress](../99_maintainers/05_networking.md#edge-vm-bootstrap-fresh-ubuntu) to configure the cloud VM. The platform is reachable locally before this step; the edge VM makes it reachable from the internet.
 
 ---
@@ -51,7 +93,7 @@ Docker will pull any missing images (this may take a few minutes on first run), 
 
 Not everything starts at the same speed. Here's roughly what happens:
 
-- **Traefik and Kong** come up in seconds. Traefik will start requesting HTTPS certificates from Let's Encrypt via DNS-01 challenge. The certificate issuance process waits 60 seconds for DNS propagation before validation, so expect about 90–120 seconds for the first certificate to be ready.
+- **Traefik and MongoDB** come up in seconds. Traefik will start requesting HTTPS certificates from Let's Encrypt via DNS-01 challenge. The certificate issuance process waits 60 seconds for DNS propagation before validation, so expect about 90–120 seconds for the first certificate to be ready.
 - **Keycloak** takes about 30–90 seconds to fully initialize.
 - **GitLab** is the slowest. On first boot it can take **3–10 minutes** to finish initializing. This is normal — it's running database migrations and setting up internal configurations. If you open GitLab in a browser too soon, you may get a 502 error. Just wait and refresh.
 - **The Management API** waits for GitLab and Keycloak to be healthy before it considers itself ready.
@@ -98,7 +140,7 @@ Once all services are healthy, try opening these in a browser (replace `yourdoma
 | GitLab | `https://gitlab.devops.yourdomain.com` | Login page |
 | Keycloak | `https://auth.devops.yourdomain.com` | Keycloak welcome page |
 | OpenBao | `https://vault.devops.yourdomain.com` | OpenBao UI login |
-| Kong proxy | `https://gw.devops.yourdomain.com` | Kong admin API response (routes are seeded by `kong-deck-sync` at startup) |
+| Traefik dashboard | `https://traefik.devops.yourdomain.com` | Traefik UI behind oauth2-proxy (after login) |
 | Management API | `https://api.devops.yourdomain.com/health` | `{"status":"ok"}` in plain text |
 
 If you see HTTPS padlock icons in your browser and the pages load, certificates are working. If you see a certificate warning, Traefik may still be in the process of issuing the certificate — wait a minute and try again.
@@ -152,4 +194,4 @@ GitLab and Keycloak will boot fine even if SMTP is misconfigured — they just w
 
 ---
 
-Once you've confirmed the platform is running, you can start on the [admin setup tasks](../02_admin/index.md), or continue to [day-to-day operations](04_operations.md).
+Once you've confirmed the platform is running, you can start on the [admin setup tasks](../02_admin/index.md), continue to [k3d and Kubernetes](06_k3d_and_k8s.md) if you use Auto DevOps, or move on to [day-to-day operations](04_operations.md).

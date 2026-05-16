@@ -1,10 +1,8 @@
 # ==========================================================================
-# DevOps Platform — Phase 1-4: Ingress, Auth, Secret, Exposure, Dev Tools,
-#                               Integration & Management
+# DevOps Platform — Compose stack (ingress, auth, data, CI, API)
 # ==========================================================================
-# Containers: traefik, kong-db, kong-migration, kong, kong-deck-sync,
-#             keycloak-db, keycloak, vault (OpenBao), cloudflared, wireguard,
-#             gitlab, gitlab-runner, api
+# Containers: traefik, mongo, keycloak-db, keycloak, vault (OpenBao),
+#             cloudflared, wireguard, gitlab, gitlab-runner, api, minio, minio-init
 # Network:    devops-network (bridge)
 # ==========================================================================
 
@@ -25,14 +23,26 @@ services:
     image: traefik:v3.6
     container_name: traefik
     # 1. Process traefik.yml template (replace __DOMAIN__ and __ACME_EMAIL__)
-    # 2. Fix acme.json permissions (chmod 600 doesn't persist on Windows bind mounts)
-    # 3. exec traefik with the processed config
+    # 2. Process ALL files in dynamic-templates/ with the same substitution.
+    #    This means every *.yml file in traefik/dynamic/ may use __DOMAIN__ as a
+    #    domain placeholder.  NOTE: if you add a new dynamic file that contains
+    #    a literal string matching __DOMAIN__ for a non-domain purpose (e.g. a
+    #    label value), it will also be substituted — rename the placeholder to
+    #    avoid unintended replacements.
+    # 3. Fix acme.json permissions (chmod 600 doesn't persist on Windows bind mounts)
+    # 4. exec traefik with the processed config
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
         sed -e "s/__DOMAIN__/$$DOMAIN/g" \
             -e "s/__ACME_EMAIL__/$$ACME_EMAIL/g" \
             /etc/traefik/traefik-template.yml > /etc/traefik/traefik.yml
+        mkdir -p /etc/traefik/dynamic
+        for f in /etc/traefik/dynamic-templates/*.yml; do
+          sed -e "s/__DOMAIN__/$$DOMAIN/g" \
+              -e "s/__ACME_EMAIL__/$$ACME_EMAIL/g" \
+              "$$f" > "/etc/traefik/dynamic/$$(basename $$f)"
+        done
         touch /etc/traefik/certs/acme.json
         chmod 600 /etc/traefik/certs/acme.json
         exec traefik --configFile=/etc/traefik/traefik.yml
@@ -44,7 +54,7 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./traefik/traefik.yml:/etc/traefik/traefik-template.yml:ro
-      - ./traefik/dynamic:/etc/traefik/dynamic:ro
+      - ./traefik/dynamic:/etc/traefik/dynamic-templates:ro
       - ./.vols/traefik/certs:/etc/traefik/certs
     environment:
       DOMAIN: ${DOMAIN}
@@ -73,153 +83,30 @@ services:
           - ${KEYCLOAK_DOMAIN}
           - ${VAULT_DOMAIN}
           - ${GITLAB_DOMAIN}
-          - ${KONG_DOMAIN}
           - ${API_DOMAIN}
           - ${OAUTH_DOMAIN}
           - ${TRAEFIK_DOMAIN}
           - ${GITLAB_REGISTRY_DOMAIN}
-          - ${KONG_ADMIN_DOMAIN}
+          - ${MINIO_CONSOLE_DOMAIN}
 
   # ========================================================================
-  # KONG DB — PostgreSQL for Kong
+  # MONGODB — Platform Registry (v2)
   # ========================================================================
-  kong-db:
-    image: postgres:17-alpine
-    container_name: kong-db
+  # Stores Project documents, AuditLog, and catalog metadata (Templates,
+  # Configs). The Management API uses this as its primary data store in v2.
+  # Data persisted in .vols/mongo (gitignored).
+  mongo:
+    image: mongo:7
+    container_name: mongo
     restart: unless-stopped
-    ports:
-      - "15432:5432"
-    environment:
-      POSTGRES_DB: ${KONG_PG_DATABASE}
-      POSTGRES_USER: ${KONG_PG_USER}
-      POSTGRES_PASSWORD: ${KONG_PG_PASSWORD}
     volumes:
-      - ./.vols/kong-db:/var/lib/postgresql/data
+      - ./.vols/mongo:/data/db
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${KONG_PG_USER} -d ${KONG_PG_DATABASE}"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
-    networks:
-      - devops-network
-
-  # ========================================================================
-  # KONG MIGRATION — One-shot database bootstrap
-  # ========================================================================
-  kong-migration:
-    image: kong:3.9
-    container_name: kong-migration
-    command: >
-      sh -c "
-        until kong migrations bootstrap 2>/dev/null; do
-          echo '[INFO] Kong DB not ready yet — retrying in 3s...'
-          sleep 3
-        done
-        echo '[INFO] Kong migrations complete.'
-      "
-    restart: "no"
-    environment:
-      KONG_DATABASE: postgres
-      KONG_PG_HOST: ${KONG_PG_HOST}
-      KONG_PG_PORT: ${KONG_PG_PORT}
-      KONG_PG_DATABASE: ${KONG_PG_DATABASE}
-      KONG_PG_USER: ${KONG_PG_USER}
-      KONG_PG_PASSWORD: ${KONG_PG_PASSWORD}
-    depends_on:
-      kong-db:
-        condition: service_healthy
-    networks:
-      - devops-network
-
-  # ========================================================================
-  # KONG — API Gateway
-  # ========================================================================
-  kong:
-    image: kong:3.9
-    container_name: kong
-    restart: unless-stopped
-    ports:
-      - "18000:8000"
-      - "18443:8443"
-      - "18001:8001"
-    environment:
-      KONG_DATABASE: postgres
-      KONG_PG_HOST: ${KONG_PG_HOST}
-      KONG_PG_PORT: ${KONG_PG_PORT}
-      KONG_PG_DATABASE: ${KONG_PG_DATABASE}
-      KONG_PG_USER: ${KONG_PG_USER}
-      KONG_PG_PASSWORD: ${KONG_PG_PASSWORD}
-      KONG_PROXY_LISTEN: ${KONG_PROXY_LISTEN}
-      KONG_ADMIN_LISTEN: ${KONG_ADMIN_LISTEN}
-      KONG_LOG_LEVEL: ${KONG_LOG_LEVEL}
-      KONG_PROXY_ACCESS_LOG: /dev/stdout
-      KONG_ADMIN_ACCESS_LOG: /dev/stdout
-      KONG_PROXY_ERROR_LOG: /dev/stderr
-      KONG_ADMIN_ERROR_LOG: /dev/stderr
-    labels:
-      traefik.enable: "true"
-      traefik.http.routers.kong-admin.rule: "Host(`${KONG_ADMIN_DOMAIN}`)"
-      traefik.http.routers.kong-admin.entrypoints: "websecure"
-      traefik.http.routers.kong-admin.tls.certresolver: "letsencrypt"
-      traefik.http.routers.kong-admin.middlewares: "oidc-auth@file"
-      traefik.http.services.kong-admin.loadbalancer.server.port: "8001"
-    healthcheck:
-      test: ["CMD", "kong", "health"]
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
       interval: 15s
       timeout: 5s
-      retries: 5
-      start_period: 30s
-    depends_on:
-      kong-migration:
-        condition: service_completed_successfully
-    networks:
-      - devops-network
-
-  # ========================================================================
-  # KONG DECK SYNC — One-shot platform route seeding
-  # ========================================================================
-  # Substitutes ${VAR} placeholders in kong.template.yml and syncs to Kong.
-  # kong/deck is distroless (no shell), so we build a minimal image that
-  # copies the deck binary into alpine for shell-based template processing.
-  kong-deck-sync:
-    build:
-      context: .
-      dockerfile_inline: |
-        FROM kong/deck:latest AS deck
-        FROM alpine:latest
-        COPY --from=deck /usr/local/bin/deck /usr/local/bin/deck
-    container_name: kong-deck-sync
-    entrypoint: ["/bin/sh", "-c"]
-    command:
-      - |
-        sed \
-          -e "s|\$${KEYCLOAK_DOMAIN}|$$KEYCLOAK_DOMAIN|g" \
-          -e "s|\$${VAULT_DOMAIN}|$$VAULT_DOMAIN|g" \
-          -e "s|\$${KONG_DOMAIN}|$$KONG_DOMAIN|g" \
-          -e "s|\$${GITLAB_DOMAIN}|$$GITLAB_DOMAIN|g" \
-          -e "s|\$${GITLAB_REGISTRY_DOMAIN}|$$GITLAB_REGISTRY_DOMAIN|g" \
-          -e "s|\$${API_DOMAIN}|$$API_DOMAIN|g" \
-          -e "s|\$${OAUTH_DOMAIN}|$$OAUTH_DOMAIN|g" \
-          /kong/kong.template.yml > /tmp/kong.yml &&
-        echo "--- Resolved kong.yml ---" &&
-        cat /tmp/kong.yml &&
-        echo "--- Syncing to Kong ---" &&
-        deck gateway sync /tmp/kong.yml --kong-addr http://kong:8001
-    restart: "no"
-    environment:
-      KEYCLOAK_DOMAIN: ${KEYCLOAK_DOMAIN}
-      VAULT_DOMAIN: ${VAULT_DOMAIN}
-      KONG_DOMAIN: ${KONG_DOMAIN}
-      GITLAB_DOMAIN: ${GITLAB_DOMAIN}
-      GITLAB_REGISTRY_DOMAIN: ${GITLAB_REGISTRY_DOMAIN}
-      API_DOMAIN: ${API_DOMAIN}
-      OAUTH_DOMAIN: ${OAUTH_DOMAIN}
-    volumes:
-      - ./kong/kong.template.yml:/kong/kong.template.yml:ro
-    depends_on:
-      kong:
-        condition: service_healthy
+      retries: 3
+      start_period: 20s
     networks:
       - devops-network
 
@@ -268,7 +155,6 @@ services:
           -e "s|\$${API_DOMAIN}|$$API_DOMAIN|g" \
           -e "s|\$${OAUTH_DOMAIN}|$$OAUTH_DOMAIN|g" \
           -e "s|\$${TRAEFIK_DOMAIN}|$$TRAEFIK_DOMAIN|g" \
-          -e "s|\$${KONG_DOMAIN}|$$KONG_DOMAIN|g" \
           -e "s|\$${SMTP_HOST}|$$SMTP_HOST|g" \
           -e "s|\$${SMTP_PORT}|$$SMTP_PORT|g" \
           -e "s|\$${SMTP_FROM_EMAIL}|$$SMTP_FROM_EMAIL|g" \
@@ -313,7 +199,6 @@ services:
       API_DOMAIN: ${API_DOMAIN}
       OAUTH_DOMAIN: ${OAUTH_DOMAIN}
       TRAEFIK_DOMAIN: ${TRAEFIK_DOMAIN}
-      KONG_DOMAIN: ${KONG_DOMAIN}
     volumes:
       - ./keycloak/realm-export.json:/opt/keycloak/data/import-template/realm-export.json:ro
     healthcheck:
@@ -325,6 +210,13 @@ services:
     depends_on:
       keycloak-db:
         condition: service_healthy
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.keycloak.rule: "Host(`${KEYCLOAK_DOMAIN}`)"
+      traefik.http.routers.keycloak.entrypoints: "websecure"
+      traefik.http.routers.keycloak.tls.certresolver: "letsencrypt"
+      # Keycloak is the IdP itself; no ForwardAuth middleware here.
+      traefik.http.services.keycloak.loadbalancer.server.port: "8080"
     networks:
       - devops-network
 
@@ -355,6 +247,13 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.vault.rule: "Host(`${VAULT_DOMAIN}`)"
+      traefik.http.routers.vault.entrypoints: "websecure"
+      traefik.http.routers.vault.tls.certresolver: "letsencrypt"
+      # Vault UI handles its own OIDC login; no ForwardAuth middleware here.
+      traefik.http.services.vault.loadbalancer.server.port: "8200"
     networks:
       - devops-network
 
@@ -458,6 +357,9 @@ services:
       SMTP_FROM_NAME: ${SMTP_FROM_NAME}
       SMTP_FROM_EMAIL: ${SMTP_FROM_EMAIL}
       SMTP_DOMAIN: ${SMTP_DOMAIN}
+      # MinIO credentials consumed by the GITLAB_OMNIBUS_CONFIG object_store block.
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
       GITLAB_OMNIBUS_CONFIG: |
         external_url '${GITLAB_EXTERNAL_URL}'
         nginx['listen_port'] = 80
@@ -525,6 +427,29 @@ services:
             }
           }
         ]
+        # Object store: use MinIO (S3-compatible) for CI artifacts, uploads, LFS,
+        # and packages.  Bypasses the workhorse↔rails bind-mount temp-file handoff
+        # that races on Windows, causing Errno::ENOENT on artifact POST.
+        # Runner jobs upload directly to MinIO via a signed URL; Rails only records
+        # metadata — the zip never transits the bind-mount tmp directory.
+        gitlab_rails['object_store']['enabled'] = true
+        gitlab_rails['object_store']['proxy_download'] = false
+        gitlab_rails['object_store']['connection'] = {
+          'provider'              => 'AWS',
+          'region'                => 'us-east-1',
+          'endpoint'              => 'http://minio:9000',
+          'path_style'            => true,
+          'aws_access_key_id'     => ENV['MINIO_ACCESS_KEY'],
+          'aws_secret_access_key' => ENV['MINIO_SECRET_KEY']
+        }
+        gitlab_rails['object_store']['objects']['artifacts']['bucket']       = 'gitlab-artifacts'
+        gitlab_rails['object_store']['objects']['lfs']['bucket']            = 'gitlab-lfs'
+        gitlab_rails['object_store']['objects']['uploads']['bucket']        = 'gitlab-uploads'
+        gitlab_rails['object_store']['objects']['packages']['bucket']       = 'gitlab-packages'
+        gitlab_rails['object_store']['objects']['dependency_proxy']['bucket'] = 'gitlab-dependency-proxy'
+        gitlab_rails['object_store']['objects']['terraform_state']['bucket'] = 'gitlab-terraform-state'
+        gitlab_rails['object_store']['objects']['pages']['bucket']          = 'gitlab-pages'
+        gitlab_rails['object_store']['objects']['ci_secure_files']['bucket'] = 'gitlab-ci-secure-files'
     volumes:
       - ./.vols/gitlab/config:/etc/gitlab
       - ./.vols/gitlab/logs:/var/log/gitlab
@@ -535,6 +460,18 @@ services:
       timeout: 10s
       retries: 5
       start_period: 300s
+    depends_on:
+      minio:
+        condition: service_healthy
+    labels:
+      traefik.enable: "true"
+      # Main GitLab web UI — internal Nginx listens HTTP on :80.
+      # Registry router is defined in traefik/dynamic/gitlab-registry.yml to avoid the
+      # Traefik v3 Docker-provider restriction on multiple services per container.
+      traefik.http.routers.gitlab.rule: "Host(`${GITLAB_DOMAIN}`)"
+      traefik.http.routers.gitlab.entrypoints: "websecure"
+      traefik.http.routers.gitlab.tls.certresolver: "letsencrypt"
+      traefik.http.services.gitlab.loadbalancer.server.port: "80"
     networks:
       - devops-network
 
@@ -593,10 +530,12 @@ services:
       - devops-network
 
   # ========================================================================
-  # MANAGEMENT API — NestJS Project Provisioning Orchestrator
+  # MANAGEMENT API — NestJS Project Provisioning Orchestrator (v2)
   # ========================================================================
-  # Orchestrates project lifecycle across GitLab, Vault, Kong, and
-  # Cloudflare. Swagger docs at /api/docs. Health check at /health.
+  # Orchestrates project lifecycle across GitLab, Vault, MongoDB, and k3d.
+  # GraphQL at /graphql (Apollo Sandbox in non-prod).
+  # REST shim: GET /health, GET /projects (read-only).
+  # Swagger docs at /api/docs. Health check at /health.
   api:
     build:
       context: ./api
@@ -618,17 +557,23 @@ services:
       GITLAB_ROOT_TOKEN: ${GITLAB_ROOT_TOKEN}
       GITLAB_TEMPLATE_GROUP_ID: ${GITLAB_TEMPLATE_GROUP_ID}
       GITLAB_CONFIG_GROUP_ID: ${GITLAB_CONFIG_GROUP_ID}
-      KONG_ADMIN_URL: http://kong:8001
       VAULT_URL: http://vault:8200
       VAULT_DEV_ROOT_TOKEN_ID: ${VAULT_DEV_ROOT_TOKEN_ID}
-      CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN}
-      CLOUDFLARE_ZONE_ID: ${CLOUDFLARE_ZONE_ID}
-      CLOUDFLARE_TUNNEL_ID: ${CLOUDFLARE_TUNNEL_ID}
+      MONGO_URL: ${MONGO_URL:-mongodb://mongo:27017}
+      MONGO_DB_NAME: ${MONGO_DB_NAME:-platform}
+      KUBE_API_INTERNAL_URL: ${KUBE_API_INTERNAL_URL}
+      KUBECONFIG_DIR: ${KUBECONFIG_DIR:-/etc/dsoaas/kubeconfigs}
+      AUTO_DEVOPS_PIPELINE_PROJECT: ${AUTO_DEVOPS_PIPELINE_PROJECT:-system/devsecops-platform/configs/auto-devops-pipeline}
+      AUTO_DEVOPS_PIPELINE_FILE: ${AUTO_DEVOPS_PIPELINE_FILE:-.gitlab-ci.yml}
       OIDC_ISSUER_URL: ${OIDC_ISSUER_URL}
       OIDC_JWKS_URL: ${OIDC_JWKS_URL}
       OIDC_AUDIENCE: ${OIDC_AUDIENCE}
       CORS_ORIGIN: ${CORS_ORIGIN}
       CORS_CREDENTIALS: ${CORS_CREDENTIALS}
+    volumes:
+      # Per-env kubeconfigs generated by bootstrap/runner-rbac.sh.
+      # Mounted read-only so the API can use kubectl/k8s client to manage namespaces and RBAC.
+      - ./.vols/kubeconfigs:/etc/dsoaas/kubeconfigs:ro
     healthcheck:
       test: ["CMD-SHELL", "node -e \"const h=require('http');h.get('http://127.0.0.1:3000/health',r=>{process.exit(r.statusCode===200?0:1)}).on('error',()=>process.exit(1))\""]
       interval: 15s
@@ -636,10 +581,17 @@ services:
       retries: 3
       start_period: 15s
     depends_on:
-      kong:
+      mongo:
         condition: service_healthy
       vault:
         condition: service_healthy
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.api.rule: "Host(`${API_DOMAIN}`)"
+      traefik.http.routers.api.entrypoints: "websecure"
+      traefik.http.routers.api.tls.certresolver: "letsencrypt"
+      # API authenticates callers via OIDC JWT (Bearer tokens); no ForwardAuth here.
+      traefik.http.services.api.loadbalancer.server.port: "3000"
     networks:
       - devops-network
 
@@ -670,7 +622,7 @@ services:
       - devops-network
 
   # ========================================================================
-  # OAUTH2-PROXY — OIDC authentication for Traefik Dashboard + Kong Admin
+  # OAUTH2-PROXY — OIDC for Traefik ForwardAuth (dashboard, MinIO console, etc.)
   # ========================================================================
   # Runs in proxy mode with a static upstream (static://202) so that
   # Traefik's ForwardAuth can point at the root URL. Unauthenticated
@@ -710,6 +662,96 @@ services:
       OAUTH2_PROXY_ALLOWED_GROUPS: ${OAUTH2_PROXY_ALLOWED_GROUPS:-admins}
     depends_on:
       keycloak:
+        condition: service_healthy
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.oauth2-proxy.rule: "Host(`${OAUTH_DOMAIN}`)"
+      traefik.http.routers.oauth2-proxy.entrypoints: "websecure"
+      traefik.http.routers.oauth2-proxy.tls.certresolver: "letsencrypt"
+      # oauth2-proxy IS the ForwardAuth target; never apply oidc-auth to itself.
+      traefik.http.services.oauth2-proxy.loadbalancer.server.port: "4180"
+    networks:
+      - devops-network
+
+  # ========================================================================
+  # MINIO — S3-Compatible Object Storage for GitLab Artifacts
+  # ========================================================================
+  # Provides reliable artifact storage for CI scan jobs (container_scanning,
+  # secret_detection, semgrep-sast).  Without this, GitLab's workhorse-to-rails
+  # direct-upload temp-file handoff races on the Windows bind mount, producing
+  # Errno::ENOENT on artifact POST and marking scan jobs as failed even though
+  # the scan completed successfully.
+  #
+  # GitLab is configured (via GITLAB_OMNIBUS_CONFIG object_store block in the
+  # gitlab service) to use MinIO as the S3 backend for artifacts, uploads, LFS,
+  # and packages.  Buckets are pre-created by the minio-init one-shot service.
+  #
+  # Console (optional): https://${MINIO_CONSOLE_DOMAIN} — requires Traefik label
+  # to be enabled and MINIO_CONSOLE_DOMAIN to be set.
+  minio:
+    image: quay.io/minio/minio:latest
+    container_name: minio
+    restart: unless-stopped
+    command: server /data --console-address :9001
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    volumes:
+      - ./.vols/minio/data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9000/minio/health/live || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.minio-console.rule: "Host(`${MINIO_CONSOLE_DOMAIN}`)"
+      traefik.http.routers.minio-console.entrypoints: "websecure"
+      traefik.http.routers.minio-console.tls.certresolver: "letsencrypt"
+      traefik.http.routers.minio-console.middlewares: "oidc-auth@file"
+      traefik.http.services.minio-console.loadbalancer.server.port: "9001"
+    networks:
+      devops-network:
+        aliases:
+          - ${MINIO_CONSOLE_DOMAIN}
+
+  # ========================================================================
+  # MINIO INIT — One-shot bucket and credential bootstrap
+  # ========================================================================
+  # Creates the four GitLab buckets on first startup (idempotent: mc mb --ignore-existing).
+  # Exits 0 after completion; does not need to stay running.
+  minio-init:
+    image: quay.io/minio/mc:latest
+    container_name: minio-init
+    restart: "no"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        echo "Waiting for MinIO to be ready..."
+        until mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD" 2>/dev/null; do
+          sleep 2
+        done
+        echo "MinIO ready. Creating GitLab buckets..."
+        mc mb --ignore-existing local/gitlab-artifacts
+        mc mb --ignore-existing local/gitlab-uploads
+        mc mb --ignore-existing local/gitlab-lfs
+        mc mb --ignore-existing local/gitlab-packages
+        mc mb --ignore-existing local/gitlab-dependency-proxy
+        mc mb --ignore-existing local/gitlab-terraform-state
+        mc mb --ignore-existing local/gitlab-pages
+        mc mb --ignore-existing local/gitlab-ci-secure-files
+        echo "Creating dedicated GitLab access key..."
+        mc admin user add local "$$MINIO_ACCESS_KEY" "$$MINIO_SECRET_KEY" 2>/dev/null || true
+        mc admin policy attach local readwrite --user "$$MINIO_ACCESS_KEY" 2>/dev/null || true
+        echo "MinIO init complete."
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
+    depends_on:
+      minio:
         condition: service_healthy
     networks:
       - devops-network

@@ -5,6 +5,7 @@ import {
   Logger,
   UnauthorizedException,
 } from '@nestjs/common';
+import { GqlContextType, GqlExecutionContext } from '@nestjs/graphql';
 import { AuthGuard } from '@nestjs/passport';
 import { ConfigService } from '@nestjs/config';
 import { Request } from 'express';
@@ -35,7 +36,16 @@ export class CombinedAuthGuard implements CanActivate {
   }
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
-    const request = context.switchToHttp().getRequest<Request>();
+    // GraphQL resolvers use a different context structure — extract the request
+    // from the GQL context.req (set in GraphQLModule.forRootAsync factory).
+    let request: Request;
+    if (context.getType<GqlContextType>() === 'graphql') {
+      const gqlCtx = GqlExecutionContext.create(context);
+      request = gqlCtx.getContext<{ req: Request }>().req;
+    } else {
+      request = context.switchToHttp().getRequest<Request>();
+    }
+
     const headerKey = request.headers['x-api-key'] as string | undefined;
     const authHeader = request.headers['authorization'];
 

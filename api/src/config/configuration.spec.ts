@@ -49,8 +49,10 @@ describe('configuration', () => {
     expect(config.gitlabDomain).toBe('gitlab.devops.test.net');
     expect(config.logLevel).toBe('info');
     expect(config.gitlab.url).toBe('http://gitlab');
-    expect(config.kong.adminUrl).toBe('http://kong:8001');
     expect(config.vault.url).toBe('http://vault:8200');
+    expect(config.mongo.url).toBe('mongodb://mongo:27017');
+    expect(config.mongo.dbName).toBe('platform');
+    expect(config.kube.configDir).toBe('/etc/dsoaas/kubeconfigs');
   });
 
   it('should throw on missing DOMAIN', () => {
@@ -115,18 +117,19 @@ describe('configuration', () => {
     expect(config.logLevel).toBe('debug');
   });
 
-  it('should load cloudflare optional config', () => {
+  it('should load Mongo + Kube optional config overrides', () => {
     setRequiredEnv();
-    process.env.CLOUDFLARE_API_TOKEN = 'cf-token';
-    process.env.CLOUDFLARE_ZONE_ID = 'zone-123';
-    process.env.CLOUDFLARE_TUNNEL_ID = 'tunnel-456';
+    process.env.MONGO_URL = 'mongodb://custom-host:27017';
+    process.env.MONGO_DB_NAME = 'mydb';
+    process.env.KUBE_API_INTERNAL_URL = 'https://k3d-server:6443';
+    process.env.KUBECONFIG_DIR = '/custom/kubeconfigs';
 
     const config = configuration();
 
-    expect(config.cloudflare.apiToken).toBe('cf-token');
-    expect(config.cloudflare.zoneId).toBe('zone-123');
-    expect(config.cloudflare.tunnelId).toBe('tunnel-456');
-    expect((config.cloudflare as Record<string, unknown>)['accountId']).toBeUndefined();
+    expect(config.mongo.url).toBe('mongodb://custom-host:27017');
+    expect(config.mongo.dbName).toBe('mydb');
+    expect(config.kube.apiUrl).toBe('https://k3d-server:6443');
+    expect(config.kube.configDir).toBe('/custom/kubeconfigs');
   });
 
   it('should load OIDC optional config', () => {

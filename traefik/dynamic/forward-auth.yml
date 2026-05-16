@@ -1,0 +1,14 @@
+# OIDC ForwardAuth for operator surfaces (Traefik labels use oidc-auth@file).
+# ForwardAuth targets oauth2-proxy root so unauthenticated users get 302 to Keycloak.
+# oauth2-proxy uses OAUTH2_PROXY_UPSTREAMS=static://202 for ForwardAuth allow (202).
+
+http:
+  middlewares:
+    oidc-auth:
+      forwardAuth:
+        address: "http://oauth2-proxy:4180/"
+        trustForwardHeader: true
+        authResponseHeaders:
+          - "X-Auth-Request-User"
+          - "X-Auth-Request-Email"
+          - "X-Auth-Request-Access-Token"

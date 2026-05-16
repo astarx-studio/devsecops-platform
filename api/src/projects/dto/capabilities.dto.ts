@@ -6,7 +6,7 @@ import { IsBoolean, IsOptional, IsString, ValidateNested } from 'class-validator
  * Configuration for a deployable project capability.
  *
  * When present, the project is treated as a runnable HTTP application
- * and receives a subdomain, Kong route, and deployment pipeline.
+ * and receives a hostname, Ingress, and deployment pipeline.
  *
  * @property domain - Custom domain override. Auto-generated as "{projectName}.apps.{DOMAIN}" if omitted.
  * @property autoDeploy - Whether to trigger the CI pipeline automatically after creation (defaults to true).
@@ -57,7 +57,7 @@ export class PublishableCapability {
  * - both: e.g. a UI library with Storybook deployment
  * - neither: a plain repository
  *
- * @property deployable - If present, project gets a domain and Kong route
+ * @property deployable - If present, project gets a routable app hostname
  * @property publishable - If present, project gets package publishing config
  */
 export class ProjectCapabilities {

@@ -1,0 +1,74 @@
+# =============================================================================
+# bootstrap/charts/traefik-values.yaml
+# =============================================================================
+# Helm values for in-cluster Traefik (traefik/traefik chart).
+#
+# This Traefik instance handles routing INSIDE the k3d cluster only.
+# TLS is NOT terminated here — the outer Traefik (Docker compose) terminates
+# TLS and passes through by Host header to this instance on port 8081 (http).
+#
+# IngressClass: traefik  (used in all app Ingress resources)
+# =============================================================================
+
+# Expose via NodePort so the outer Traefik can reach the inner Traefik
+# via the k3d server container's Docker hostname.  klipper-LB is disabled
+# in this cluster (--disable=servicelb), so LoadBalancer type never gets
+# an external IP.  Using NodePort with a fixed port (30080) instead.
+service:
+  type: NodePort
+
+# Disable the built-in dashboard IngressRoute (outer Traefik handles admin access)
+ingressRoute:
+  dashboard:
+    enabled: false
+
+# Ports — only web (80) needed; apps are reached over plain HTTP from outer Traefik
+ports:
+  web:
+    port: 8000
+    expose:
+      default: true
+    exposedPort: 80
+    protocol: TCP
+    nodePort: 30080   # fixed nodePort; outer Traefik targets k3d-dsoaas-server-0:30080
+  websecure:
+    port: 8443
+    expose:
+      default: false
+    exposedPort: 443
+    protocol: TCP
+
+# IngressClass registered as "traefik" (default for this instance)
+ingressClass:
+  enabled: true
+  isDefaultClass: true
+  name: traefik
+
+# Allow cross-namespace Ingress references (apps across dev/stg/prod namespaces)
+providers:
+  kubernetesCRD:
+    allowCrossNamespace: true
+  kubernetesIngress:
+    publishedService:
+      enabled: true
+
+# Resource requests/limits.  Limits are bumped from the initial dev-only values
+# to give Traefik headroom during bursty Ingress reloads and prevent OOMKill.
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+
+# Minimal logging — INFO level, structured JSON
+logs:
+  general:
+    level: INFO
+    format: json
+  access:
+    enabled: true
+    format: json
+    filters:
+      statuscodes: "400-599"

@@ -1,311 +1,796 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  ConflictException,
+  Injectable,
+  Logger,
+  NotFoundException,
+  OnApplicationBootstrap,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import * as yaml from 'js-yaml';
+import { InjectModel } from '@nestjs/mongoose';
+
+import type { QueryFilter, Model } from 'mongoose';
 
 import { AppConfiguration } from '../config';
-import { CloudflareService } from '../cloudflare/cloudflare.service';
 import { GitLabService } from '../gitlab/gitlab.service';
-import { KongService } from '../kong/kong.service';
+import { K8sService } from '../k8s/k8s.service';
 import { VaultService } from '../vault/vault.service';
-import { CreateProjectDto, ProjectInfoDto } from './dto';
+import { CreateProjectInput, ProjectFilterInput } from './graphql/project.inputs';
+import { Provisioning } from './graphql/enums';
+import { AuditLog } from './schemas/audit-log.schema';
+import { Project, ProjectDocument } from './schemas/project.schema';
+import { SlugService } from './slug.service';
 
-interface CiYaml {
-  include?: Array<{ project: string; file: string }>;
-  [key: string]: unknown;
-}
+import type { DeployEnv } from './schemas/project.schema';
+
+/** Environments provisioned for every project. */
+const DEPLOY_ENVS: DeployEnv[] = ['dev', 'stg', 'prod'];
 
 /**
- * Orchestrates project provisioning across GitLab, Vault, Kong, and Cloudflare.
+ * Core provisioning service for the v2 platform.
  *
- * Supports compositional capabilities:
- *   - deployable: subdomain, Kong route, optional Cloudflare DNS, deploy pipeline
- *   - publishable: package name, publish pipeline
- *   - both or neither
+ * Orchestrates project creation, deletion, migration, and slug resolution
+ * across GitLab, Vault, MongoDB, and the k3d Kubernetes cluster.
  *
- * The create flow:
- *   1. Validate inputs
- *   2. Create GitLab group hierarchy
- *   3. Fork template repository
- *   4. Inject CI config includes (if configs specified)
- *   5. Create Vault secrets
- *   6. Register Kong service + route (if deployable)
- *   7. Configure Cloudflare DNS (if deployable, optional, non-critical)
- *   8. Trigger CI pipeline (if deployable + autoDeploy, optional, non-critical)
+ * Create flow:
+ *  1. Resolve effective slug (SlugService)
+ *  2. Create GitLab group hierarchy
+ *  3. Provision GitLab project (create + write CI files, or fork template)
+ *  4. Seed Vault secrets (base path + per-env envScopedVars)
+ *  5. Ensure k3d namespaces exist (dev/stg/prod)
+ *  6. Set env-scoped CI variables on the GitLab project
+ *  7. Persist Project document to MongoDB
+ *  8. Write AuditLog entry
  *
- * Delete reverses the process, with non-critical steps continuing on failure.
+ * Delete flow:
+ *  1. Delete GitLab project (critical)
+ *  2. Delete Vault secrets (non-critical)
+ *  3. Remove MongoDB document
+ *  4. Write AuditLog entry
+ *
+ * Startup reconciliation (4.10):
+ *  Scans GitLab for projects without a Mongo record → backfills as legacyV1=true.
  */
 @Injectable()
-export class ProjectsService {
+export class ProjectsService implements OnApplicationBootstrap {
   private readonly logger = new Logger(ProjectsService.name);
+  private readonly domain: string;
   private readonly appsDomain: string;
-  private readonly gitlabExternalUrl: string;
 
   constructor(
+    @InjectModel(Project.name)
+    private readonly projectModel: Model<Project>,
+    @InjectModel(AuditLog.name)
+    private readonly auditLogModel: Model<AuditLog>,
     private readonly gitlabService: GitLabService,
-    private readonly kongService: KongService,
     private readonly vaultService: VaultService,
-    private readonly cloudflareService: CloudflareService,
+    private readonly k8sService: K8sService,
+    private readonly slugService: SlugService,
     private readonly configService: ConfigService<AppConfiguration>,
   ) {
-    this.appsDomain = this.configService.get<string>('appsDomain', {
-      infer: true,
-    })!;
-    this.gitlabExternalUrl = `https://${this.configService.get<string>('gitlabDomain', { infer: true })!}`;
+    this.domain = this.configService.get<string>('domain', { infer: true })!;
+    this.appsDomain = this.configService.get<string>('appsDomain', { infer: true })!;
   }
 
-  async createProject(dto: CreateProjectDto): Promise<ProjectInfoDto> {
-    const { clientName, projectName, templateSlug, capabilities } = dto;
-    const groupPath = dto.groupPath ?? ['clients', clientName];
-    const vaultPath = `projects/${clientName}/${projectName}`;
+  // ---------------------------------------------------------------------------
+  // Private helpers
+  // ---------------------------------------------------------------------------
 
-    const isDeployable = !!capabilities?.deployable;
-    const isPublishable = !!capabilities?.publishable;
+  /**
+   * Builds the Auto DevOps `.gitlab-ci.yml` include content from config.
+   * Reading from config allows the shared pipeline project path to be overridden
+   * via AUTO_DEVOPS_PIPELINE_PROJECT / AUTO_DEVOPS_PIPELINE_FILE env vars.
+   *
+   * @returns YAML string for the `.gitlab-ci.yml` include block
+   */
+  private buildAutoDevopsCi(): string {
+    const project = this.configService.get<string>('autoDevops.pipelineProject', { infer: true })!;
+    const file = this.configService.get<string>('autoDevops.pipelineFile', { infer: true })!;
+    this.logger.verbose(`buildAutoDevopsCi: project="${project}" file="${file}"`);
+    return `include:\n  - project: ${project}\n    file: ${file}\n`;
+  }
 
-    this.logger.log(
-      `Creating project: client="${clientName}" project="${projectName}" ` +
-        `template="${templateSlug}" deployable=${isDeployable} publishable=${isPublishable}`,
+  /**
+   * Generates the Helm values overlay committed to the project repo.
+   * Project metadata (path, env, host) is injected at deploy time by the pipeline
+   * via --set flags; this file is for per-app overrides only (probes, resources, etc.).
+   *
+   * @returns YAML comment block for chart-values.yaml
+   */
+  private static buildChartValues(): string {
+    return `# Chart value overrides for the dsoaas-app Helm chart.
+# Committed by the platform API during project provisioning.
+# Project metadata (path, env, host) is injected by the pipeline at deploy time
+# via --set flags; do not duplicate it here.
+# Use this file for app-specific overrides: probes, resources, replicaCount, extraEnv.
+`;
+  }
+
+  /**
+   * Computes the default app hostnames for a project based on its effective slug.
+   *
+   * URL scheme:
+   *  - dev:  {effectiveSlug}.dev.apps.{DOMAIN}
+   *  - stg:  {effectiveSlug}.stg.apps.{DOMAIN}
+   *  - prod: {effectiveSlug}.apps.{DOMAIN}  (no env prefix for production)
+   *
+   * @param effectiveSlug - Resolved slug
+   * @returns Object with dev/stg/prod hostnames
+   */
+  private buildAppHosts(effectiveSlug: string): Record<DeployEnv, string> {
+    return {
+      dev: `${effectiveSlug}.dev.${this.appsDomain}`,
+      stg: `${effectiveSlug}.stg.${this.appsDomain}`,
+      prod: `${effectiveSlug}.${this.appsDomain}`,
+    };
+  }
+
+  /**
+   * Derives a human-readable display name from a slug when none is provided.
+   * e.g. "my-app" → "My App"
+   *
+   * @param slug - Project slug
+   * @returns Title-cased display name
+   */
+  private static slugToDisplayName(slug: string): string {
+    return slug.replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+  }
+
+  /**
+   * Startup hook: reconcile legacy v1 projects from GitLab into MongoDB.
+   * Runs in the background after module initialisation completes.
+   */
+  onApplicationBootstrap(): void {
+    setImmediate(() => {
+      this.reconcileLegacyProjects().catch((err: Error) => {
+        this.logger.error(`Startup reconciliation failed: ${err.message}`, err.stack);
+      });
+    });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Queries
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Returns a paginated list of projects, optionally filtered.
+   *
+   * @param filter - Optional filter criteria
+   * @param page - Zero-based page index (default 0)
+   * @param perPage - Page size (default 50)
+   */
+  async listProjects(
+    filter?: ProjectFilterInput,
+    page = 0,
+    perPage = 50,
+  ): Promise<ProjectDocument[]> {
+    const query: QueryFilter<Project> = {};
+
+    if (filter?.groupPathPrefix?.length) {
+      // Projects whose groupPath starts with the provided prefix
+      const prefix = filter.groupPathPrefix;
+      query['groupPath'] = {
+        $all: prefix.map((seg, i) => ({ $elemMatch: { $eq: seg, $position: i } })),
+      };
+      // Simpler approach: check first N elements match
+      for (let i = 0; i < prefix.length; i++) {
+        query[`groupPath.${i}`] = prefix[i];
+      }
+    }
+
+    if (filter?.legacyV1 !== undefined) {
+      query['legacyV1'] = filter.legacyV1;
+    }
+    if (filter?.pinnedV1 !== undefined) {
+      query['pinnedV1'] = filter.pinnedV1;
+    }
+
+    this.logger.debug(
+      `listProjects: filter=${JSON.stringify(filter)} page=${page} perPage=${perPage}`,
     );
 
-    // Step 1: Create GitLab group hierarchy
-    this.logger.log(`Step 1: Creating group hierarchy: ${groupPath.join('/')}`);
+    return this.projectModel
+      .find(query)
+      .skip(page * perPage)
+      .limit(perPage)
+      .sort({ createdAt: -1 })
+      .exec();
+  }
+
+  /**
+   * Finds a single project by MongoDB ID, GitLab path, or effective slug.
+   * Exactly one lookup field must be provided.
+   *
+   * @throws NotFoundException if no project matches the criteria
+   */
+  async findProject(criteria: {
+    id?: string;
+    gitlabPath?: string;
+    effectiveSlug?: string;
+  }): Promise<ProjectDocument> {
+    const { id, gitlabPath, effectiveSlug } = criteria;
+
+    let doc: ProjectDocument | null = null;
+
+    if (id) {
+      doc = await this.projectModel.findById(id).exec();
+    } else if (gitlabPath) {
+      doc = await this.projectModel.findOne({ gitlabPath }).exec();
+    } else if (effectiveSlug) {
+      doc = await this.projectModel.findOne({ effectiveSlug }).exec();
+    }
+
+    if (!doc) {
+      const label = id ?? gitlabPath ?? effectiveSlug ?? '(none)';
+      throw new NotFoundException(`Project not found: ${label}`);
+    }
+
+    return doc;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Mutations
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Provisions a new project end-to-end across GitLab, Vault, k3d, and MongoDB.
+   *
+   * @param input - Project creation parameters
+   * @returns The persisted Project document
+   */
+  async createProject(input: CreateProjectInput): Promise<ProjectDocument> {
+    const {
+      groupPath,
+      projectSlug,
+      displayName,
+      provisioning = Provisioning.AUTO_DEVOPS,
+      templateSlug,
+      capabilities,
+      slugOverride,
+    } = input;
+
+    const isDeployable = capabilities?.deployable ?? true;
+    const isPublishable = capabilities?.publishable ?? false;
+    // Derive a readable name when the caller doesn't provide one
+    const resolvedDisplayName = displayName ?? ProjectsService.slugToDisplayName(projectSlug);
+
+    this.logger.log(
+      `createProject: groupPath=[${groupPath.join('/')}] slug="${projectSlug}" ` +
+        `provisioning=${provisioning} deployable=${isDeployable} publishable=${isPublishable}`,
+    );
+
+    // Step 1: Resolve effective slug
+    this.logger.log('Step 1: Resolving effective slug');
+    const effectiveSlug = await this.slugService.resolve(projectSlug, groupPath, slugOverride);
+    this.logger.log(`Effective slug resolved: "${effectiveSlug}"`);
+
+    const gitlabPath = [...groupPath, projectSlug].join('/');
+    const vaultBasePath = `projects/${[...groupPath, projectSlug].join('/')}`;
+    const helmReleaseName = effectiveSlug;
+
+    // Compute app hostnames
+    const appHosts = this.buildAppHosts(effectiveSlug);
+
+    // Step 2: Create GitLab group hierarchy
+    this.logger.log(`Step 2: Ensuring GitLab group hierarchy: ${groupPath.join('/')}`);
     const groupId = await this.gitlabService.createGroupHierarchy(groupPath);
 
-    // Step 2: Fork template
-    this.logger.log(`Step 2: Forking template "${templateSlug}" into group ${groupId}`);
-    const forkedProject = await this.gitlabService.forkTemplate(templateSlug, groupId, projectName);
+    // Step 3: Provision GitLab project
+    let gitlabProjectId: number;
 
-    // Step 3: Inject CI config includes
-    const injectedConfigs = await this.injectConfigIncludes(forkedProject.id, dto.configs);
+    if (provisioning === Provisioning.TEMPLATE) {
+      if (!templateSlug) {
+        throw new ConflictException('templateSlug is required when provisioning=TEMPLATE');
+      }
+      this.logger.log(
+        `Step 3: Forking template "${templateSlug}" into group ${groupId} as "${projectSlug}"`,
+      );
+      const forked = await this.gitlabService.forkTemplate(templateSlug, groupId, projectSlug);
+      gitlabProjectId = forked.id;
+    } else {
+      this.logger.log(
+        `Step 3: Creating new Auto DevOps project "${projectSlug}" in group ${groupId}`,
+      );
+      const created = await this.gitlabService.createNewProject(
+        groupId,
+        projectSlug,
+        resolvedDisplayName,
+        true,
+      );
+      gitlabProjectId = created.id;
+
+      // Write .gitlab-ci.yml (Auto DevOps include) and chart-values.yaml
+      this.logger.log('Step 3a: Writing .gitlab-ci.yml with Auto DevOps include');
+      await this.gitlabService.upsertFile(
+        gitlabProjectId,
+        '.gitlab-ci.yml',
+        this.buildAutoDevopsCi(),
+        'chore: add Auto DevOps pipeline include',
+      );
+
+      if (isDeployable) {
+        this.logger.log('Step 3b: Writing chart-values.yaml');
+        await this.gitlabService.upsertFile(
+          gitlabProjectId,
+          'chart-values.yaml',
+          ProjectsService.buildChartValues(),
+          'chore: add chart-values.yaml for dsoaas-app Helm chart',
+        );
+      }
+    }
 
     // Step 4: Seed Vault secrets
-    this.logger.log(`Step 4: Seeding Vault secrets at "${vaultPath}"`);
-    const secrets: Record<string, string> = {
-      PROJECT_NAME: projectName,
-      CLIENT_NAME: clientName,
-      GITLAB_PROJECT_ID: String(forkedProject.id),
-      DEPLOYMENT_ENV: 'local',
-      ...dto.envVars,
+    this.logger.log(`Step 4: Seeding Vault secrets at "${vaultBasePath}"`);
+    const baseSecrets: Record<string, string> = {
+      PROJECT_SLUG: projectSlug,
+      EFFECTIVE_SLUG: effectiveSlug,
+      GITLAB_PROJECT_ID: String(gitlabProjectId),
+      GITLAB_PATH: gitlabPath,
     };
-    await this.vaultService.writeSecrets(vaultPath, secrets);
+    // envVars is now a validated JSON object (not a raw string) — merge directly
+    if (input.envVars) {
+      Object.assign(baseSecrets, input.envVars);
+    }
+    await this.vaultService.writeSecrets(vaultBasePath, baseSecrets);
 
-    const result: ProjectInfoDto = {
-      id: forkedProject.id,
-      name: projectName,
-      clientName,
-      gitlabUrl: forkedProject.web_url,
-      vaultPath,
-      configs: injectedConfigs.length > 0 ? injectedConfigs : undefined,
-    };
+    // Step 4b: Per-env Vault writes — always executed so every deploy environment
+    // has a populated secret path.  Sentinel keys (DEPLOY_ENV, VAULT_PROJECT_PATH)
+    // ensure the ExternalSecret can sync even when no caller-supplied values exist.
+    // Additional caller-supplied keys from envScopedVars are merged on top.
+    const envScopedEnvsWritten: DeployEnv[] = [];
+    for (const env of DEPLOY_ENVS) {
+      const envPath = `${vaultBasePath}/${env}`;
 
-    // Step 5: Deployable capability — Kong route + optional DNS
-    if (isDeployable) {
-      const hostname = capabilities.deployable!.domain ?? `${projectName}.${this.appsDomain}`;
-      const kongServiceName = `${clientName}-${projectName}-service`;
+      // Sentinel values: always present so ESO has something to sync.
+      const envData: Record<string, string> = {
+        DEPLOY_ENV: env,
+        VAULT_PROJECT_PATH: vaultBasePath,
+      };
 
-      this.logger.log(`Step 5a: Registering Kong service "${kongServiceName}" for ${hostname}`);
-      const upstreamUrl = this.resolveUpstreamUrl(clientName, projectName);
-      await this.kongService.registerService(kongServiceName, upstreamUrl, [hostname]);
-
-      result.appUrl = hostname;
-      result.kongServiceName = kongServiceName;
-
-      // Cloudflare DNS (optional, non-critical)
-      try {
-        this.logger.log(`Step 5b: Configuring Cloudflare DNS for ${hostname}`);
-        result.cloudflareConfigured = await this.cloudflareService.addDnsRecord(hostname);
-      } catch (error) {
-        this.logger.warn(`Cloudflare DNS setup failed (non-critical): ${(error as Error).message}`);
-        result.cloudflareConfigured = false;
-      }
-
-      // Trigger CI pipeline (optional, non-critical)
-      const autoDeploy = capabilities.deployable!.autoDeploy ?? true;
-      if (autoDeploy) {
+      const raw = input.envScopedVars?.[env];
+      if (raw) {
         try {
-          this.logger.log(`Step 5c: Triggering initial pipeline for project ${forkedProject.id}`);
-          await this.gitlabService.triggerPipeline(forkedProject.id);
-        } catch (error) {
-          this.logger.warn(`Pipeline trigger failed (non-critical): ${(error as Error).message}`);
+          Object.assign(envData, JSON.parse(raw) as Record<string, string>);
+          envScopedEnvsWritten.push(env);
+        } catch (err) {
+          this.logger.warn(
+            `envScopedVars.${env} is not valid JSON — keeping sentinels only: ${(err as Error).message}`,
+          );
         }
       }
+
+      await this.vaultService.writeSecrets(envPath, envData);
+      this.logger.log(
+        `Step 4b: Seeded env-scoped Vault secrets at "${envPath}" (${Object.keys(envData).length} keys)`,
+      );
     }
 
-    // Step 6: Publishable capability — package name
-    if (isPublishable) {
-      const packageName = capabilities.publishable!.packageName ?? `@${clientName}/${projectName}`;
+    // Step 5: Ensure k3d namespaces exist
+    this.logger.log('Step 5: Ensuring k3d namespaces exist');
+    await Promise.all(DEPLOY_ENVS.map((env) => this.k8sService.ensureNamespace(env)));
 
-      this.logger.log(`Step 6: Publishable package name: ${packageName}`);
+    // Step 6: Set env-scoped CI variables on the GitLab project
+    if (isDeployable) {
+      this.logger.log('Step 6: Setting env-scoped CI variables on GitLab project');
+      const ciVariables: Array<{
+        key: string;
+        value: string;
+        environmentScope: string;
+        masked?: boolean;
+      }> = [];
 
-      result.packageName = packageName;
-      result.registryUrl = `${this.gitlabExternalUrl}/${groupPath.join('/')}/${projectName}/-/packages`;
+      for (const env of DEPLOY_ENVS) {
+        // Short / non-sensitive values must use masked:false — GitLab requires
+        // masked variable values to be ≥8 characters and match a strict charset.
+        ciVariables.push({
+          key: 'KUBE_NAMESPACE',
+          value: env,
+          environmentScope: env,
+          masked: false,
+        });
+        ciVariables.push({
+          key: 'APP_HOST',
+          value: appHosts[env] ?? `${effectiveSlug}.${env}.${this.appsDomain}`,
+          environmentScope: env,
+          masked: false,
+        });
+        ciVariables.push({
+          key: 'VAULT_PROJECT_PATH',
+          value: vaultBasePath,
+          environmentScope: env,
+          masked: false,
+        });
+
+        // KUBECONFIG_B64: set per-project so CI jobs can connect to the right cluster env.
+        // The bootstrap runner-rbac.sh generates these kubeconfig files.
+        const kubeconfigB64 = this.k8sService.getKubeconfigB64(env);
+        if (kubeconfigB64) {
+          ciVariables.push({
+            key: 'KUBECONFIG_B64',
+            value: kubeconfigB64,
+            environmentScope: env,
+            masked: true,
+          });
+        } else {
+          this.logger.warn(
+            `KUBECONFIG_B64 not set for env="${env}" — kubeconfig file missing. ` +
+              'Run bootstrap/runner-rbac.sh to generate kubeconfigs.',
+          );
+        }
+      }
+
+      await this.gitlabService.setProjectCiVariables(gitlabProjectId, ciVariables);
     }
 
-    this.logger.log(`Project "${clientName}/${projectName}" created successfully`);
-
-    return result;
-  }
-
-  async listProjects(): Promise<ProjectInfoDto[]> {
-    const projects = await this.gitlabService.listProjects();
-    return projects.map((p) => {
-      const parts = p.path_with_namespace.split('/');
-      const projectName = parts.at(-1)!;
-      const clientName = parts.length >= 3 ? parts.at(-2)! : 'unknown';
-
-      return {
-        id: p.id,
-        name: projectName,
-        clientName,
-        gitlabUrl: p.web_url,
-        vaultPath: `projects/${clientName}/${projectName}`,
-      };
+    // Step 7: Persist to MongoDB
+    this.logger.log('Step 7: Persisting project to MongoDB');
+    const doc = await this.projectModel.create({
+      gitlabProjectId,
+      gitlabPath,
+      groupPath,
+      projectSlug,
+      effectiveSlug,
+      displayName: resolvedDisplayName,
+      provisioning,
+      templateSlug: provisioning === Provisioning.TEMPLATE ? templateSlug : undefined,
+      vaultBasePath,
+      helmReleaseName,
+      appHosts: {
+        dev: appHosts['dev'],
+        stg: appHosts['stg'],
+        prod: appHosts['prod'],
+      },
+      // hostnameOverrides always starts empty at create time;
+      // per-env hostname overrides are set via the setHostnameOverride mutation.
+      hostnameOverrides: {},
+      capabilities: { deployable: isDeployable, publishable: isPublishable },
+      legacyV1: false,
+      pinnedV1: false,
     });
-  }
 
-  async getProject(projectId: number): Promise<ProjectInfoDto> {
-    const project = await this.gitlabService.getProject(projectId);
-    if (!project) {
-      throw new NotFoundException(`Project ${projectId} not found`);
-    }
+    // Step 8: Audit log
+    await this.auditLogModel.create({
+      eventType: 'project.created',
+      projectId: String(doc._id),
+      gitlabPath,
+      effectiveSlug,
+      metadata: {
+        provisioning,
+        deployable: isDeployable,
+        publishable: isPublishable,
+        ...(envScopedEnvsWritten.length > 0 && { envScopedVars: envScopedEnvsWritten }),
+      },
+    });
 
-    const parts = project.path_with_namespace.split('/');
-    const projectName = parts.at(-1)!;
-    const clientName = parts.length >= 3 ? parts.at(-2)! : 'unknown';
-
-    return {
-      id: project.id,
-      name: projectName,
-      clientName,
-      gitlabUrl: project.web_url,
-      vaultPath: `projects/${clientName}/${projectName}`,
-    };
-  }
-
-  async deleteProject(projectId: number): Promise<void> {
-    this.logger.log(`Deleting project ${projectId} and all associated resources`);
-
-    const project = await this.gitlabService.getProject(projectId);
-    const parts = project.path_with_namespace.split('/');
-    const projectName = parts.at(-1);
-    const clientName = parts.length >= 3 ? parts.at(-2) : 'unknown';
-    const hostname = `${projectName}.${this.appsDomain}`;
-    const kongServiceName = `${clientName}-${projectName}-service`;
-    const vaultPath = `projects/${clientName}/${projectName}`;
-
-    // Remove Kong routes (non-critical, may not exist if project wasn't deployable)
-    try {
-      this.logger.log(`Removing Kong service "${kongServiceName}"`);
-      await this.kongService.removeService(kongServiceName);
-    } catch (error) {
-      this.logger.warn(`Kong cleanup failed (non-critical): ${(error as Error).message}`);
-    }
-
-    // Remove Cloudflare DNS (non-critical)
-    try {
-      this.logger.log(`Removing Cloudflare DNS for ${hostname}`);
-      await this.cloudflareService.removeDnsRecord(hostname);
-    } catch (error) {
-      this.logger.warn(`Cloudflare cleanup failed (non-critical): ${(error as Error).message}`);
-    }
-
-    // Remove Vault secrets (non-critical)
-    try {
-      this.logger.log(`Removing Vault secrets at "${vaultPath}"`);
-      await this.vaultService.deleteSecrets(vaultPath);
-    } catch (error) {
-      this.logger.warn(`Vault cleanup failed (non-critical): ${(error as Error).message}`);
-    }
-
-    // Delete GitLab project (critical)
-    this.logger.log(`Deleting GitLab project ${projectId}`);
-    await this.gitlabService.deleteProject(projectId);
-
-    this.logger.log(`Project ${projectId} deleted successfully`);
+    this.logger.log(
+      `Project "${gitlabPath}" provisioned successfully (id=${String(doc._id)}, slug="${effectiveSlug}")`,
+    );
+    return doc;
   }
 
   /**
-   * Injects CI config `include:` directives into a project's `.gitlab-ci.yml`.
+   * Deletes a project and all associated resources.
    *
-   * Reads the existing CI file, merges new include entries (deduplicating),
-   * and commits the updated file back to the repository.
-   *
-   * @param projectId - GitLab project ID of the forked project
-   * @param configSlugs - Array of config repo slugs to include
-   * @returns Array of config slugs that were actually injected
+   * @param id - MongoDB document ID
+   * @returns true on success
    */
-  private async injectConfigIncludes(projectId: number, configSlugs?: string[]): Promise<string[]> {
-    if (!configSlugs || configSlugs.length === 0) {
-      this.logger.debug('No config includes to inject, skipping');
-      return [];
+  async deleteProject(id: string): Promise<boolean> {
+    this.logger.log(`deleteProject: id=${id}`);
+    const doc = await this.findProject({ id });
+
+    // Delete GitLab project (critical)
+    this.logger.log(`Deleting GitLab project ${doc.gitlabProjectId}`);
+    await this.gitlabService.deleteProject(doc.gitlabProjectId);
+
+    // Delete Vault secrets (non-critical)
+    try {
+      this.logger.log(`Deleting Vault secrets at "${doc.vaultBasePath}"`);
+      await this.vaultService.deleteSecrets(doc.vaultBasePath);
+    } catch (err) {
+      this.logger.warn(`Vault cleanup failed (non-critical): ${(err as Error).message}`);
+    }
+
+    // Audit log
+    await this.auditLogModel.create({
+      eventType: 'project.deleted',
+      projectId: id,
+      gitlabPath: doc.gitlabPath,
+      effectiveSlug: doc.effectiveSlug,
+      metadata: {},
+    });
+
+    // Remove MongoDB document
+    await doc.deleteOne();
+
+    this.logger.log(`Project "${doc.gitlabPath}" deleted successfully`);
+    return true;
+  }
+
+  /**
+   * Migrates a legacy v1 project to the Auto DevOps pipeline:
+   *  1. Writes `.gitlab-ci.yml` with Auto DevOps include
+   *  2. Sets env-scoped CI variables
+   *  3. Triggers the pipeline
+   *  4. Sets `legacyV1 = false` in MongoDB
+   *
+   * Note: stopping the legacy compose stack and removing its gateway routes
+   * is a separate operator step after a successful production deploy on k3d.
+   *
+   * @param id - MongoDB document ID
+   */
+  async migrateProjectToAutoDevops(id: string): Promise<ProjectDocument> {
+    this.logger.log(`migrateProjectToAutoDevops: id=${id}`);
+    const doc = await this.findProject({ id });
+
+    if (!doc.legacyV1) {
+      this.logger.warn(`Project "${doc.gitlabPath}" is not a legacy v1 project — skipping`);
+      return doc;
+    }
+
+    // Step 1: Write Auto DevOps .gitlab-ci.yml
+    this.logger.log(`Writing .gitlab-ci.yml for project ${doc.gitlabProjectId}`);
+    await this.gitlabService.upsertFile(
+      doc.gitlabProjectId,
+      '.gitlab-ci.yml',
+      this.buildAutoDevopsCi(),
+      'chore: migrate to Auto DevOps pipeline',
+    );
+
+    if (doc.capabilities.deployable) {
+      await this.gitlabService.upsertFile(
+        doc.gitlabProjectId,
+        'chart-values.yaml',
+        ProjectsService.buildChartValues(),
+        'chore: add chart-values.yaml for v2 Auto DevOps',
+      );
+    }
+
+    // Step 2: Set env-scoped CI variables
+    if (doc.capabilities.deployable) {
+      const ciVars: Array<{
+        key: string;
+        value: string;
+        environmentScope: string;
+        masked?: boolean;
+      }> = [];
+      for (const env of DEPLOY_ENVS) {
+        ciVars.push({ key: 'KUBE_NAMESPACE', value: env, environmentScope: env, masked: false });
+        ciVars.push({
+          key: 'APP_HOST',
+          value: doc.appHosts[env] ?? `${doc.effectiveSlug}.${env}.${this.appsDomain}`,
+          environmentScope: env,
+          masked: false,
+        });
+        ciVars.push({
+          key: 'VAULT_PROJECT_PATH',
+          value: doc.vaultBasePath,
+          environmentScope: env,
+          masked: false,
+        });
+
+        const kubeconfigB64 = this.k8sService.getKubeconfigB64(env);
+        if (kubeconfigB64) {
+          ciVars.push({
+            key: 'KUBECONFIG_B64',
+            value: kubeconfigB64,
+            environmentScope: env,
+            masked: true,
+          });
+        }
+      }
+      await this.gitlabService.setProjectCiVariables(doc.gitlabProjectId, ciVars);
+    }
+
+    // Step 3: Trigger pipeline on default branch
+    try {
+      this.logger.log(`Triggering pipeline for project ${doc.gitlabProjectId}`);
+      await this.gitlabService.triggerPipeline(doc.gitlabProjectId);
+    } catch (err) {
+      this.logger.warn(`Pipeline trigger failed (non-critical): ${(err as Error).message}`);
+    }
+
+    // Step 4: Update MongoDB
+    doc.legacyV1 = false;
+    await doc.save();
+
+    await this.auditLogModel.create({
+      eventType: 'project.migrated',
+      projectId: id,
+      gitlabPath: doc.gitlabPath,
+      effectiveSlug: doc.effectiveSlug,
+      metadata: {},
+    });
+
+    this.logger.log(`Project "${doc.gitlabPath}" migrated to Auto DevOps`);
+    return doc;
+  }
+
+  /**
+   * Overrides the hostname for one environment on an existing project.
+   * Updates `hostnameOverrides`, `appHosts`, and the `APP_HOST` CI variable.
+   *
+   * @param id - MongoDB document ID
+   * @param env - Target environment
+   * @param hostname - New hostname
+   */
+  async setHostnameOverride(
+    id: string,
+    env: DeployEnv,
+    hostname: string,
+  ): Promise<ProjectDocument> {
+    this.logger.log(`setHostnameOverride: id=${id} env=${env} hostname="${hostname}"`);
+    const doc = await this.findProject({ id });
+
+    doc.hostnameOverrides = { ...(doc.hostnameOverrides ?? {}), [env]: hostname };
+    doc.appHosts = { ...(doc.appHosts ?? {}), [env]: hostname };
+    await doc.save();
+
+    // Update APP_HOST CI var for this env
+    try {
+      await this.gitlabService.setProjectCiVariable(doc.gitlabProjectId, 'APP_HOST', hostname, env);
+    } catch (err) {
+      this.logger.warn(
+        `Failed to update APP_HOST CI var (non-critical): ${(err as Error).message}`,
+      );
+    }
+
+    await this.auditLogModel.create({
+      eventType: 'project.hostname_override',
+      projectId: id,
+      gitlabPath: doc.gitlabPath,
+      effectiveSlug: doc.effectiveSlug,
+      metadata: { env, hostname },
+    });
+
+    return doc;
+  }
+
+  /**
+   * Sets or clears the `pinnedV1` flag on a project.
+   *
+   * @param id - MongoDB document ID
+   * @param pinned - Whether to pin the project on v1 indefinitely
+   */
+  async setPinnedV1(id: string, pinned: boolean): Promise<ProjectDocument> {
+    this.logger.log(`setPinnedV1: id=${id} pinned=${pinned}`);
+    const doc = await this.findProject({ id });
+    doc.pinnedV1 = pinned;
+    await doc.save();
+
+    await this.auditLogModel.create({
+      eventType: 'project.pinned_v1',
+      projectId: id,
+      gitlabPath: doc.gitlabPath,
+      effectiveSlug: doc.effectiveSlug,
+      metadata: { pinned },
+    });
+
+    return doc;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Reconciliation (4.10)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Scans all GitLab projects and backfills those without a MongoDB record as
+   * `legacyV1: true`. Called once at startup in the background.
+   *
+   * Projects belonging to the template or config groups are excluded.
+   */
+  async reconcileLegacyProjects(): Promise<void> {
+    this.logger.log('Starting legacy project reconciliation');
+
+    let allProjects: Awaited<ReturnType<typeof this.gitlabService.listProjects>>;
+    try {
+      allProjects = await this.gitlabService.listProjects();
+    } catch (err) {
+      this.logger.warn(
+        `Reconciliation: failed to list GitLab projects — ${(err as Error).message}`,
+      );
+      return;
+    }
+
+    const templateGroupId = this.configService.get<number>('gitlab.templateGroupId', {
+      infer: true,
+    });
+    const configGroupId = this.configService.get<number>('gitlab.configGroupId', { infer: true });
+
+    let backfilled = 0;
+
+    for (const glProject of allProjects) {
+      // Skip platform meta-groups (templates, configs) by stable group ID, not fragile path prefix.
+      // Falling back to path-prefix check when namespace is absent handles very old GitLab versions.
+      const namespaceId = glProject.namespace?.id;
+      if (namespaceId !== undefined) {
+        if (namespaceId === templateGroupId || namespaceId === configGroupId) {
+          this.logger.verbose(
+            `Reconciliation: skipping platform project "${glProject.path_with_namespace}" (group ${namespaceId})`,
+          );
+          continue;
+        }
+      } else if (
+        glProject.path_with_namespace.startsWith('templates/') ||
+        glProject.path_with_namespace.startsWith('configs/')
+      ) {
+        this.logger.verbose(
+          `Reconciliation: skipping platform project "${glProject.path_with_namespace}" (path-prefix fallback — namespace missing)`,
+        );
+        continue;
+      }
+
+      const existing = await this.projectModel.findOne({ gitlabProjectId: glProject.id }).exec();
+
+      if (existing) {
+        this.logger.verbose(
+          `Reconciliation: project "${glProject.path_with_namespace}" already in registry`,
+        );
+        continue;
+      }
+
+      this.logger.log(
+        `Reconciliation: backfilling legacy project "${glProject.path_with_namespace}" (id=${glProject.id})`,
+      );
+
+      const parts = glProject.path_with_namespace.split('/');
+      const projectSlug = parts.at(-1)!;
+      const groupPath = parts.slice(0, -1);
+      const vaultBasePath = `projects/${glProject.path_with_namespace}`;
+      const effectiveSlug = projectSlug;
+
+      // Use a simple slug — if there's a collision we suffix with gitlab id
+      const finalSlug = (await this.slugService.isAvailable(effectiveSlug))
+        ? effectiveSlug
+        : `${effectiveSlug}-${String(glProject.id)}`;
+
+      const doc = await this.projectModel.create({
+        gitlabProjectId: glProject.id,
+        gitlabPath: glProject.path_with_namespace,
+        groupPath,
+        projectSlug,
+        effectiveSlug: finalSlug,
+        displayName: glProject.name,
+        provisioning: 'template' as const,
+        vaultBasePath,
+        helmReleaseName: finalSlug,
+        appHosts: {},
+        hostnameOverrides: {},
+        capabilities: { deployable: false, publishable: false },
+        legacyV1: true,
+        pinnedV1: false,
+      });
+
+      await this.auditLogModel.create({
+        eventType: 'project.reconciled_legacy',
+        projectId: String(doc._id),
+        gitlabPath: glProject.path_with_namespace,
+        effectiveSlug: finalSlug,
+        metadata: { reason: 'startup reconciliation', gitlabProjectId: glProject.id },
+      });
+
+      // Seed per-env Vault paths so any future deployable upgrade for this
+      // legacy project finds ExternalSecret paths already populated.
+      // Idempotent — vault KV v2 overwrites are safe.
+      for (const env of DEPLOY_ENVS) {
+        const envPath = `${vaultBasePath}/${env}`;
+        const envData: Record<string, string> = {
+          DEPLOY_ENV: env,
+          VAULT_PROJECT_PATH: vaultBasePath,
+        };
+        await this.vaultService.writeSecrets(envPath, envData).catch((err: Error) => {
+          this.logger.warn(
+            `Reconciliation: could not seed Vault path "${envPath}": ${err.message}`,
+          );
+        });
+        this.logger.verbose(`Reconciliation: seeded Vault path "${envPath}"`);
+      }
+
+      backfilled++;
     }
 
     this.logger.log(
-      `Step 3: Injecting ${configSlugs.length} config include(s) into project ${projectId}`,
+      backfilled > 0
+        ? `Reconciliation complete: ${backfilled} legacy project(s) backfilled`
+        : 'Reconciliation complete: no new legacy projects found',
     );
-
-    const rawContent = await this.gitlabService.getFileContent(projectId, '.gitlab-ci.yml');
-
-    let ciConfig: CiYaml;
-    if (rawContent) {
-      ciConfig = (yaml.load(rawContent) as CiYaml) ?? { include: [] };
-    } else {
-      this.logger.debug('No existing .gitlab-ci.yml found, creating from scratch');
-      ciConfig = { include: [] };
-    }
-
-    const existingIncludes: Array<{ project: string; file: string }> = Array.isArray(
-      ciConfig.include,
-    )
-      ? ciConfig.include
-      : [];
-
-    const existingKeys = new Set(existingIncludes.map((inc) => `${inc.project}::${inc.file}`));
-
-    const newIncludes: Array<{ project: string; file: string }> = [];
-    for (const slug of configSlugs) {
-      const entry = { project: `configs/${slug}`, file: '/.gitlab-ci.yml' };
-      const key = `${entry.project}::${entry.file}`;
-      if (existingKeys.has(key)) {
-        this.logger.debug(`Include already present: project="${entry.project}", skipping`);
-      } else {
-        newIncludes.push(entry);
-        existingKeys.add(key);
-        this.logger.debug(`Adding include: project="${entry.project}"`);
-      }
-    }
-
-    if (newIncludes.length === 0) {
-      this.logger.debug('All requested configs already included');
-      return configSlugs;
-    }
-
-    ciConfig.include = [...existingIncludes, ...newIncludes];
-
-    const updatedContent = yaml.dump(ciConfig, {
-      lineWidth: 120,
-      noRefs: true,
-      quotingType: '"',
-      forceQuotes: false,
-    });
-
-    await this.gitlabService.upsertFile(
-      projectId,
-      '.gitlab-ci.yml',
-      updatedContent,
-      `chore: inject config includes [${configSlugs.join(', ')}]`,
-    );
-
-    this.logger.log(`Injected ${newIncludes.length} new include(s) into .gitlab-ci.yml`);
-
-    return configSlugs;
-  }
-
-  /**
-   * Resolves the upstream URL for a local deployment.
-   * The container is expected to be reachable on the devops-network
-   * under the name "{clientName}-{projectName}" on port 3000.
-   */
-  private resolveUpstreamUrl(clientName: string, projectName: string): string {
-    return `http://${clientName}-${projectName}:3000`;
   }
 }

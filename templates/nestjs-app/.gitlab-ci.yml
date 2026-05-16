@@ -1,29 +1,17 @@
 # ==========================================================================
-# NestJS App Template — CI/CD Pipeline
+# NestJS App Template — CI/CD Pipeline (v2 Auto DevOps)
 # ==========================================================================
-# Uses shared config repos for reusable CI stages.
-# Configs are maintained in the "configs" GitLab group.
+# Delegates build + deploy to the shared Auto DevOps pipeline config.
+# Override individual jobs below as needed for this app.
 # ==========================================================================
 
 include:
-  - project: "configs/node-pipeline"
-    file: "/.gitlab-ci.yml"
-  - project: "configs/docker-pipeline"
-    file: "/.gitlab-ci.yml"
-  - project: "configs/deploy-compose"
+  - project: "configs/auto-devops-pipeline"
     file: "/.gitlab-ci.yml"
 
-stages:
-  - lint
-  - build
-  - deploy
-
-lint:
-  extends: .node-lint
-
-build:
-  extends: .docker-build
-
-deploy:
-  extends: .deploy-compose
-  when: manual
+# App-specific overrides go below.
+# Example: extend the test job with real tests
+# test:
+#   script:
+#     - npm ci
+#     - npm test
