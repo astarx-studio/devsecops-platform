@@ -271,6 +271,30 @@ Outer Traefik's wildcard cert covers `*.apps.<DOMAIN>`, `*.dev.apps.<DOMAIN>`, a
 
 ---
 
+## SonarQube opt-in
+
+The shared pipeline includes a **`sonar:scan`** job (stage `test`). It runs only when you set project CI variables (Settings → CI/CD → Variables):
+
+| Variable | Required | Example |
+|---|---|---|
+| `SONAR_ALLOWED_BRANCHES` | Yes (comma-separated) | `develop,staging,main` |
+| `SONAR_TOKEN` | Yes | Analysis token from Sonar UI (masked) |
+| `SONAR_HOST_URL` | Recommended | `https://sonarqube.devops.yourdomain.com` |
+| `SONAR_HOST_URL_INTERNAL` | Optional | `http://sonarqube:9000` (default in template) |
+| `SONAR_GATE_POLICY_JSON` | Optional | `{"dev":"optional","stg":"required","prod":"required","other":"optional"}` |
+
+**Defaults when `SONAR_GATE_POLICY_JSON` is omitted:** dev branch (`DEPLOY_DEV_REF`) = optional gate; staging and production refs = required; any other branch = optional.
+
+Each allowed branch is analyzed as a separate Sonar project key: `{project_path_slug}_{branch_slug}` (Community Build workaround for multi-branch analysis).
+
+**Vault:** Manual onboarding usually stores the token only in GitLab. API-managed projects also copy the token to Vault under `projects/<path>/sonar` for rotation.
+
+**Shared defaults:** Optional baseline `sonar-project.properties` lives in the `configs/sonar-defaults` GitLab repo — copy into your app root or merge the exclusions you need.
+
+**Commit status:** Passing or failing Quality Gate appears on the commit as `sonarqube/quality-gate` with a link to the Sonar dashboard.
+
+---
+
 ## When to migrate to API-provisioned
 
 Manual onboarding is fine indefinitely, but the API gives you a few things you can't easily get back later:

@@ -16,3 +16,4 @@ Here's what's covered:
 - **[Templates](06_templates.md)** — Managing template repositories that projects are forked from.
 - **[Shared CI/CD Configs](07_configs.md)** — Managing shared pipeline definitions that can be injected into projects.
 - **[Adding tiered OIDC with oauth2-proxy](08_oauth2_proxy_tiers_and_forwardauth.md)** — Extend Traefik and Keycloak when you need multiple oauth2-proxy policies (admin / internal / external used only as examples).
+- **[SonarQube SSO and groups](09_sonarqube_sso.md)** — Keycloak SAML client, Sonar group sync, and how CI tokens differ from UI login.

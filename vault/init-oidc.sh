@@ -39,6 +39,8 @@ bao write auth/oidc/config \
   default_role="default"
 
 echo "[INFO] Creating OIDC role 'default'..."
+# groups_claim is required by OpenBao when set; Keycloak omits the claim if the user
+# belongs to no groups. Realm defaultGroups (/users) ensures the claim is present.
 bao write auth/oidc/role/default \
   allowed_redirect_uris="${VAULT_EXTERNAL_URL}/ui/vault/auth/oidc/oidc/callback" \
   allowed_redirect_uris="http://localhost:8250/oidc/callback" \
@@ -84,6 +86,23 @@ if [ -n "${GROUP_ID}" ] && [ -n "${OIDC_ACCESSOR}" ]; then
   echo "[INFO] Admin group mapping complete."
 else
   echo "[WARN] Could not create group alias — missing group ID or OIDC accessor."
+fi
+
+# External group for Keycloak "users" (default group) — standard login, default policy on role
+echo "[INFO] Creating external group 'users' (default Keycloak group)..."
+USERS_GROUP_ID=$(bao write -format=json identity/group \
+  name="users" \
+  type="external" \
+  policies="default" 2>/dev/null | awk -F'"' '/"id"/{print $4; exit}')
+if [ -z "${USERS_GROUP_ID}" ]; then
+  USERS_GROUP_ID=$(bao read -format=json identity/group/name/users 2>/dev/null | awk -F'"' '/"id"/{print $4; exit}')
+fi
+if [ -n "${USERS_GROUP_ID}" ] && [ -n "${OIDC_ACCESSOR}" ]; then
+  bao write identity/group-alias \
+    name="users" \
+    mount_accessor="${OIDC_ACCESSOR}" \
+    canonical_id="${USERS_GROUP_ID}" 2>/dev/null || echo "[WARN] users group alias already exists (skipping)."
+  echo "[INFO] users group mapping complete."
 fi
 
 echo "[INFO] OpenBao OIDC configuration complete."

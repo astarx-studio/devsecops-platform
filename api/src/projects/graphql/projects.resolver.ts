@@ -1,5 +1,8 @@
 import { UseGuards } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { Args, ID, Int, Mutation, Query, Resolver } from '@nestjs/graphql';
+
+import { AppConfiguration } from '../../config';
 
 import { CombinedAuthGuard } from '../../common/guards';
 import { ConfigsService } from '../../configs/configs.service';
@@ -7,16 +10,35 @@ import { TemplatesService } from '../../templates/templates.service';
 import { SlugService } from '../slug.service';
 import { ProjectsService } from '../projects.service';
 import { Env } from './enums';
-import { CreateProjectInput, ProjectFilterInput } from './project.inputs';
-import { ConfigType, ProjectType, TemplateType } from './project.type';
+import { CreateProjectInput, ProjectFilterInput, UpdateProjectSonarConfigInput } from './project.inputs';
+import { ConfigType, ProjectSonarType, ProjectType, SonarGatePolicyType, TemplateType } from './project.type';
+import { isSonarEnabled, resolveSonarGatePolicy } from '../sonar/sonar.types';
 
 import type { ProjectDocument } from '../schemas/project.schema';
+
+function mapSonar(doc: ProjectDocument, dashboardBaseUrl?: string): ProjectSonarType | undefined {
+  if (!isSonarEnabled(doc.sonar)) {
+    return undefined;
+  }
+  const gatePolicy = resolveSonarGatePolicy(doc.sonar?.gatePolicy);
+  const firstBranch = doc.sonar!.allowedBranches[0];
+  const dashboardUrl =
+    dashboardBaseUrl && firstBranch
+      ? `${dashboardBaseUrl}/dashboard?id=${encodeURIComponent(`${doc.effectiveSlug}_${firstBranch.replaceAll(/[^a-zA-Z0-9_-]/g, '_')}`)}`
+      : undefined;
+
+  return {
+    allowedBranches: doc.sonar!.allowedBranches,
+    gatePolicy: gatePolicy as SonarGatePolicyType,
+    dashboardUrl,
+  };
+}
 
 /**
  * Maps a Mongoose ProjectDocument to the GraphQL ProjectType.
  * Handles the `id` ← `_id` conversion and enum coercion.
  */
-function mapProject(doc: ProjectDocument): ProjectType {
+function mapProject(doc: ProjectDocument, sonarPublicUrl?: string): ProjectType {
   return {
     id: String(doc._id),
     gitlabProjectId: doc.gitlabProjectId,
@@ -38,6 +60,7 @@ function mapProject(doc: ProjectDocument): ProjectType {
       deployable: doc.capabilities?.deployable ?? false,
       publishable: doc.capabilities?.publishable ?? false,
     },
+    sonar: mapSonar(doc, sonarPublicUrl),
     legacyV1: doc.legacyV1,
     pinnedV1: doc.pinnedV1,
     createdAt: doc.createdAt!,
@@ -52,12 +75,21 @@ function mapProject(doc: ProjectDocument): ProjectType {
 @UseGuards(CombinedAuthGuard)
 @Resolver(() => ProjectType)
 export class ProjectsResolver {
+  private readonly sonarPublicUrl: string;
+
   constructor(
     private readonly projectsService: ProjectsService,
     private readonly slugService: SlugService,
     private readonly templatesService: TemplatesService,
     private readonly configsService: ConfigsService,
-  ) {}
+    configService: ConfigService<AppConfiguration>,
+  ) {
+    this.sonarPublicUrl = configService.get<string>('sonarqube.publicUrl', { infer: true })!;
+  }
+
+  private mapDoc(doc: ProjectDocument): ProjectType {
+    return mapProject(doc, this.sonarPublicUrl);
+  }
 
   // ---------------------------------------------------------------------------
   // Queries
@@ -75,7 +107,7 @@ export class ProjectsResolver {
     perPage?: number,
   ): Promise<ProjectType[]> {
     const docs = await this.projectsService.listProjects(filter, page, perPage);
-    return docs.map(mapProject);
+    return docs.map((d) => this.mapDoc(d));
   }
 
   @Query(() => ProjectType, {
@@ -91,7 +123,7 @@ export class ProjectsResolver {
   ): Promise<ProjectType | null> {
     try {
       const doc = await this.projectsService.findProject({ id, gitlabPath, effectiveSlug });
-      return mapProject(doc);
+      return this.mapDoc(doc);
     } catch {
       return null;
     }
@@ -142,7 +174,19 @@ export class ProjectsResolver {
   })
   async createProject(@Args('input') input: CreateProjectInput): Promise<ProjectType> {
     const doc = await this.projectsService.createProject(input);
-    return mapProject(doc);
+    return this.mapDoc(doc);
+  }
+
+  @Mutation(() => ProjectType, {
+    description:
+      'Opt in to SonarQube for specific branches, sync CI variables, and optionally store the analysis token in Vault.',
+  })
+  async updateProjectSonarConfig(
+    @Args('id', { type: () => ID }) id: string,
+    @Args('input') input: UpdateProjectSonarConfigInput,
+  ): Promise<ProjectType> {
+    const doc = await this.projectsService.updateProjectSonarConfig(id, input);
+    return this.mapDoc(doc);
   }
 
   @Mutation(() => Boolean, {
@@ -163,7 +207,7 @@ export class ProjectsResolver {
     @Args('id', { type: () => ID }) id: string,
   ): Promise<ProjectType> {
     const doc = await this.projectsService.migrateProjectToAutoDevops(id);
-    return mapProject(doc);
+    return this.mapDoc(doc);
   }
 
   @Mutation(() => ProjectType, {
@@ -175,7 +219,7 @@ export class ProjectsResolver {
     @Args('pinned') pinned: boolean,
   ): Promise<ProjectType> {
     const doc = await this.projectsService.setPinnedV1(id, pinned);
-    return mapProject(doc);
+    return this.mapDoc(doc);
   }
 
   @Mutation(() => ProjectType, {
@@ -189,6 +233,6 @@ export class ProjectsResolver {
     @Args('hostname') hostname: string,
   ): Promise<ProjectType> {
     const doc = await this.projectsService.setHostnameOverride(id, env, hostname);
-    return mapProject(doc);
+    return this.mapDoc(doc);
   }
 }

@@ -555,12 +555,54 @@ export class GitLabService {
           name,
           path: name.toLowerCase().replaceAll(/\s+/g, '-'),
           ...(parentId && { parent_id: parentId }),
-          visibility: 'internal',
+          // Subgroups cannot be more open than a private parent (GitLab returns 400).
+          visibility: 'private',
         },
         { headers: this.headers },
       ),
     );
     return data;
+  }
+
+  /**
+   * Posts a commit status on a GitLab project (canonical contract for CI curl + API callers).
+   *
+   * @see https://docs.gitlab.com/ee/api/commits.html#post-the-build-status-to-a-commit
+   *
+   * @param projectId - GitLab project ID
+   * @param sha - Commit SHA
+   * @param state - pending | running | success | failed | canceled
+   * @param name - Status context name (e.g. "sonarqube/quality-gate")
+   * @param description - Short human-readable description
+   * @param targetUrl - Link to Sonar dashboard or pipeline job
+   */
+  async postCommitStatus(
+    projectId: number,
+    sha: string,
+    state: 'pending' | 'running' | 'success' | 'failed' | 'canceled',
+    name: string,
+    description: string,
+    targetUrl?: string,
+  ): Promise<void> {
+    const encodedSha = encodeURIComponent(sha);
+    const url = `${this.baseUrl}/api/v4/projects/${projectId}/repository/commits/${encodedSha}/statuses`;
+
+    this.logger.debug(
+      `postCommitStatus: project=${projectId} sha=${sha.slice(0, 8)} state=${state} name=${name}`,
+    );
+
+    await firstValueFrom(
+      this.httpService.post(
+        url,
+        {
+          state,
+          name,
+          description,
+          ...(targetUrl ? { target_url: targetUrl } : {}),
+        },
+        { headers: this.headers },
+      ),
+    );
   }
 
   private async findProjectInGroup(

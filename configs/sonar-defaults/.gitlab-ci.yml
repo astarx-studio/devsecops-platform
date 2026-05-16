@@ -1,0 +1,7 @@
+# configs/sonar-defaults — shared SonarQube baseline (not a runnable pipeline).
+# Publish sonar-project.properties from this repo; app projects keep analysis in
+# configs/auto-devops-pipeline sonar:scan job.
+
+workflow:
+  rules:
+    - when: never

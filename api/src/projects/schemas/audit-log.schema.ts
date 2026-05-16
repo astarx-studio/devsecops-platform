@@ -8,7 +8,8 @@ export type AuditEventType =
   | 'project.migrated'
   | 'project.hostname_override'
   | 'project.pinned_v1'
-  | 'project.reconciled_legacy';
+  | 'project.reconciled_legacy'
+  | 'project.sonar_config_updated';
 
 export type AuditLogDocument = HydratedDocument<AuditLog>;
 
@@ -36,6 +37,7 @@ export class AuditLog {
       'project.hostname_override',
       'project.pinned_v1',
       'project.reconciled_legacy',
+      'project.sonar_config_updated',
     ]),
   })
   eventType!: AuditEventType;

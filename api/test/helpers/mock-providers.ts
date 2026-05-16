@@ -30,6 +30,8 @@ const TEST_CONFIG: Record<string, unknown> = {
   'oidc.issuerUrl': undefined,
   'oidc.jwksUrl': undefined,
   'oidc.audience': undefined,
+  'sonarqube.publicUrl': 'https://sonarqube.devops.test.net',
+  'sonarqube.internalUrl': 'http://sonarqube:9000',
 };
 
 export function createMockConfigService(

@@ -1,0 +1,15 @@
+apiVersion: v2
+name: dsoaas-app
+description: >
+  DSOaaS standard application chart. Wraps a Deployment + Service + Ingress
+  (in-cluster Traefik) + ExternalSecret (Vault via ESO). Intended as the
+  default deploy target for all Auto DevOps projects on this platform.
+type: application
+version: 0.2.3
+appVersion: "1.0.0"
+keywords:
+  - dsoaas
+  - auto-devops
+home: https://gitlab.devops.yadatechnology.com/configs/auto-devops-chart
+maintainers:
+  - name: platform-team

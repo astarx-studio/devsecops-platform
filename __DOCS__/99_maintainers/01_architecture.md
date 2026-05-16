@@ -193,7 +193,7 @@ graph TB
             oauth2proxy["oauth2-proxy"]
             cloudflared
         end
-        vols[".vols/ — persistent volumes\ntraefik/certs, mongo, keycloak-db\ngitlab/{config,logs,data}, vault, gitlab-runner, kubeconfigs"]
+        vols[".vols/ — persistent volumes\ntraefik/certs, mongo, postgres (keycloak-db dir)\ngitlab/{config,logs,data}, vault, gitlab-runner, kubeconfigs"]
     end
 
     subgraph cf ["Cloudflare Edge"]
@@ -215,7 +215,7 @@ The Docker Compose `depends_on` graph forms a strict boot sequence:
 ```mermaid
 graph TD
     mongodb["mongo\n(healthy)"]
-    keycloakdb["keycloak-db\n(healthy)"]
+    keycloakdb["postgres\n(healthy)"]
     keycloak_svc["keycloak\n(healthy)"]
     vault_svc["vault\n(healthy)"]
     vaultInit["vault-oidc-init"]

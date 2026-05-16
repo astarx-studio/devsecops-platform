@@ -14,11 +14,18 @@ import { AppConfiguration } from '../config';
 import { GitLabService } from '../gitlab/gitlab.service';
 import { K8sService } from '../k8s/k8s.service';
 import { VaultService } from '../vault/vault.service';
-import { CreateProjectInput, ProjectFilterInput } from './graphql/project.inputs';
+import { CreateProjectInput, ProjectFilterInput, UpdateProjectSonarConfigInput } from './graphql/project.inputs';
 import { Provisioning } from './graphql/enums';
 import { AuditLog } from './schemas/audit-log.schema';
 import { Project, ProjectDocument } from './schemas/project.schema';
 import { SlugService } from './slug.service';
+import { buildSonarCiVariables } from './sonar/sonar-ci-sync';
+import {
+  isSonarEnabled,
+  resolveSonarGatePolicy,
+  type ProjectSonarConfig,
+  type SonarGatePolicy,
+} from './sonar/sonar.types';
 
 import type { DeployEnv } from './schemas/project.schema';
 
@@ -166,12 +173,7 @@ export class ProjectsService implements OnApplicationBootstrap {
     const query: QueryFilter<Project> = {};
 
     if (filter?.groupPathPrefix?.length) {
-      // Projects whose groupPath starts with the provided prefix
       const prefix = filter.groupPathPrefix;
-      query['groupPath'] = {
-        $all: prefix.map((seg, i) => ({ $elemMatch: { $eq: seg, $position: i } })),
-      };
-      // Simpler approach: check first N elements match
       for (let i = 0; i < prefix.length; i++) {
         query[`groupPath.${i}`] = prefix[i];
       }
@@ -461,6 +463,11 @@ export class ProjectsService implements OnApplicationBootstrap {
       },
     });
 
+    if (input.sonar?.allowedBranches?.length) {
+      await this.updateProjectSonarConfig(String(doc._id), input.sonar);
+      return this.findProject({ id: String(doc._id) });
+    }
+
     this.logger.log(
       `Project "${gitlabPath}" provisioned successfully (id=${String(doc._id)}, slug="${effectiveSlug}")`,
     );
@@ -650,6 +657,86 @@ export class ProjectsService implements OnApplicationBootstrap {
    * @param id - MongoDB document ID
    * @param pinned - Whether to pin the project on v1 indefinitely
    */
+  /**
+   * Enables, updates, or disables SonarQube for a project.
+   * Persists MongoDB state, writes token to Vault when provided, and syncs GitLab CI variables.
+   *
+   * @param id - MongoDB project document ID
+   * @param input - Branch allowlist, optional gate policy, optional analysis token
+   */
+  async updateProjectSonarConfig(
+    id: string,
+    input: UpdateProjectSonarConfigInput,
+  ): Promise<ProjectDocument> {
+    this.logger.log(
+      `updateProjectSonarConfig: id=${id} branches=[${input.allowedBranches.join(',')}]`,
+    );
+    const doc = await this.findProject({ id });
+
+    const gatePolicy = resolveSonarGatePolicy(
+      input.gatePolicy
+        ? {
+            dev: input.gatePolicy.dev as SonarGatePolicy['dev'] | undefined,
+            stg: input.gatePolicy.stg as SonarGatePolicy['stg'] | undefined,
+            prod: input.gatePolicy.prod as SonarGatePolicy['prod'] | undefined,
+            other: input.gatePolicy.other as SonarGatePolicy['other'] | undefined,
+          }
+        : doc.sonar?.gatePolicy,
+    );
+
+    const sonarConfig: ProjectSonarConfig | undefined =
+      input.allowedBranches.length > 0
+        ? { allowedBranches: [...input.allowedBranches], gatePolicy }
+        : undefined;
+
+    doc.sonar = sonarConfig;
+    await doc.save();
+
+    const publicUrl = this.configService.get<string>('sonarqube.publicUrl', { infer: true })!;
+    const internalUrl = this.configService.get<string>('sonarqube.internalUrl', { infer: true })!;
+
+    if (input.sonarToken && isSonarEnabled(sonarConfig)) {
+      const vaultPath = `${doc.vaultBasePath}/sonar`;
+      await this.vaultService.writeSecrets(vaultPath, { SONAR_TOKEN: input.sonarToken });
+      this.logger.log(`Sonar token written to Vault at secret/data/${vaultPath}`);
+    }
+
+    const ciVars = buildSonarCiVariables(sonarConfig, {
+      publicUrl,
+      internalUrl,
+      token: input.sonarToken,
+    });
+    await this.gitlabService.setProjectCiVariables(doc.gitlabProjectId, ciVars);
+
+    await this.auditLogModel.create({
+      eventType: 'project.sonar_config_updated',
+      projectId: id,
+      gitlabPath: doc.gitlabPath,
+      effectiveSlug: doc.effectiveSlug,
+      metadata: {
+        gitlabProjectId: doc.gitlabProjectId,
+        allowedBranches: input.allowedBranches,
+        gatePolicy,
+        sonarEnabled: isSonarEnabled(sonarConfig),
+      },
+    });
+
+    this.logger.log(`Sonar config updated for "${doc.gitlabPath}"`);
+    return doc;
+  }
+
+  /**
+   * Builds the public Sonar dashboard URL for a project branch key when Sonar is enabled.
+   */
+  getSonarDashboardUrl(effectiveSlug: string, branch: string): string | undefined {
+    const publicUrl = this.configService.get<string>('sonarqube.publicUrl', { infer: true });
+    if (!publicUrl) {
+      return undefined;
+    }
+    const projectKey = `${effectiveSlug}_${branch.replaceAll(/[^a-zA-Z0-9_-]/g, '_')}`;
+    return `${publicUrl}/dashboard?id=${encodeURIComponent(projectKey)}`;
+  }
+
   async setPinnedV1(id: string, pinned: boolean): Promise<ProjectDocument> {
     this.logger.log(`setPinnedV1: id=${id} pinned=${pinned}`);
     const doc = await this.findProject({ id });

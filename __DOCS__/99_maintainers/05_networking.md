@@ -22,7 +22,7 @@ graph LR
         oauth2proxy["oauth2-proxy\n:4180"]
         cloudflared["cloudflared\n(profile: cftunnel)"]
         wireguard["wireguard\n(profile: vpnedge)"]
-        pgkc["keycloak-db\n:5432"]
+        pgkc["postgres\n:5432"]
     end
 
     traefik -->|"Docker labels / file routers"| keycloak
@@ -44,7 +44,7 @@ graph LR
 | `10080` | traefik | HTTP (redirects to HTTPS) |
 | `10443` | traefik | HTTPS entry |
 | `18080` | traefik | Dashboard (no TLS on host) |
-| `15433` | keycloak-db | PostgreSQL |
+| `15433` | postgres | PostgreSQL (Keycloak + Sonar databases) |
 | `18200` | vault | API |
 | `12222` | gitlab | SSH |
 | `13000` | api | Management API |

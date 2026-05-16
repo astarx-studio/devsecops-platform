@@ -16,7 +16,9 @@ When a user clicks "Sign in with Keycloak" on any of the platform tools, this is
 4. The user's browser is redirected back to GitLab, carrying that token
 5. GitLab validates the token against Keycloak and grants access
 
-This flow is the same for all tools that support OIDC (GitLab, Vault, the Management API). Tools that don't have built-in OIDC support — for example the **Traefik dashboard** and other operator UIs — are protected by a proxy called `oauth2-proxy` that intercepts requests and performs the login check before forwarding them.
+This flow is the same for all tools that support OIDC (GitLab, Vault, the Management API). **SonarQube** uses **SAML** with Keycloak (not OIDC) for interactive login — see [SonarQube SSO](09_sonarqube_sso.md) and [service notes](../99_maintainers/02_services.md#sonarqube).
+
+Tools that don't have built-in OIDC/SAML support — for example the **Traefik dashboard** and other operator UIs — are protected by a proxy called `oauth2-proxy` that intercepts requests and performs the login check before forwarding them.
 
 ---
 

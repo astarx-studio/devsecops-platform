@@ -1,0 +1,51 @@
+# =============================================================================
+# auto-devops-chart CI — publishes the dsoaas-app Helm chart on version tags.
+#
+# Trigger: push a tag matching v[0-9]+.[0-9]+.[0-9]+ (e.g. v0.1.0)
+# Output:  chart pushed to GitLab Container Registry as an OCI artifact
+#
+# Consumers (auto-devops-pipeline) pull the chart with:
+#   helm pull oci://$CI_REGISTRY/system/devsecops-platform/configs/auto-devops-chart/dsoaas-app \
+#     --version $CHART_VERSION
+# =============================================================================
+
+stages:
+  - lint
+  - publish
+
+default:
+  # alpine/helm ships helm, bash, and curl — no extra installation needed
+  image:
+    name: alpine/helm:3.17.3
+    entrypoint: [""]
+  before_script:
+    - apk add --no-cache bash sed
+
+# ---- lint -----------------------------------------------------------------
+lint:
+  stage: lint
+  script:
+    - helm lint .
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+$/'
+    - if: '$CI_PIPELINE_SOURCE == "push"'
+
+# ---- publish --------------------------------------------------------------
+# Pushes the chart as an OCI artifact to the GitLab Container Registry.
+# The OCI path is: $CI_REGISTRY/$CI_PROJECT_PATH/dsoaas-app
+publish:
+  stage: publish
+  script:
+    - |
+      CHART_VERSION=${CI_COMMIT_TAG#v}
+      sed -i "s/^version:.*/version: ${CHART_VERSION}/" Chart.yaml
+      helm package .
+      echo "${CI_REGISTRY_PASSWORD}" | helm registry login "gitlab:5000" \
+        --username "${CI_REGISTRY_USER}" --password-stdin --insecure
+      helm push "dsoaas-app-${CHART_VERSION}.tgz" "oci://gitlab:5000/${CI_PROJECT_PATH}" --plain-http
+      echo "Chart dsoaas-app-${CHART_VERSION} published."
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+$/'
+  environment:
+    name: oci-registry
+    url: $CI_PROJECT_URL/container_registry

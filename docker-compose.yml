@@ -1,8 +1,10 @@
 # ==========================================================================
 # DevOps Platform — Compose stack (ingress, auth, data, CI, API)
 # ==========================================================================
-# Containers: traefik, mongo, keycloak-db, keycloak, vault (OpenBao),
-#             cloudflared, wireguard, gitlab, gitlab-runner, api, minio, minio-init
+# Containers: traefik, mongo, postgres, keycloak, vault (OpenBao),
+#             cloudflared, wireguard, gitlab, gitlab-runner, api, sonarqube,
+#             postgres-sonar-init, sonarqube-config-init, sonarqube-init,
+#             minio, minio-init
 # Network:    devops-network (bridge)
 # ==========================================================================
 
@@ -88,6 +90,7 @@ services:
           - ${TRAEFIK_DOMAIN}
           - ${GITLAB_REGISTRY_DOMAIN}
           - ${MINIO_CONSOLE_DOMAIN}
+          - ${SONARQUBE_DOMAIN}
 
   # ========================================================================
   # MONGODB — Platform Registry (v2)
@@ -111,11 +114,13 @@ services:
       - devops-network
 
   # ========================================================================
-  # KEYCLOAK DB — PostgreSQL for Keycloak
+  # POSTGRES — Shared PostgreSQL (Keycloak + SonarQube databases)
   # ========================================================================
-  keycloak-db:
+  # Data directory remains .vols/keycloak-db for upgrades from older layouts.
+  # DNS: postgres (service name). Alias keycloak-db keeps old KC_DB_HOST working.
+  postgres:
     image: postgres:17-alpine
-    container_name: keycloak-db
+    container_name: postgres
     restart: unless-stopped
     ports:
       - "15433:5432"
@@ -123,8 +128,12 @@ services:
       POSTGRES_DB: ${KC_DB_NAME}
       POSTGRES_USER: ${KC_DB_USER}
       POSTGRES_PASSWORD: ${KC_DB_PASSWORD}
+      SONAR_DB_NAME: ${SONAR_DB_NAME}
+      SONAR_DB_USER: ${SONAR_DB_USER}
+      SONAR_DB_PASSWORD: ${SONAR_DB_PASSWORD}
     volumes:
       - ./.vols/keycloak-db:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${KC_DB_USER} -d ${KC_DB_NAME}"]
       interval: 10s
@@ -132,7 +141,9 @@ services:
       retries: 5
       start_period: 10s
     networks:
-      - devops-network
+      devops-network:
+        aliases:
+          - keycloak-db
 
   # ========================================================================
   # KEYCLOAK — OAuth2 / OIDC Identity Provider
@@ -164,6 +175,7 @@ services:
           -e "s|\$${KC_CLIENT_SECRET_GITLAB}|$$KC_CLIENT_SECRET_GITLAB|g" \
           -e "s|\$${KC_CLIENT_SECRET_VAULT}|$$KC_CLIENT_SECRET_VAULT|g" \
           -e "s|\$${KC_CLIENT_SECRET_OAUTH2_PROXY}|$$KC_CLIENT_SECRET_OAUTH2_PROXY|g" \
+          -e "s|\$${SONARQUBE_DOMAIN}|$$SONARQUBE_DOMAIN|g" \
           -e "s|\$${KEYCLOAK_ADMIN_PASSWORD}|$$KEYCLOAK_ADMIN_PASSWORD|g" \
           -e "s|\$${KEYCLOAK_ADMIN_EMAIL}|$$KEYCLOAK_ADMIN_EMAIL|g" \
           /opt/keycloak/data/import-template/realm-export.json \
@@ -199,6 +211,7 @@ services:
       API_DOMAIN: ${API_DOMAIN}
       OAUTH_DOMAIN: ${OAUTH_DOMAIN}
       TRAEFIK_DOMAIN: ${TRAEFIK_DOMAIN}
+      SONARQUBE_DOMAIN: ${SONARQUBE_DOMAIN}
     volumes:
       - ./keycloak/realm-export.json:/opt/keycloak/data/import-template/realm-export.json:ro
     healthcheck:
@@ -208,7 +221,7 @@ services:
       retries: 5
       start_period: 60s
     depends_on:
-      keycloak-db:
+      postgres:
         condition: service_healthy
     labels:
       traefik.enable: "true"
@@ -568,6 +581,8 @@ services:
       OIDC_ISSUER_URL: ${OIDC_ISSUER_URL}
       OIDC_JWKS_URL: ${OIDC_JWKS_URL}
       OIDC_AUDIENCE: ${OIDC_AUDIENCE}
+      SONARQUBE_PUBLIC_URL: ${SONARQUBE_EXTERNAL_URL}
+      SONARQUBE_INTERNAL_URL: ${SONARQUBE_INTERNAL_URL:-http://sonarqube:9000}
       CORS_ORIGIN: ${CORS_ORIGIN}
       CORS_CREDENTIALS: ${CORS_CREDENTIALS}
     volumes:
@@ -670,6 +685,125 @@ services:
       traefik.http.routers.oauth2-proxy.tls.certresolver: "letsencrypt"
       # oauth2-proxy IS the ForwardAuth target; never apply oidc-auth to itself.
       traefik.http.services.oauth2-proxy.loadbalancer.server.port: "4180"
+    networks:
+      - devops-network
+
+  # ========================================================================
+  # POSTGRES SONAR INIT — One-shot Sonar DB/user on existing PostgreSQL
+  # ========================================================================
+  # Idempotent: safe on every compose up. Skips if role/database already exist.
+  # On a brand-new cluster, postgres/init/02-sonar-database.sh also runs once.
+  postgres-sonar-init:
+    image: postgres:17-alpine
+    container_name: postgres-sonar-init
+    restart: "no"
+    entrypoint: ["/bin/sh", "/scripts/init-ensure-sonar-db.sh"]
+    environment:
+      PGHOST: postgres
+      PGUSER: ${KC_DB_USER}
+      PGPASSWORD: ${KC_DB_PASSWORD}
+      PGDATABASE: ${KC_DB_NAME}
+      SONAR_DB_NAME: ${SONAR_DB_NAME:?set SONAR_DB_NAME in .env}
+      SONAR_DB_USER: ${SONAR_DB_USER:?set SONAR_DB_USER in .env}
+      SONAR_DB_PASSWORD: ${SONAR_DB_PASSWORD:?set SONAR_DB_PASSWORD in .env}
+    volumes:
+      - ./postgres/init-ensure-sonar-db.sh:/scripts/init-ensure-sonar-db.sh:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - devops-network
+
+  # ========================================================================
+  # SONARQUBE CONFIG INIT — IdP metadata → sonar.properties (SAML + base URL)
+  # Keycloak SAML client + sonar-* groups: realm-export.json on first Keycloak start.
+  # ========================================================================
+  sonarqube-config-init:
+    image: python:3.12-alpine
+    container_name: sonarqube-config-init
+    restart: "no"
+    entrypoint: ["python3", "/scripts/generate-sonar-properties.py"]
+    environment:
+      KEYCLOAK_BASE_URL: http://keycloak:8080
+      KC_REALM: ${KC_REALM}
+      SONARQUBE_DOMAIN: ${SONARQUBE_DOMAIN:?set SONARQUBE_DOMAIN in .env}
+      SONARQUBE_EXTERNAL_URL: ${SONARQUBE_EXTERNAL_URL:?set SONARQUBE_EXTERNAL_URL in .env}
+      SONAR_PROPERTIES_OUTPUT: /out/sonar.properties
+    volumes:
+      - ./sonarqube/generate-sonar-properties.py:/scripts/generate-sonar-properties.py:ro
+      - ./.vols/sonarqube/conf:/out
+    depends_on:
+      keycloak:
+        condition: service_healthy
+    networks:
+      - devops-network
+
+  # ========================================================================
+  # SONARQUBE — Code Quality (Community Build)
+  # ========================================================================
+  # UI: https://${SONARQUBE_DOMAIN} (Traefik TLS). SAML via Keycloak — see
+  # __DOCS__/99_maintainers/02_services.md and sonarqube/init-bootstrap.sh.
+  # CI scanners use http://sonarqube:9000 on devops-network (SONAR_HOST_URL_INTERNAL).
+  # Host prerequisite (Linux): sysctl -w vm.max_map_count=262144
+  sonarqube:
+    image: sonarqube:community
+    container_name: sonarqube
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      postgres-sonar-init:
+        condition: service_completed_successfully
+      sonarqube-config-init:
+        condition: service_completed_successfully
+    environment:
+      SONAR_JDBC_URL: jdbc:postgresql://postgres:5432/${SONAR_DB_NAME:?set SONAR_DB_NAME in .env}
+      SONAR_JDBC_USERNAME: ${SONAR_DB_USER:?set SONAR_DB_USER in .env}
+      SONAR_JDBC_PASSWORD: ${SONAR_DB_PASSWORD:?set SONAR_DB_PASSWORD in .env}
+      SONAR_WEB_JAVAADDITIONALOPTS: "-Xmx1g -Xms512m"
+    volumes:
+      - ./.vols/sonarqube/data:/opt/sonarqube/data
+      - ./.vols/sonarqube/extensions:/opt/sonarqube/extensions
+      - ./.vols/sonarqube/logs:/opt/sonarqube/logs
+      - ./.vols/sonarqube/conf/sonar.properties:/opt/sonarqube/conf/sonar.properties:ro
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9000/api/system/status | grep -q '\"status\":\"UP\"' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.sonarqube.rule: "Host(`${SONARQUBE_DOMAIN}`)"
+      traefik.http.routers.sonarqube.entrypoints: "websecure"
+      traefik.http.routers.sonarqube.tls.certresolver: "letsencrypt"
+      traefik.http.services.sonarqube.loadbalancer.server.port: "9000"
+    networks:
+      devops-network:
+        aliases:
+          - sonarqube
+
+  # ========================================================================
+  # SONARQUBE INIT — Admin password, Sonar groups, global permissions
+  # ========================================================================
+  sonarqube-init:
+    image: curlimages/curl:8.12.1
+    container_name: sonarqube-init
+    restart: "no"
+    entrypoint: ["/bin/sh", "/scripts/init-bootstrap.sh"]
+    environment:
+      SONAR_INTERNAL_URL: http://sonarqube:9000
+      SONAR_ADMIN_USER: ${SONAR_ADMIN_USER:-admin}
+      SONAR_ADMIN_PASSWORD: ${SONAR_ADMIN_PASSWORD:?set SONAR_ADMIN_PASSWORD in .env}
+      SONAR_ADMIN_GROUP: ${SONAR_ADMIN_GROUP:-admins}
+      SONAR_BOOTSTRAP_MARKER: /work/.sonar-bootstrap-done
+      SONAR_BOOTSTRAP_FORCE: ${SONAR_BOOTSTRAP_FORCE:-false}
+    volumes:
+      - ./sonarqube/init-bootstrap.sh:/scripts/init-bootstrap.sh:ro
+      - ./.vols/sonarqube:/work
+    depends_on:
+      sonarqube:
+        condition: service_healthy
     networks:
       - devops-network
 

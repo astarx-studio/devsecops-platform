@@ -1,6 +1,6 @@
 import { Field, ID, Int, ObjectType } from '@nestjs/graphql';
 
-import { Provisioning } from './enums';
+import { Provisioning, SonarGateMode } from './enums';
 
 /**
  * GraphQL ObjectType: per-environment hostname map.
@@ -30,6 +30,40 @@ export class CapabilitiesType {
 
   @Field(() => Boolean, { description: 'Project produces a distributable package.' })
   publishable!: boolean;
+}
+
+@ObjectType({ description: 'Per-tier Sonar quality gate enforcement when analysis runs.' })
+export class SonarGatePolicyType {
+  @Field(() => SonarGateMode)
+  dev!: SonarGateMode;
+
+  @Field(() => SonarGateMode)
+  stg!: SonarGateMode;
+
+  @Field(() => SonarGateMode)
+  prod!: SonarGateMode;
+
+  @Field(() => SonarGateMode, { nullable: true })
+  other?: SonarGateMode;
+}
+
+@ObjectType({ description: 'SonarQube opt-in configuration for a project.' })
+export class ProjectSonarType {
+  @Field(() => [String], {
+    description: 'Git branch names that run Sonar analysis. Empty means disabled.',
+  })
+  allowedBranches!: string[];
+
+  @Field(() => SonarGatePolicyType, {
+    description: 'Quality gate policy per deploy tier (derived from DEPLOY_*_REF in CI).',
+  })
+  gatePolicy!: SonarGatePolicyType;
+
+  @Field(() => String, {
+    nullable: true,
+    description: 'Public Sonar dashboard URL pattern for this project (when enabled).',
+  })
+  dashboardUrl?: string;
 }
 
 /**
@@ -91,6 +125,12 @@ export class ProjectType {
 
   @Field(() => CapabilitiesType, { description: 'Capability flags.' })
   capabilities!: CapabilitiesType;
+
+  @Field(() => ProjectSonarType, {
+    nullable: true,
+    description: 'SonarQube opt-in config. Null when Sonar is disabled.',
+  })
+  sonar?: ProjectSonarType;
 
   @Field(() => Boolean, {
     description: 'True for projects still on the v1 Docker Compose stack.',

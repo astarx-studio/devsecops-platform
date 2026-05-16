@@ -12,8 +12,8 @@ All services share the `devops-network` Docker bridge network. The network name 
 
 | Boot phase | Services |
 |---|---|
-| Phase 1 — immediate | `traefik`, `mongo`, `keycloak-db`, `vault` |
-| Phase 2 — after keycloak-db healthy | `keycloak` |
+| Phase 1 — immediate | `traefik`, `mongo`, `postgres`, `vault` |
+| Phase 2 — after postgres healthy | `postgres-sonar-init`, `keycloak`, `sonarqube-config-init`, `sonarqube` (first boot may take several minutes), then `sonarqube-init` (must exit 0) |
 | Phase 3 — after keycloak healthy | `oauth2-proxy` |
 | Phase 4 — after vault + keycloak healthy | `vault-oidc-init` |
 | Phase 5 — after mongo + vault healthy | `api` |
@@ -73,14 +73,23 @@ All services share the `devops-network` Docker bridge network. The network name 
 
 ---
 
-## keycloak-db
+## postgres
 
 | Field | Value |
 |---|---|
 | Image | `postgres:17-alpine` |
+| Service / container name | `postgres` |
 | Host ports | `15433→5432` |
-| Volumes | `./.vols/keycloak-db` → `/var/lib/postgresql/data` |
+| Volumes | `./.vols/keycloak-db` → `/var/lib/postgresql/data` (path unchanged for upgrades) |
 | Depends on | — |
+
+Shared PostgreSQL for **Keycloak** (`KC_DB_NAME`, default `keycloak`) and **SonarQube** (`SONAR_DB_NAME`, default `sonar`). Separate databases and roles; Sonar uses `SONAR_DB_*`, not Keycloak credentials.
+
+**DNS:** Hostname `postgres`. Legacy alias `keycloak-db` still resolves on `devops-network` if `.env` still has `KC_DB_HOST=keycloak-db`; prefer `KC_DB_HOST=postgres` in new installs (`sample.env`).
+
+**Renaming without data loss:** Safe when the bind-mount path stays `.vols/keycloak-db`. Stop the stack, then `docker compose up -d` — data lives on the host volume, not the container name. Do not delete `.vols/keycloak-db` unless you intend a full DB reset.
+
+**Sonar on existing clusters:** `postgres-sonar-init` creates the Sonar role and database idempotently. Fresh installs also run `postgres/init/02-sonar-database.sh` when the data directory is empty.
 
 **Key environment variables:** `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB` (mapped from `${KC_DB_USER}`, `${KC_DB_PASSWORD}`, `${KC_DB_NAME}`).
 
@@ -95,7 +104,7 @@ All services share the `devops-network` Docker bridge network. The network name 
 | Image | `quay.io/keycloak/keycloak:26.6` |
 | Host ports | — |
 | Volumes | `./keycloak/realm-export.json` → `/opt/keycloak/data/import-template/realm-export.json` (template) |
-| Depends on | `keycloak-db` (healthy) |
+| Depends on | `postgres` (healthy) |
 
 **Entrypoint processing:** Like Traefik, Keycloak uses a custom entrypoint (`/bin/sh -c`) that:
 1. Creates `/opt/keycloak/data/import/`.
@@ -107,7 +116,7 @@ All services share the `devops-network` Docker bridge network. The network name 
 | Variable | Purpose |
 |---|---|
 | `KC_DB` | `postgres` |
-| `KC_DB_URL` | JDBC URL for keycloak-db |
+| `KC_DB_URL` | JDBC URL for `postgres` service |
 | `KC_DB_USERNAME` / `KC_DB_PASSWORD` | Database credentials |
 | `KC_HOSTNAME` | External hostname (prefixed with `https://`) |
 | `KC_HOSTNAME_STRICT` | `false` (allows non-matching hostnames) |
@@ -378,3 +387,55 @@ Users authenticating via OIDC who belong to the Keycloak `admins` group automati
 - Tiered OIDC by extending oauth2-proxy / Traefik / Keycloak (extra instances and callbacks): [Adding tiered OIDC with oauth2-proxy](../02_admin/08_oauth2_proxy_tiers_and_forwardauth.md) in the admin guide.
 - The `OAUTH2_PROXY_COOKIE_SECRET` must be exactly 32 bytes. Generate with: `openssl rand -base64 32 | head -c 32`.
 - `OAUTH2_PROXY_INSECURE_OIDC_SKIP_ISSUER_VERIFICATION` is set to `true` because the internal issuer URL (`http://keycloak:8080/...`) does not match the public issuer URL used in browser-facing discovery in every deployment path.
+
+---
+
+## sonarqube
+
+| Field | Value |
+|---|---|
+| Image | `sonarqube:community` |
+| Host ports | — (Traefik `https://${SONARQUBE_DOMAIN}`) |
+| Volumes | `./.vols/sonarqube/data`, `extensions`, `logs`, `conf/sonar.properties` (generated) |
+| Depends on | `postgres` (healthy), `postgres-sonar-init`, `sonarqube-config-init` (completed) |
+
+**Key environment variables:**
+
+| Variable | Purpose |
+|---|---|
+| `SONARQUBE_DOMAIN` | Public hostname (Traefik router + Keycloak SAML client) |
+| `SONARQUBE_EXTERNAL_URL` | Public base URL for links and `sonar.core.serverBaseURL` |
+| `SONARQUBE_INTERNAL_URL` | In-network scanner URL (`http://sonarqube:9000`) for GitLab Runner jobs |
+| `SONAR_DB_*` | Sonar role/database on shared `postgres` (not Keycloak credentials) |
+
+**Health check:** `GET /api/system/status` until `status` is `UP` (long `start_period` on first boot).
+
+**Host prerequisite (Linux):** `sysctl -w vm.max_map_count=262144` (persist in `/etc/sysctl.conf` on production hosts). WSL2: set in `.wslconfig` or skip Sonar on Windows-only dev if the limit cannot be raised.
+
+**SSO (SAML + Keycloak):** Keycloak side from `realm-export.json` on first import (see [SonarQube SSO](../02_admin/09_sonarqube_sso.md)). Sonar side: `sonarqube-config-init` + `sonarqube-init`.
+
+| Service | Role |
+|---|---|
+| `sonarqube-config-init` | Writes SAML settings to `.vols/sonarqube/conf/sonar.properties` from Keycloak IdP metadata |
+| `sonarqube-init` | Sonar built-in `sonar-users` permissions + `admins` global admin; removes legacy custom groups |
+
+**Traefik:** TLS termination only (no ForwardAuth on Sonar — authentication is SAML inside SonarQube).
+
+**Backup / DR:** Back up the shared PostgreSQL volume (`.vols/keycloak-db`) **and** `.vols/sonarqube/data` (search index). Restore both together on the same Sonar version.
+
+**CI integration:** Shared pipeline job `sonar:scan` in `configs/auto-devops-pipeline`. Runners use `SONAR_HOST_URL_INTERNAL`; humans use `SONARQUBE_EXTERNAL_URL`. See [CI/CD internals](06_ci_cd.md#sonarqube) and [Manual onboarding Sonar](../03_devs/06_manual_onboarding.md#sonarqube-opt-in).
+
+**GitLab commit status:** After analysis, CI posts `sonarqube/quality-gate` via `POST /projects/:id/statuses/:sha` with `JOB-TOKEN` (same contract as `GitLabService.postCommitStatus` in the Management API).
+
+**Management API:** `mutation updateProjectSonarConfig` stores `allowedBranches` + `gatePolicy`, writes token to `secret/data/projects/.../sonar`, mirrors GitLab CI variables. Default gate policy: dev **optional**, stg/prod **required**, other **optional**.
+
+**Greenfield replication checklist:**
+
+1. Copy `sample.env` → `.env`; set `SONARQUBE_DOMAIN`, `SONARQUBE_EXTERNAL_URL` (`https://` + same host), `SONAR_DB_*`, `SONAR_ADMIN_PASSWORD`, and `SONARQUBE_DOMAIN` before **first** Keycloak start (realm SAML client).
+2. Linux host: `sysctl -w vm.max_map_count=262144`.
+3. `docker compose up -d` (full stack) or at minimum: `postgres` → `keycloak` → `sonarqube-config-init` → `sonarqube` → `sonarqube-init`.
+4. Confirm `docker compose ps -a` shows `sonarqube-config-init` and `sonarqube-init` **Exited (0)**.
+5. Run `make verify-sonar` or `sh scripts/verify-sonar-setup.sh` from the repo root (`make bootstrap` runs this automatically).
+6. DNS / tunnel: point `SONARQUBE_DOMAIN` at Traefik; sign in via SAML (no oauth2-proxy on Sonar).
+
+**vs GitLab security templates:** GitLab SAST / Secret Detection / Container Scanning remain in the `test` stage for vulnerability report triage. Sonar adds maintainability, coverage, and quality gates — complementary, not a replacement.

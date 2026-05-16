@@ -1,0 +1,339 @@
+# =============================================================================
+# DSOaaS Auto DevOps Pipeline
+# =============================================================================
+# Include this file from your app's .gitlab-ci.yml:
+#
+#   include:
+#     - project: "configs/auto-devops-pipeline"
+#       file: "/.gitlab-ci.yml"
+#
+# Pipeline stages:
+#   build  → Kaniko image build + push to GitLab Container Registry
+#   test   → (placeholder; extend per-app as needed)
+#   deploy → helm upgrade --install into the target k3d namespace
+#
+# Required CI variables (set by Management API at project creation):
+#   KUBE_NAMESPACE        Kubernetes namespace  (dev | stg | prod)
+#   APP_HOST              Ingress hostname       (e.g. myapp.dev.apps.<D>)
+#   VAULT_PROJECT_PATH    Vault secret path      (e.g. external/kai/esa/myapp)
+#   KUBECONFIG_B64        Base64-encoded kubeconfig scoped to $KUBE_NAMESPACE
+#
+# Optional overrides (project-level CI variables):
+#   CHART_VERSION         Pin a chart version  (default: latest stable)
+#   EXTRA_HELM_ARGS       Pass extra --set flags to helm upgrade
+#   DEPLOY_DEV_REF        Branch/pattern that triggers dev deploy (default: develop)
+#   DEPLOY_STG_REF        Branch/pattern that triggers stg deploy (default: staging)
+#   DEPLOY_PROD_REF       Branch/pattern that triggers prod deploy (default: main)
+#
+# Optional SonarQube (opt-in per project — set via Management API or GitLab CI variables):
+#   SONAR_ALLOWED_BRANCHES   Comma-separated branch names (empty = skip Sonar)
+#   SONAR_TOKEN              Masked analysis token
+#   SONAR_HOST_URL           Public Sonar URL (dashboard links)
+#   SONAR_HOST_URL_INTERNAL  Scanner URL (default http://sonarqube:9000 on devops-network)
+#   SONAR_GATE_POLICY_JSON   {"dev":"optional","stg":"required","prod":"required","other":"optional"}
+# =============================================================================
+
+# =============================================================================
+# Security scan templates (Option C — cherry-pick)
+# =============================================================================
+# SAST, Secret Detection, and Container Scanning cover the highest-value
+# automated security coverage available on GitLab Free / self-hosted CE.
+# Findings surface in the project's Security & Compliance → Vulnerability
+# Report.  Scans are advisory by default; they do not block deploys unless
+# explicitly configured.
+# =============================================================================
+include:
+  - template: Jobs/SAST.gitlab-ci.yml
+  - template: Jobs/Secret-Detection.gitlab-ci.yml
+  - template: Jobs/Container-Scanning.gitlab-ci.yml
+
+# =============================================================================
+# Workflow guard
+# =============================================================================
+# This file is a *CI template* meant to be `include:`d by app projects.
+# When that happens, GitLab evaluates rules against the *including* project's
+# context, so the jobs below run there as expected.
+#
+# However, if someone pushes a commit directly to the auto-devops-pipeline
+# repo itself, GitLab will also process its own .gitlab-ci.yml and try to run
+# the build/test/deploy jobs — which fail (no Dockerfile, no kubeconfig, etc.).
+# Suppress that case entirely via a workflow rule.
+# =============================================================================
+workflow:
+  rules:
+    - if: '$CI_PROJECT_PATH == "system/devsecops-platform/configs/auto-devops-pipeline"'
+      when: never
+    - when: always
+
+variables:
+  # Disable Auto DevOps built-in Kubernetes deploy (we handle it ourselves)
+  AUTO_DEVOPS_PLATFORM_TARGET: ""
+  # OCI path to the dsoaas-app Helm chart via the internal Docker registry.
+  # GitLab's registry daemon listens on port 5000 inside the devops-network.
+  # Port 5005 is an internal nginx alias only accessible within the GitLab
+  # container itself; --insecure is required since TLS is not terminated here.
+  CHART_OCI_REF: "oci://gitlab:5000/system/devsecops-platform/configs/auto-devops-chart/dsoaas-app"
+  CHART_VERSION: "0.2.3"
+  # Kaniko cache bucket inside GitLab registry
+  DOCKER_DRIVER: overlay2
+  # Container-Scanning target — the image built and pushed by Kaniko.
+  # Without this, the template defaults to Auto DevOps vars that are not set
+  # in this pipeline and the scan would error or scan nothing.
+  CS_IMAGE: "$CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA"
+  # Branch refs controlling auto-deploys (can be overridden per project)
+  DEPLOY_DEV_REF: "develop"
+  DEPLOY_STG_REF: "staging"
+  DEPLOY_PROD_REF: "main"
+  SONAR_HOST_URL_INTERNAL: "http://sonarqube:9000"
+  SONAR_SCANNER_IMAGE: "sonarsource/sonar-scanner-cli:11"
+
+stages:
+  - build
+  - test
+  - deploy
+
+# =============================================================================
+# .build-kaniko — builds and pushes the container image via Kaniko.
+# Kaniko is used automatically when a Dockerfile is present (Auto DevOps default).
+# The built image is tagged: $CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA
+# =============================================================================
+.build-kaniko:
+  stage: build
+  image:
+    name: gcr.io/kaniko-project/executor:v1.23.2-debug
+    entrypoint: [""]
+  script:
+    - mkdir -p /kaniko/.docker
+    - |
+      echo "{\"auths\":{\"${CI_REGISTRY}\":{\"auth\":\"$(echo -n "${CI_REGISTRY_USER}:${CI_REGISTRY_PASSWORD}" | base64 | tr -d '\n')\"}}}" \
+        > /kaniko/.docker/config.json
+    - /kaniko/executor
+        --context "${CI_PROJECT_DIR}"
+        --dockerfile "${CI_PROJECT_DIR}/Dockerfile"
+        --destination "${CI_REGISTRY_IMAGE}:${CI_COMMIT_SHORT_SHA}"
+        --destination "${CI_REGISTRY_IMAGE}:latest"
+        --cache=true
+        --cache-repo "${CI_REGISTRY_IMAGE}/cache"
+  rules:
+    - if: '$CI_COMMIT_BRANCH'
+
+# Concrete build job
+build:
+  extends: .build-kaniko
+
+# =============================================================================
+# .test-placeholder — override in your .gitlab-ci.yml to add real tests.
+# =============================================================================
+test:
+  stage: test
+  image: alpine:3.20
+  script:
+    - echo "No tests defined — override this job in your .gitlab-ci.yml"
+  rules:
+    - if: '$CI_COMMIT_BRANCH'
+
+# =============================================================================
+# SonarQube — static analysis (opt-in via SONAR_ALLOWED_BRANCHES + SONAR_TOKEN)
+# =============================================================================
+.sonar-scan:
+  stage: test
+  image:
+    name: ${SONAR_SCANNER_IMAGE}
+    entrypoint: [""]
+  variables:
+    GIT_DEPTH: "0"
+  script:
+    - |
+      set -euo pipefail
+      if [ -z "${SONAR_ALLOWED_BRANCHES:-}" ] || [ -z "${SONAR_TOKEN:-}" ]; then
+        echo "Sonar skipped: set SONAR_ALLOWED_BRANCHES and SONAR_TOKEN to enable analysis."
+        exit 0
+      fi
+      ALLOWED=",$SONAR_ALLOWED_BRANCHES,"
+      if ! echo "$ALLOWED" | grep -q ",${CI_COMMIT_REF_NAME},"; then
+        echo "Sonar skipped: branch ${CI_COMMIT_REF_NAME} not in SONAR_ALLOWED_BRANCHES."
+        exit 0
+      fi
+      SCAN_URL="${SONAR_HOST_URL_INTERNAL:-http://sonarqube:9000}"
+      PROJECT_KEY="${CI_PROJECT_PATH_SLUG}_${CI_COMMIT_REF_SLUG}"
+      PROJECT_KEY=$(echo "$PROJECT_KEY" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9._-' '_')
+      export SONAR_HOST_URL="$SCAN_URL"
+      export SONAR_TOKEN
+      TIER=other
+      if [ "${CI_COMMIT_REF_NAME}" = "${DEPLOY_DEV_REF}" ]; then TIER=dev
+      elif [ "${CI_COMMIT_REF_NAME}" = "${DEPLOY_STG_REF}" ]; then TIER=stg
+      elif [ "${CI_COMMIT_REF_NAME}" = "${DEPLOY_PROD_REF}" ]; then TIER=prod
+      fi
+      GATE_MODE=optional
+      if [ -n "${SONAR_GATE_POLICY_JSON:-}" ]; then
+        GATE_MODE=$(echo "$SONAR_GATE_POLICY_JSON" | tr -d ' ' | sed -n "s/.*\"${TIER}\":\"\([^\"]*\)\".*/\1/p")
+        [ -z "$GATE_MODE" ] && GATE_MODE=optional
+      fi
+      echo "Sonar tier=${TIER} gate=${GATE_MODE} projectKey=${PROJECT_KEY}"
+      SCANNER_EXTRA="-Dsonar.sources=."
+      [ -f sonar-project.properties ] && SCANNER_EXTRA=""
+      sonar-scanner \
+        -Dsonar.projectKey="${PROJECT_KEY}" \
+        -Dsonar.projectName="${CI_PROJECT_NAME} (${CI_COMMIT_REF_NAME})" \
+        -Dsonar.qualitygate.wait=false \
+        ${SCANNER_EXTRA}
+      DASHBOARD="${SONAR_HOST_URL:-$SCAN_URL}/dashboard?id=${PROJECT_KEY}"
+      STATUS=success
+      DESCRIPTION="Sonar Quality Gate passed (${TIER}, ${GATE_MODE})"
+      if [ "$GATE_MODE" = "required" ]; then
+        if ! curl -sf -u "${SONAR_TOKEN}:" \
+          "${SCAN_URL}/api/qualitygates/project_status?projectKey=${PROJECT_KEY}" \
+          | grep -q '"status":"OK"'; then
+          STATUS=failed
+          DESCRIPTION="Sonar Quality Gate failed (${TIER}, required)"
+        fi
+      else
+        if ! curl -sf -u "${SONAR_TOKEN}:" \
+          "${SCAN_URL}/api/qualitygates/project_status?projectKey=${PROJECT_KEY}" \
+          | grep -q '"status":"OK"'; then
+          DESCRIPTION="Sonar Quality Gate failed (${TIER}, optional — pipeline continues)"
+        fi
+      fi
+      curl -sf --request POST \
+        --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
+        --data "state=${STATUS}" \
+        --data "name=sonarqube/quality-gate" \
+        --data-urlencode "description=${DESCRIPTION}" \
+        --data-urlencode "target_url=${DASHBOARD}" \
+        "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/statuses/${CI_COMMIT_SHA}" || true
+      if [ "$STATUS" = "failed" ]; then
+        echo "Sonar Quality Gate failed and tier ${TIER} requires a passing gate."
+        exit 1
+      fi
+  rules:
+    - if: '$CI_COMMIT_BRANCH'
+
+sonar:scan:
+  extends: .sonar-scan
+  allow_failure: false
+
+# =============================================================================
+# .deploy-helm — base hidden job for all environment deployments.
+#
+# Writes KUBECONFIG_B64 to a temp file, then runs:
+#   helm upgrade --install <release> <chart-repo>/dsoaas-app
+#     --version $CHART_VERSION
+#     --namespace $KUBE_NAMESPACE
+#     --set image.repository=$CI_REGISTRY_IMAGE
+#     --set image.tag=$CI_COMMIT_SHORT_SHA
+#     --set ingress.host=$APP_HOST
+#     --set project.path=$VAULT_PROJECT_PATH
+#     --set project.env=<env>
+#     [--values chart-values.yaml if present]
+# =============================================================================
+.deploy-helm:
+  stage: deploy
+  image:
+    name: alpine/helm:3.17.3
+    entrypoint: [""]
+  before_script:
+    - apk add --no-cache curl bash kubectl
+    # Write kubeconfig from base64-encoded CI variable
+    - mkdir -p /tmp/kube
+    - echo "${KUBECONFIG_B64}" | base64 -d > /tmp/kube/config
+    - chmod 600 /tmp/kube/config
+    - export KUBECONFIG=/tmp/kube/config
+    # Log in to the GitLab container registry daemon (port 5000, devops-network).
+    # Port 5005 is internal to the GitLab container; only port 5000 is reachable
+    # from runner containers on the same Docker bridge network.
+    # CHART_REGISTRY_USER / CHART_REGISTRY_PASSWORD are instance-level CI variables
+    # backed by a read_registry deploy token on the auto-devops-chart project.
+    # Using the deploy token (not CI_REGISTRY_*) because CI job tokens are scoped
+    # to the running project and cannot pull from cross-project registries.
+    # NOTE: command intentionally on one line — YAML plain-scalar folding turns
+    #       backslash-continuations into a literal "\" argument that breaks Helm's
+    #       CLI parser. Use the | block scalar or single-line commands instead.
+    - echo "${CHART_REGISTRY_PASSWORD}" | helm registry login "gitlab:5000" --username "${CHART_REGISTRY_USER}" --password-stdin --insecure
+    # Create / refresh a Kubernetes docker-registry pull secret so the cluster can
+    # pull the project's image from the private GitLab registry.  The CI job token
+    # (CI_REGISTRY_USER / CI_REGISTRY_PASSWORD) is valid for the duration of the
+    # job and is sufficient to seed the local image cache on the first pull.
+    # Subsequent runs use the cached image (imagePullPolicy=IfNotPresent) so they
+    # are unaffected by token expiry.
+    - |
+      kubectl create secret docker-registry gitlab-registry-secret \
+        --docker-server="${CI_REGISTRY}" \
+        --docker-username="${CI_REGISTRY_USER}" \
+        --docker-password="${CI_REGISTRY_PASSWORD}" \
+        --namespace="${KUBE_NAMESPACE:-$DEPLOY_ENV}" \
+        --dry-run=client -o yaml | kubectl apply -f -
+  script:
+    - |
+      # Pre-flight: if a previous run left the release in a pending-* state
+      # (pending-install / pending-upgrade / pending-rollback), helm upgrade
+      # refuses to proceed.  Roll back to the last good revision so the next
+      # upgrade can start cleanly.
+      RELEASE_STATUS=$(helm status "${CI_PROJECT_NAME}" \
+        --namespace "${KUBE_NAMESPACE:-$DEPLOY_ENV}" 2>/dev/null | grep "^STATUS:" | awk '{print $2}' || true)
+      if echo "${RELEASE_STATUS}" | grep -qE "^pending-"; then
+        echo "Release ${CI_PROJECT_NAME} is stuck in ${RELEASE_STATUS}; rolling back..."
+        helm rollback "${CI_PROJECT_NAME}" 0 \
+          --namespace "${KUBE_NAMESPACE:-$DEPLOY_ENV}" \
+          --wait || helm uninstall "${CI_PROJECT_NAME}" \
+          --namespace "${KUBE_NAMESPACE:-$DEPLOY_ENV}" || true
+      fi
+    - |
+      EXTRA_VALUES=""
+      if [ -f chart-values.yaml ]; then
+        EXTRA_VALUES="--values chart-values.yaml"
+      fi
+      # Fall back to DEPLOY_ENV if KUBE_NAMESPACE is not env-scoped by the API,
+      # so the deploy always lands in the correct namespace.
+      helm upgrade --install "${CI_PROJECT_NAME}" "${CHART_OCI_REF}" \
+        --version "${CHART_VERSION}" --plain-http \
+        --namespace "${KUBE_NAMESPACE:-$DEPLOY_ENV}" \
+        --set image.repository="${CI_REGISTRY_IMAGE}" \
+        --set image.tag="${CI_COMMIT_SHORT_SHA}" \
+        --set ingress.host="${APP_HOST}" \
+        --set project.path="${VAULT_PROJECT_PATH}" \
+        --set project.env="${DEPLOY_ENV}" \
+        --set "imagePullSecrets[0].name=gitlab-registry-secret" \
+        --atomic \
+        --timeout 5m \
+        ${EXTRA_VALUES} \
+        ${EXTRA_HELM_ARGS:-}
+    - echo "Deployed ${CI_PROJECT_NAME} to ${DEPLOY_ENV} at https://${APP_HOST}"
+  after_script:
+    - rm -f /tmp/kube/config
+
+# =============================================================================
+# Concrete deploy jobs
+# =============================================================================
+deploy:dev:
+  extends: .deploy-helm
+  variables:
+    DEPLOY_ENV: dev
+  environment:
+    name: dev
+    url: https://$APP_HOST
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $DEPLOY_DEV_REF'
+      when: on_success
+
+deploy:stg:
+  extends: .deploy-helm
+  variables:
+    DEPLOY_ENV: stg
+  environment:
+    name: stg
+    url: https://$APP_HOST
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $DEPLOY_STG_REF'
+      when: on_success
+
+deploy:prod:
+  extends: .deploy-helm
+  variables:
+    DEPLOY_ENV: prod
+  environment:
+    name: prod
+    url: https://$APP_HOST
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $DEPLOY_PROD_REF'
+      when: manual
+      allow_failure: false

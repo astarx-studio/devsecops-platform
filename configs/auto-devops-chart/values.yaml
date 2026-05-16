@@ -1,0 +1,91 @@
+# =============================================================================
+# dsoaas-app Helm chart — default values
+# =============================================================================
+# All values can be overridden per-project via chart-values.yaml (committed to
+# the app repo) or via --set flags in the deploy pipeline.
+#
+# Required values (must be provided by the pipeline / CI vars):
+#   ingress.host         — e.g. myapp.dev.apps.yadatechnology.com
+#   project.path         — e.g. external/kai/esa/frontend-kai
+#   project.env          — dev | stg | prod
+#
+# Optional overrides:
+#   image.repository     — override image repo (defaults to GitLab registry)
+#   image.tag            — override image tag (defaults to CI_COMMIT_SHORT_SHA)
+# =============================================================================
+
+# -- Container image
+image:
+  repository: ""         # set by pipeline: $CI_REGISTRY_IMAGE
+  tag: ""                # set by pipeline: $CI_COMMIT_SHORT_SHA
+  pullPolicy: IfNotPresent
+
+# -- Number of pod replicas
+replicaCount: 1
+
+# -- Service configuration
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 80         # standardized — all app Dockerfiles must EXPOSE 80 / ENV PORT=80
+
+# -- Ingress (in-cluster Traefik)
+ingress:
+  enabled: true
+  className: traefik
+  # host is required; set via pipeline --set ingress.host=$APP_HOST
+  host: ""
+  annotations: {}
+
+# -- Project / Vault metadata (used by ExternalSecret)
+project:
+  # Full Vault KV path supplied by the pipeline via --set project.path=$VAULT_PROJECT_PATH.
+  # Combined with project.env, ESO reads: secret/data/<path>/<env>
+  # Example: "projects/demo/demo-api"  →  secret/data/projects/demo/demo-api/dev
+  # Do NOT omit the leading namespace segment ("projects/") — include it verbatim.
+  path: ""
+  # Deployment environment scope: dev | stg | prod
+  env: ""
+
+# -- Resource requests/limits (sensible defaults for small apps)
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+
+# -- Liveness and readiness probes
+probes:
+  liveness:
+    path: /health
+    initialDelaySeconds: 15
+    periodSeconds: 20
+  readiness:
+    path: /health
+    initialDelaySeconds: 5
+    periodSeconds: 10
+
+# -- HPA (disabled by default)
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 70
+
+# -- Image pull secrets (for private GitLab registry)
+imagePullSecrets: []
+
+# -- Extra environment variables to inject directly (not from Vault)
+extraEnv: []
+# - name: SOME_VAR
+#   value: "some-value"
+
+# -- Pod annotations
+podAnnotations: {}
+
+# -- Service account
+serviceAccount:
+  create: false
+  name: ""

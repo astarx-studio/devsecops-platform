@@ -70,6 +70,13 @@ export interface AppConfiguration {
     jwksUrl?: string;
     audience?: string;
   };
+
+  sonarqube: {
+    /** Public HTTPS URL for Sonar UI and dashboard links (SONARQUBE_EXTERNAL_URL). */
+    publicUrl: string;
+    /** In-cluster scanner URL for GitLab Runner jobs on devops-network. */
+    internalUrl: string;
+  };
 }
 
 const configuration = (): AppConfiguration => {
@@ -127,6 +134,14 @@ const configuration = (): AppConfiguration => {
       issuerUrl: optional('OIDC_ISSUER_URL'),
       jwksUrl: optional('OIDC_JWKS_URL'),
       audience: optional('OIDC_AUDIENCE'),
+    },
+
+    sonarqube: {
+      publicUrl:
+        optional('SONARQUBE_PUBLIC_URL') ??
+        optional('SONARQUBE_EXTERNAL_URL') ??
+        `https://sonarqube.devops.${domain}`,
+      internalUrl: optional('SONARQUBE_INTERNAL_URL') ?? 'http://sonarqube:9000',
     },
   };
 };

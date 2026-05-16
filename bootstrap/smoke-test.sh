@@ -44,4 +44,16 @@ else
   die "Management API /health failed — is the api container up?"
 fi
 
+if docker compose ps sonarqube 2>/dev/null | grep -qE 'sonarqube'; then
+  log "Checking SonarQube on devops-network..."
+  if docker run --rm --network devops-network curlimages/curl:8.12.1 -sf \
+    http://sonarqube:9000/api/system/status | grep -q '"status":"UP"'; then
+    log "SonarQube /api/system/status UP"
+  else
+    die "SonarQube health check failed — run: ./bootstrap/checks/wait-sonarqube.sh"
+  fi
+else
+  log "sonarqube service not in compose project — skipping Sonar check"
+fi
+
 log "All smoke checks passed."

@@ -248,6 +248,30 @@ Project-specific secrets (from OpenBao) are not automatically injected into CI j
 
 ---
 
+## SonarQube
+
+The shared Auto DevOps template defines **`sonar:scan`** in the `test` stage (before `deploy`). It is **opt-in** per GitLab project:
+
+| Variable | Purpose |
+|---|---|
+| `SONAR_ALLOWED_BRANCHES` | Comma-separated branch names; empty = job exits 0 without scanning |
+| `SONAR_TOKEN` | Masked analysis token |
+| `SONAR_HOST_URL` | Public URL for dashboard links in commit status |
+| `SONAR_HOST_URL_INTERNAL` | Scanner endpoint (default `http://sonarqube:9000` on `devops-network`) |
+| `SONAR_GATE_POLICY_JSON` | Per-tier gate: `optional` does not fail the job on QG failure; `required` fails |
+
+**Tier detection** uses the same refs as deploy jobs: `DEPLOY_DEV_REF`, `DEPLOY_STG_REF`, `DEPLOY_PROD_REF`. Unmatched branches use tier `other`.
+
+**Project keys:** `{CI_PROJECT_PATH_SLUG}_{CI_COMMIT_REF_SLUG}` (sanitized) — one Sonar project per branch (Community Build).
+
+**Commit status:** `POST ${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/statuses/${CI_COMMIT_SHA}` with `JOB-TOKEN: ${CI_JOB_TOKEN}` — mirrors `GitLabService.postCommitStatus` in the Management API.
+
+**Shared config repo:** `configs/sonar-defaults` holds baseline `sonar-project.properties` (exclusions, encoding).
+
+**Management API:** `updateProjectSonarConfig` syncs the variables above and stores tokens in Vault at `projects/<path>/sonar`.
+
+---
+
 ## Auto DevOps chart, pipeline, and registry (Phase 6.1)
 
 This section captures **operational constraints** for the GitLab projects under `configs/auto-devops-chart` and `configs/auto-devops-pipeline` and for deploy jobs that run **Helm** inside Kubernetes.

@@ -24,11 +24,10 @@ cd "${REPO_ROOT}"
 log()  { echo "[bootstrap] $*"; }
 die()  { echo "[bootstrap] ERROR $*" >&2; exit 1; }
 
+# shellcheck source=lib/load-env.sh
+source "${SCRIPT_DIR}/lib/load-env.sh"
 if [[ -f .env ]]; then
-  set -a
-  # shellcheck disable=SC1091
-  source .env
-  set +a
+  load_dotenv .env || die "Failed to load .env"
   log "Loaded .env"
 else
   die "Missing .env in ${REPO_ROOT}. Copy sample.env to .env and fill values."
@@ -40,7 +39,15 @@ log "Starting Docker Compose stack..."
 # shellcheck disable=SC2086
 docker compose ${COMPOSE_EXTRA_ARGS:-} up -d
 
+log "Waiting for SonarQube (init chain + verify) in background..."
+"${SCRIPT_DIR}/checks/wait-sonarqube.sh" &
+SONAR_WAIT_PID=$!
+
 "${SCRIPT_DIR}/checks/wait-gitlab.sh"
+
+if ! wait "${SONAR_WAIT_PID}"; then
+  die "SonarQube bootstrap failed — see wait-sonarqube output above"
+fi
 
 log "Creating / updating k3d cluster..."
 "${SCRIPT_DIR}/k3d-cluster.sh"
@@ -57,8 +64,10 @@ log "Applying GitLab runner RBAC and kubeconfig CI variables..."
 if [[ "${SKIP_SEED:-0}" != "1" ]]; then
   log "Seeding GitLab config/template projects (idempotent)..."
   "${SCRIPT_DIR}/seed-platform-projects.sh"
+  log "Seeding smoke sample apps (smoke-api, smoke-web)..."
+  "${SCRIPT_DIR}/seed-smoke-samples.sh"
 else
-  log "SKIP_SEED=1 — skipping seed-platform-projects.sh"
+  log "SKIP_SEED=1 — skipping seed-platform-projects.sh and seed-smoke-samples.sh"
 fi
 
 if [[ "${SKIP_SMOKE:-0}" != "1" ]]; then

@@ -38,3 +38,14 @@ registerEnumType(Provisioning, {
     TEMPLATE: { description: 'Forked from a template in the templates group' },
   },
 });
+
+/** Sonar quality gate enforcement for a deploy tier. */
+export enum SonarGateMode {
+  OPTIONAL = 'optional',
+  REQUIRED = 'required',
+}
+
+registerEnumType(SonarGateMode, {
+  name: 'SonarGateMode',
+  description: 'Whether a failed Sonar Quality Gate fails the CI job for that deploy tier.',
+});

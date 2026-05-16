@@ -16,7 +16,7 @@ import {
   ValidateNested,
 } from 'class-validator';
 
-import { Provisioning } from './enums';
+import { Provisioning, SonarGateMode } from './enums';
 
 /** Slug validation pattern: lowercase alphanumeric with internal hyphens. */
 const SLUG_PATTERN = /^[a-z0-9][a-z0-9-]*[a-z0-9]$|^[a-z0-9]$/;
@@ -71,6 +71,57 @@ export class EnvScopedVarsInput {
   @IsString()
   @IsOptional()
   prod?: string;
+}
+
+@InputType({ description: 'Per-tier Sonar quality gate overrides.' })
+export class SonarGatePolicyInput {
+  @Field(() => SonarGateMode, { nullable: true })
+  @IsEnum(SonarGateMode)
+  @IsOptional()
+  dev?: SonarGateMode;
+
+  @Field(() => SonarGateMode, { nullable: true })
+  @IsEnum(SonarGateMode)
+  @IsOptional()
+  stg?: SonarGateMode;
+
+  @Field(() => SonarGateMode, { nullable: true })
+  @IsEnum(SonarGateMode)
+  @IsOptional()
+  prod?: SonarGateMode;
+
+  @Field(() => SonarGateMode, { nullable: true })
+  @IsEnum(SonarGateMode)
+  @IsOptional()
+  other?: SonarGateMode;
+}
+
+@InputType({ description: 'SonarQube branch allowlist and optional gate policy.' })
+export class UpdateProjectSonarConfigInput {
+  @Field(() => [String], {
+    description:
+      'Branch names that run Sonar (e.g. develop, staging, main). Empty array disables Sonar.',
+  })
+  @IsArray()
+  @IsString({ each: true })
+  allowedBranches!: string[];
+
+  @Field(() => SonarGatePolicyInput, {
+    nullable: true,
+    description: 'Per-tier gate policy. Defaults: dev optional, stg/prod required, other optional.',
+  })
+  @ValidateNested()
+  @Type(() => SonarGatePolicyInput)
+  @IsOptional()
+  gatePolicy?: SonarGatePolicyInput;
+
+  @Field(() => String, {
+    nullable: true,
+    description: 'Sonar analysis token. Stored in Vault and mirrored to GitLab SONAR_TOKEN.',
+  })
+  @IsString()
+  @IsOptional()
+  sonarToken?: string;
 }
 
 /**
@@ -169,6 +220,15 @@ export class CreateProjectInput {
   @IsOptional()
   @Matches(SLUG_PATTERN, { message: `slugOverride ${SLUG_MESSAGE}` })
   slugOverride?: string;
+
+  @Field(() => UpdateProjectSonarConfigInput, {
+    nullable: true,
+    description: 'Optional Sonar opt-in at provision time (explicit only).',
+  })
+  @ValidateNested()
+  @Type(() => UpdateProjectSonarConfigInput)
+  @IsOptional()
+  sonar?: UpdateProjectSonarConfigInput;
 }
 
 /**

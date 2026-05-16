@@ -2,6 +2,8 @@ import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 
 import type { HydratedDocument } from 'mongoose';
 
+import type { ProjectSonarConfig } from '../sonar/sonar.types';
+
 /** Deployment environment identifiers. */
 export type DeployEnv = 'dev' | 'stg' | 'prod';
 
@@ -119,6 +121,13 @@ export class Project {
   /** Capability flags set at provisioning time. */
   @Prop({ type: Object, required: true })
   capabilities!: Capabilities;
+
+  /**
+   * Optional SonarQube opt-in: branch allowlist and per-tier quality gate policy.
+   * Empty or missing `allowedBranches` means Sonar is disabled for this project.
+   */
+  @Prop({ type: Object })
+  sonar?: ProjectSonarConfig;
 
   /**
    * `true` for projects provisioned through the v1 Docker Compose path.
