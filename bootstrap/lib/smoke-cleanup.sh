@@ -14,6 +14,31 @@
 SMOKE_GITLAB_DELETE_WAIT="${SMOKE_GITLAB_DELETE_WAIT:-180}"
 SMOKE_REGISTRY_DELETE_WAIT="${SMOKE_REGISTRY_DELETE_WAIT:-${SMOKE_GITLAB_DELETE_WAIT}}"
 
+# mongosh inside the mongo container (no auth until .auth-enabled exists).
+smoke_mongosh() {
+  local db="${1:-platform}"
+  shift
+  local -a auth=()
+  if docker exec mongo test -f /data/db/.auth-enabled 2>/dev/null; then
+    if [[ -n "${MONGO_ADMIN_USER:-}" && -n "${MONGO_ADMIN_PASSWORD:-}" ]]; then
+      auth=(
+        --username "${MONGO_ADMIN_USER}"
+        --password "${MONGO_ADMIN_PASSWORD}"
+        --authenticationDatabase admin
+      )
+    elif [[ -n "${MONGO_APP_USER:-}" && -n "${MONGO_APP_PASSWORD:-}" ]]; then
+      auth=(
+        --username "${MONGO_APP_USER}"
+        --password "${MONGO_APP_PASSWORD}"
+        --authenticationDatabase "${MONGO_DB_NAME:-platform}"
+      )
+    else
+      warn "Mongo auth enabled; set MONGO_ADMIN_* or MONGO_APP_* in .env for smoke-cleanup"
+    fi
+  fi
+  docker exec mongo mongosh --quiet "${auth[@]}" "${db}" "$@"
+}
+
 smoke_vault_cli() {
   if docker exec "${VAULT_CONTAINER:-vault}" sh -c 'command -v bao >/dev/null 2>&1'; then
     echo bao
@@ -88,7 +113,7 @@ smoke_delete_vault_tree() {
 
 smoke_mongo_vault_base_path() {
   local mongo_id="$1"
-  docker exec mongo mongosh --quiet platform --eval \
+  smoke_mongosh platform --eval \
     "const d=db.projects.findOne({_id:ObjectId('${mongo_id}')}); if(d) print(d.vaultBasePath||('projects/'+d.gitlabPath));" \
     2>/dev/null | tr -d '\r\n'
 }
@@ -112,7 +137,7 @@ smoke_mongo_group_query() {
 
 smoke_vault_paths_for_mongo_query() {
   local query="$1"
-  docker exec mongo mongosh --quiet platform --eval \
+  smoke_mongosh platform --eval \
     "db.projects.find(${query}, {vaultBasePath:1, gitlabPath:1}).forEach(d => print(d.vaultBasePath || ('projects/' + d.gitlabPath)));" \
     2>/dev/null | tr -d '\r' | sort -u
 }
@@ -491,7 +516,7 @@ smoke_delete_mongo_by_id() {
   fi
   [[ -n "${vault_path}" ]] && smoke_delete_vault_tree "${vault_path}"
 
-  deleted="$(docker exec mongo mongosh --quiet platform --eval \
+  deleted="$(smoke_mongosh platform --eval \
     "db.projects.deleteOne({ _id: ObjectId('${mongo_id}') }).deletedCount" 2>/dev/null || echo "0")"
   if [[ "${deleted}" == "1" ]]; then
     log "Mongo: removed ${path} (id=${mongo_id})"
@@ -610,13 +635,13 @@ smoke_purge_mongo_group() {
   query="$(smoke_mongo_group_query "${group_path}")"
   smoke_purge_vault_for_mongo_query "${query}"
 
-  count="$(docker exec mongo mongosh --quiet platform --eval \
+  count="$(smoke_mongosh platform --eval \
     "db.projects.deleteMany(${query}).deletedCount" 2>/dev/null || echo "0")"
   total=$((total + count))
 
   if [[ "${group_path}" != "smoke" ]]; then
     smoke_purge_vault_for_mongo_query "${legacy_query}"
-    count="$(docker exec mongo mongosh --quiet platform --eval \
+    count="$(smoke_mongosh platform --eval \
       "db.projects.deleteMany(${legacy_query}).deletedCount" 2>/dev/null || echo "0")"
     total=$((total + count))
   fi

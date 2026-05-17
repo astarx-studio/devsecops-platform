@@ -83,17 +83,17 @@ All services share the `devops-network` Docker bridge network. The network name 
 | Volumes | `./.vols/keycloak-db` → `/var/lib/postgresql/data` (path unchanged for upgrades) |
 | Depends on | — |
 
-Shared PostgreSQL for **Keycloak** (`KC_DB_NAME`, default `keycloak`) and **SonarQube** (`SONAR_DB_NAME`, default `sonar`). Separate databases and roles; Sonar uses `SONAR_DB_*`, not Keycloak credentials.
+Shared PostgreSQL for **Keycloak** (`KC_DB_*`) and **SonarQube** (`SONAR_DB_*`). On first boot (empty data directory), the image bootstraps operator superuser `${POSTGRES_ADMIN_USER}` / database `postgres`; `postgres/init/01-keycloak-database.sh` and `02-sonar-database.sh` create app roles and databases. Keycloak and Sonar JDBC use app credentials only.
 
 **DNS:** Hostname `postgres`. Legacy alias `keycloak-db` still resolves on `devops-network` if `.env` still has `KC_DB_HOST=keycloak-db`; prefer `KC_DB_HOST=postgres` in new installs (`sample.env`).
 
 **Renaming without data loss:** Safe when the bind-mount path stays `.vols/keycloak-db`. Stop the stack, then `docker compose up -d` — data lives on the host volume, not the container name. Do not delete `.vols/keycloak-db` unless you intend a full DB reset.
 
-**Sonar on existing clusters:** `postgres-sonar-init` creates the Sonar role and database idempotently. Fresh installs also run `postgres/init/02-sonar-database.sh` when the data directory is empty.
+**App databases on compose up:** `postgres-keycloak-init` and `postgres-sonar-init` create Keycloak/Sonar roles and databases idempotently (as `${POSTGRES_ADMIN_USER}`). Fresh installs also run `postgres/init/01-keycloak-database.sh` and `02-sonar-database.sh` when the data directory is empty.
 
-**Key environment variables:** `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB` (mapped from `${KC_DB_USER}`, `${KC_DB_PASSWORD}`, `${KC_DB_NAME}`).
+**Key environment variables:** `POSTGRES_ADMIN_USER`, `POSTGRES_ADMIN_PASSWORD` (cluster bootstrap + host `psql`); `KC_DB_*`, `SONAR_DB_*` (application users).
 
-**Health check:** `pg_isready -U ${KC_DB_USER} -d ${KC_DB_NAME}`. Interval 10s, timeout 5s, 5 retries.
+**Health check:** `pg_isready -U ${POSTGRES_ADMIN_USER} -d postgres`. Interval 10s, timeout 5s, 5 retries.
 
 ---
 

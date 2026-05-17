@@ -3,7 +3,8 @@
 # ==========================================================================
 # Containers: traefik, mongo, postgres, keycloak, vault (OpenBao),
 #             cloudflared, wireguard, gitlab, gitlab-runner, api, sonarqube,
-#             postgres-sonar-init, sonarqube-config-init, sonarqube-init,
+#             postgres-keycloak-init, postgres-sonar-init, mongo-init,
+#             sonarqube-config-init, sonarqube-init,
 #             minio, minio-init
 # Network:    devops-network (bridge)
 # ==========================================================================
@@ -102,10 +103,22 @@ services:
     image: mongo:7
     container_name: mongo
     restart: unless-stopped
+    ports:
+      - "${MONGO_HOST_PORT:-27017}:27017"
+    entrypoint: ["/bin/sh", "/docker-entrypoint.sh"]
+    command: []
+    environment:
+      MONGO_ADMIN_USER: ${MONGO_ADMIN_USER:-}
+      MONGO_ADMIN_PASSWORD: ${MONGO_ADMIN_PASSWORD:-}
     volumes:
       - ./.vols/mongo:/data/db
+      - ./mongo/docker-entrypoint.sh:/docker-entrypoint.sh:ro
     healthcheck:
-      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      test:
+        [
+          "CMD-SHELL",
+          "if [ -f /data/db/.auth-enabled ]; then mongosh --quiet -u \"$$MONGO_ADMIN_USER\" -p \"$$MONGO_ADMIN_PASSWORD\" --authenticationDatabase admin --eval 'db.adminCommand(\"ping\")' || exit 1; else mongosh --quiet --eval 'db.adminCommand(\"ping\")' || exit 1; fi",
+        ]
       interval: 15s
       timeout: 5s
       retries: 3
@@ -114,8 +127,33 @@ services:
       - devops-network
 
   # ========================================================================
+  # MONGO INIT — One-shot users + .auth-enabled (enables --auth on mongo restart)
+  # ========================================================================
+  mongo-init:
+    image: mongo:7
+    container_name: mongo-init
+    restart: "no"
+    entrypoint: ["/bin/sh", "/scripts/run-init-ensure-auth.sh"]
+    environment:
+      MONGO_ADMIN_USER: ${MONGO_ADMIN_USER:?set MONGO_ADMIN_USER in .env}
+      MONGO_ADMIN_PASSWORD: ${MONGO_ADMIN_PASSWORD:?set MONGO_ADMIN_PASSWORD in .env}
+      MONGO_APP_USER: ${MONGO_APP_USER:?set MONGO_APP_USER in .env}
+      MONGO_APP_PASSWORD: ${MONGO_APP_PASSWORD:?set MONGO_APP_PASSWORD in .env}
+      MONGO_DB_NAME: ${MONGO_DB_NAME:-platform}
+    volumes:
+      - ./mongo/run-init-ensure-auth.sh:/scripts/run-init-ensure-auth.sh:ro
+      - ./mongo/init-ensure-auth.js:/scripts/init-ensure-auth.js:ro
+      - ./.vols/mongo:/data/db
+    depends_on:
+      mongo:
+        condition: service_healthy
+    networks:
+      - devops-network
+
+  # ========================================================================
   # POSTGRES — Shared PostgreSQL (Keycloak + SonarQube databases)
   # ========================================================================
+  # Bootstrap: POSTGRES_ADMIN_* → superuser on DB postgres; KC_DB_* / SONAR_DB_* via init scripts.
   # Data directory remains .vols/keycloak-db for upgrades from older layouts.
   # DNS: postgres (service name). Alias keycloak-db keeps old KC_DB_HOST working.
   postgres:
@@ -125,9 +163,12 @@ services:
     ports:
       - "15433:5432"
     environment:
-      POSTGRES_DB: ${KC_DB_NAME}
-      POSTGRES_USER: ${KC_DB_USER}
-      POSTGRES_PASSWORD: ${KC_DB_PASSWORD}
+      POSTGRES_DB: postgres
+      POSTGRES_USER: ${POSTGRES_ADMIN_USER:?set POSTGRES_ADMIN_USER in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_ADMIN_PASSWORD:?set POSTGRES_ADMIN_PASSWORD in .env}
+      KC_DB_NAME: ${KC_DB_NAME}
+      KC_DB_USER: ${KC_DB_USER}
+      KC_DB_PASSWORD: ${KC_DB_PASSWORD}
       SONAR_DB_NAME: ${SONAR_DB_NAME}
       SONAR_DB_USER: ${SONAR_DB_USER}
       SONAR_DB_PASSWORD: ${SONAR_DB_PASSWORD}
@@ -135,7 +176,7 @@ services:
       - ./.vols/keycloak-db:/var/lib/postgresql/data
       - ./postgres/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${KC_DB_USER} -d ${KC_DB_NAME}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_ADMIN_USER} -d postgres"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -223,6 +264,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      postgres-keycloak-init:
+        condition: service_completed_successfully
     labels:
       traefik.enable: "true"
       traefik.http.routers.keycloak.rule: "Host(`${KEYCLOAK_DOMAIN}`)"
@@ -572,7 +615,7 @@ services:
       GITLAB_CONFIG_GROUP_ID: ${GITLAB_CONFIG_GROUP_ID}
       VAULT_URL: http://vault:8200
       VAULT_DEV_ROOT_TOKEN_ID: ${VAULT_DEV_ROOT_TOKEN_ID}
-      MONGO_URL: ${MONGO_URL:-mongodb://mongo:27017}
+      MONGO_URL: ${MONGO_URL:?set MONGO_URL in .env (include credentials after mongo-init)}
       MONGO_DB_NAME: ${MONGO_DB_NAME:-platform}
       KUBE_API_INTERNAL_URL: ${KUBE_API_INTERNAL_URL}
       KUBECONFIG_DIR: ${KUBECONFIG_DIR:-/etc/dsoaas/kubeconfigs}
@@ -600,6 +643,8 @@ services:
     depends_on:
       mongo:
         condition: service_healthy
+      mongo-init:
+        condition: service_completed_successfully
       vault:
         condition: service_healthy
     labels:
@@ -691,6 +736,31 @@ services:
       - devops-network
 
   # ========================================================================
+  # POSTGRES KEYCLOAK INIT — One-shot Keycloak DB/user on shared PostgreSQL
+  # ========================================================================
+  # Idempotent: safe on every compose up. Fresh installs also run init/01-keycloak-database.sh.
+  postgres-keycloak-init:
+    image: postgres:17-alpine
+    container_name: postgres-keycloak-init
+    restart: "no"
+    entrypoint: ["/bin/sh", "/scripts/init-ensure-keycloak-db.sh"]
+    environment:
+      PGHOST: postgres
+      PGUSER: ${POSTGRES_ADMIN_USER:?set POSTGRES_ADMIN_USER in .env}
+      PGPASSWORD: ${POSTGRES_ADMIN_PASSWORD:?set POSTGRES_ADMIN_PASSWORD in .env}
+      PGDATABASE: postgres
+      KC_DB_NAME: ${KC_DB_NAME}
+      KC_DB_USER: ${KC_DB_USER}
+      KC_DB_PASSWORD: ${KC_DB_PASSWORD}
+    volumes:
+      - ./postgres/init-ensure-keycloak-db.sh:/scripts/init-ensure-keycloak-db.sh:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - devops-network
+
+  # ========================================================================
   # POSTGRES SONAR INIT — One-shot Sonar DB/user on existing PostgreSQL
   # ========================================================================
   # Idempotent: safe on every compose up. Skips if role/database already exist.
@@ -702,9 +772,9 @@ services:
     entrypoint: ["/bin/sh", "/scripts/init-ensure-sonar-db.sh"]
     environment:
       PGHOST: postgres
-      PGUSER: ${KC_DB_USER}
-      PGPASSWORD: ${KC_DB_PASSWORD}
-      PGDATABASE: ${KC_DB_NAME}
+      PGUSER: ${POSTGRES_ADMIN_USER:?set POSTGRES_ADMIN_USER in .env}
+      PGPASSWORD: ${POSTGRES_ADMIN_PASSWORD:?set POSTGRES_ADMIN_PASSWORD in .env}
+      PGDATABASE: postgres
       SONAR_DB_NAME: ${SONAR_DB_NAME:?set SONAR_DB_NAME in .env}
       SONAR_DB_USER: ${SONAR_DB_USER:?set SONAR_DB_USER in .env}
       SONAR_DB_PASSWORD: ${SONAR_DB_PASSWORD:?set SONAR_DB_PASSWORD in .env}
