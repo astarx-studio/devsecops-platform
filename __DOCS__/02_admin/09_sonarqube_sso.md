@@ -25,6 +25,15 @@ SonarQube uses **SAML** with Keycloak (Community Build) for interactive login. T
 
 **Re-run:** `docker compose run --rm sonarqube-init`
 
+**Existing Keycloak (realm already imported):** the live `sonarqube` client must match Sonar settings. In Keycloak Admin → realm `devops` → **Clients** → `sonarqube` → **Keys** / **Advanced**:
+
+- Turn **off** “Client signature required”
+- Turn **off** “Sign assertions” (if shown)
+
+Then run `docker compose run --rm --no-deps sonarqube-config-init` and `docker compose restart sonarqube`.
+
+**“Not allowed by administrator” on Keycloak login** usually means Sonar could not start SAML (`sonar.auth.saml.signature.enabled` must be `false` unless you configure Sonar SP signing keys). Check `docker compose logs sonarqube` for `Sign requests is enabled but SonarQube private key...`.
+
 **Verify replication:** from repo root, `sh scripts/verify-sonar-setup.sh` (checks `.env`, generated `sonar.properties`, container health).
 
 ## Group model

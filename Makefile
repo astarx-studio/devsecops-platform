@@ -12,13 +12,14 @@
 SHELL := /usr/bin/bash
 ROOT := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 
-.PHONY: help bootstrap update-dso-configs smoke smoke-deploy smoke-cleanup reset backup restore migrate-v1 verify-sonar
+.PHONY: help bootstrap update-dso-configs smoke smoke-deploy smoke-cleanup reset backup restore migrate-v1 verify-sonar reset-sonarqube
 
 help:
 	@echo "Targets:"
 	@echo "  make bootstrap          - ./bootstrap/bootstrap.sh (compose + Sonar init → k3d → vault auth → RBAC → seed → smoke)"
 	@echo "  make update-dso-configs - ./bootstrap/seed-platform-projects.sh (push configs/* to GitLab; no full bootstrap)"
 	@echo "  make verify-sonar  - scripts/verify-sonar-setup.sh (Sonar .env, properties, containers)"
+	@echo "  make reset-sonarqube - ./bootstrap/reset-sonarqube.sh (wipe Sonar DB/data, re-bootstrap)"
 	@echo "  make smoke         - ./bootstrap/smoke-test.sh (infra + Vault/ESO/secret sync checks)"
 	@echo "  make smoke-deploy  - ./bootstrap/smoke-deploy.sh (smoke-api + smoke-web; ARGS='--cleanup' tears down)"
 	@echo "  make smoke-cleanup - ./bootstrap/smoke-cleanup.sh (hard-delete smoke group only)"
@@ -35,6 +36,9 @@ update-dso-configs:
 
 verify-sonar:
 	@cd "$(ROOT)" && bash ./scripts/verify-sonar-setup.sh
+
+reset-sonarqube:
+	@cd "$(ROOT)" && bash ./bootstrap/reset-sonarqube.sh
 
 smoke:
 	@cd "$(ROOT)" && bash ./bootstrap/smoke-test.sh

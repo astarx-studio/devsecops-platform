@@ -104,6 +104,8 @@ def main() -> None:
         "sonar.auth.saml.user.name=login",
         "sonar.auth.saml.user.email=email",
         "sonar.auth.saml.group.name=groups",
+        # false = Sonar does not sign authn requests (no SP key/cert required).
+        # Keycloak client must also disable assertion/response signing (see 09_sonarqube_sso.md).
         "sonar.auth.saml.signature.enabled=false",
         "",
     ]

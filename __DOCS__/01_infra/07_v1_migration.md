@@ -11,7 +11,7 @@ This page exists for the rare case where you are **importing state from an older
 ## Prerequisites
 
 - Management API running with a valid `API_KEY` and `GITLAB_ROOT_TOKEN` in `.env`.
-- Projects you intend to migrate are represented in MongoDB with `legacyV1: true` (the API’s startup reconciliation can create these rows for GitLab projects that exist but were never provisioned through v2).
+- Projects you intend to migrate are represented in MongoDB with `legacyV1: true` (run **`reconcileGitLabProjects`** to create these rows for GitLab projects that exist but were never provisioned through v2).
 - GitLab Runner is registered and able to run pipelines for the target groups.
 
 ---
