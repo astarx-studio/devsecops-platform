@@ -3,14 +3,127 @@
 # bootstrap/lib/smoke-cleanup.sh
 # =============================================================================
 # Tear down smoke sample projects: Helm/K8s, GitLab (permanent delete + wait
-# until slug paths are free). Avoids scheduled-deletion conflicts on re-run.
+# until slug paths are free), Vault secret trees, and Mongo. Avoids scheduled-
+# deletion conflicts on re-run.
 #
 # Expects: log, warn, die, GRAPHQL_URL, API_KEY, gitlab-api.sh sourced by caller.
 # Optional: SMOKE_GITLAB_DELETE_WAIT (default 180 seconds)
+# Vault: VAULT_ROOT_TOKEN or VAULT_DEV_ROOT_TOKEN_ID, VAULT_CONTAINER (default vault)
 # =============================================================================
 
 SMOKE_GITLAB_DELETE_WAIT="${SMOKE_GITLAB_DELETE_WAIT:-180}"
 SMOKE_REGISTRY_DELETE_WAIT="${SMOKE_REGISTRY_DELETE_WAIT:-${SMOKE_GITLAB_DELETE_WAIT}}"
+
+smoke_vault_cli() {
+  if docker exec "${VAULT_CONTAINER:-vault}" sh -c 'command -v bao >/dev/null 2>&1'; then
+    echo bao
+  else
+    echo vault
+  fi
+}
+
+smoke_vault_exec() {
+  local token="${VAULT_ROOT_TOKEN:-${VAULT_DEV_ROOT_TOKEN_ID:-}}"
+  [[ -n "${token}" ]] || return 1
+  docker exec \
+    -e "VAULT_TOKEN=${token}" \
+    -e "VAULT_ADDR=${VAULT_ADDR:-http://localhost:8200}" \
+    "${VAULT_CONTAINER:-vault}" \
+    "$(smoke_vault_cli)" "$@"
+}
+
+smoke_vault_list_keys() {
+  local path="$1"
+  smoke_vault_exec kv list -mount=secret -format=json "${path}" 2>/dev/null \
+    | jq -r '.[]? // empty' 2>/dev/null || true
+}
+
+smoke_vault_metadata_delete() {
+  local path="$1"
+  smoke_vault_exec kv metadata delete -mount=secret "${path}" >/dev/null 2>&1 || true
+}
+
+# Collect all KV v2 metadata paths under a project root (deepest paths first).
+smoke_collect_vault_paths() {
+  local path="$1"
+  local keys key seg child
+
+  keys="$(smoke_vault_list_keys "${path}")"
+  if [[ -n "${keys}" ]]; then
+    while IFS= read -r key; do
+      [[ -z "${key}" ]] && continue
+      if [[ "${key}" == */ ]]; then
+        seg="${key%/}"
+        smoke_collect_vault_paths "${path}/${seg}"
+      else
+        echo "${path}/${key}"
+      fi
+    done <<< "${keys}"
+  fi
+  echo "${path}"
+}
+
+smoke_delete_vault_tree() {
+  local root="$1"
+  local p deleted=0
+
+  [[ -n "${root}" ]] || return 0
+  if [[ -z "${VAULT_ROOT_TOKEN:-${VAULT_DEV_ROOT_TOKEN_ID:-}}" ]]; then
+    warn "VAULT_ROOT_TOKEN unset — cannot delete Vault tree ${root}"
+    return 1
+  fi
+
+  log "Vault: deleting secret tree at ${root}..."
+  while IFS= read -r p; do
+    [[ -z "${p}" ]] && continue
+    smoke_vault_metadata_delete "${p}"
+    log "Vault: deleted secret/${p}"
+    deleted=$((deleted + 1))
+  done < <(smoke_collect_vault_paths "${root}" | awk '{ print length, $0 }' | sort -rn | cut -d' ' -f2-)
+
+  if [[ "${deleted}" -gt 0 ]]; then
+    log "Vault: removed ${deleted} metadata path(s) under ${root}"
+  fi
+}
+
+smoke_mongo_vault_base_path() {
+  local mongo_id="$1"
+  docker exec mongo mongosh --quiet platform --eval \
+    "const d=db.projects.findOne({_id:ObjectId('${mongo_id}')}); if(d) print(d.vaultBasePath||('projects/'+d.gitlabPath));" \
+    2>/dev/null | tr -d '\r\n'
+}
+
+smoke_mongo_group_query() {
+  local group_path="$1"
+  local -a segments=()
+  local seg query i=0
+
+  IFS='/' read -r -a segments <<< "${group_path}"
+  query="{"
+  for seg in "${segments[@]}"; do
+    [[ -n "${seg}" ]] || continue
+    [[ "${i}" -gt 0 ]] && query+=", "
+    query+="\"groupPath.${i}\": \"${seg}\""
+    i=$((i + 1))
+  done
+  query+="}"
+  echo "${query}"
+}
+
+smoke_vault_paths_for_mongo_query() {
+  local query="$1"
+  docker exec mongo mongosh --quiet platform --eval \
+    "db.projects.find(${query}, {vaultBasePath:1, gitlabPath:1}).forEach(d => print(d.vaultBasePath || ('projects/' + d.gitlabPath)));" \
+    2>/dev/null | tr -d '\r' | sort -u
+}
+
+smoke_purge_vault_for_mongo_query() {
+  local query="$1"
+  local vp
+  while IFS= read -r vp; do
+    [[ -n "${vp}" ]] && smoke_delete_vault_tree "${vp}"
+  done < <(smoke_vault_paths_for_mongo_query "${query}")
+}
 
 smoke_gitlab_http_code() {
   gitlab_curl -s -o /dev/null -w "%{http_code}" "${GITLAB_API_HDR[@]}" "$@" 2>/dev/null || echo "000"
@@ -370,7 +483,14 @@ smoke_delete_k8s_release() {
 smoke_delete_mongo_by_id() {
   local mongo_id="$1"
   local path="$2"
+  local vault_path="${3:-}"
   local deleted
+
+  if [[ -z "${vault_path}" ]]; then
+    vault_path="$(smoke_mongo_vault_base_path "${mongo_id}")"
+  fi
+  [[ -n "${vault_path}" ]] && smoke_delete_vault_tree "${vault_path}"
+
   deleted="$(docker exec mongo mongosh --quiet platform --eval \
     "db.projects.deleteOne({ _id: ObjectId('${mongo_id}') }).deletedCount" 2>/dev/null || echo "0")"
   if [[ "${deleted}" == "1" ]]; then
@@ -383,35 +503,51 @@ smoke_delete_mongo_by_id() {
 smoke_delete_mongo_via_api() {
   local mongo_id="$1"
   local path="$2"
-  local delresp=""
+  local vault_path="${3:-}"
+  local delresp outcome
   [[ -n "${mongo_id}" && "${mongo_id}" != "null" ]] || return 0
+
+  if [[ -z "${vault_path}" ]]; then
+    vault_path="$(smoke_mongo_vault_base_path "${mongo_id}")"
+  fi
 
   if delresp="$(curl -sf -X POST "${GRAPHQL_URL}" \
     -H "Content-Type: application/json" -H "X-API-Key: ${API_KEY}" \
     -d "$(jq -n --arg id "${mongo_id}" \
-      '{query:"mutation($id:ID!){deleteProject(id:$id)}",variables:{id:$id}}')" \
+      '{
+        query: "mutation($id: ID!, $force: Boolean) { deleteProject(id: $id, forceGitLabDelete: $force) { outcome message } }",
+        variables: { id: $id, force: false }
+      }')" \
     2>/dev/null)"; then
-    if echo "${delresp}" | jq -e '.data.deleteProject == true' >/dev/null 2>&1; then
-      log "deleteProject ok for ${path} (mongo id=${mongo_id})"
+    outcome="$(echo "${delresp}" | jq -r '.data.deleteProject.outcome // empty')"
+    if [[ "${outcome}" == "DELETED" ]]; then
+      log "deleteProject DELETED for ${path} (mongo id=${mongo_id})"
+      return 0
+    fi
+    if [[ "${outcome}" == "ARCHIVED" ]]; then
+      log "deleteProject ARCHIVED for ${path} — ensuring Vault tree is cleared"
+      [[ -n "${vault_path}" ]] && smoke_delete_vault_tree "${vault_path}"
       return 0
     fi
   fi
 
-  # GitLab often already removed during hard-delete; API deleteProject then 404s on GitLab.
-  if smoke_delete_mongo_by_id "${mongo_id}" "${path}"; then
+  # GitLab often already removed during hard-delete; API may archive or fail — purge Vault + Mongo.
+  if smoke_delete_mongo_by_id "${mongo_id}" "${path}" "${vault_path}"; then
     if [[ -n "${delresp}" ]] && echo "${delresp}" | grep -q '404'; then
       log "Mongo: dropped orphan record ${path} (GitLab project already absent)"
     else
-      log "Mongo: dropped ${path} (API deleteProject incomplete; direct Mongo delete)"
+      log "Mongo: dropped ${path} (API deleteProject incomplete; direct Mongo + Vault cleanup)"
     fi
     return 0
   fi
 
   if [[ -z "${delresp}" ]]; then
     warn "deleteProject unreachable for ${path} (is the Management API up?)"
+    [[ -n "${vault_path}" ]] && smoke_delete_vault_tree "${vault_path}"
     return 1
   fi
   warn "deleteProject for ${path}: ${delresp}"
+  [[ -n "${vault_path}" ]] && smoke_delete_vault_tree "${vault_path}"
   return 1
 }
 
@@ -427,7 +563,7 @@ smoke_preflight_clear_slots() {
   lookup="$(jq -n \
     --argjson gp "${GROUP_JSON}" \
     '{
-      query: "query($f: ProjectFilterInput!) { projects(filter: $f, page: 0, perPage: 100) { id projectSlug gitlabPath gitlabProjectId effectiveSlug capabilities { deployable } } }",
+      query: "query($f: ProjectFilterInput!) { projects(filter: $f, page: 0, perPage: 100) { id projectSlug gitlabPath gitlabProjectId effectiveSlug vaultBasePath capabilities { deployable } } }",
       variables: { f: { groupPathPrefix: $gp } }
     }')"
   lresp="$(graphql_post "${lookup}")"
@@ -439,9 +575,10 @@ smoke_preflight_clear_slots() {
       mongo_id="$(echo "${row}" | jq -r '.id')"
       path="$(echo "${row}" | jq -r '.gitlabPath')"
       release="$(echo "${row}" | jq -r '.effectiveSlug')"
+      vault_path="$(echo "${row}" | jq -r '.vaultBasePath // empty')"
       log "Preflight: removing stale Mongo/K8s record ${path}"
       smoke_delete_k8s_release "${release}"
-      smoke_delete_mongo_via_api "${mongo_id}" "${path}"
+      smoke_delete_mongo_via_api "${mongo_id}" "${path}" "${vault_path}"
     fi
     smoke_wait_slug_path_free "${group_path}" "${slug}"
   done
@@ -455,39 +592,32 @@ smoke_preflight_clear_slots() {
     mongo_id="$(echo "${row}" | jq -r '.id')"
     path="$(echo "${row}" | jq -r '.gitlabPath')"
     release="$(echo "${row}" | jq -r '.effectiveSlug')"
+    vault_path="$(echo "${row}" | jq -r '.vaultBasePath // empty')"
     warn "Preflight: removing extra smoke Mongo record ${path}"
     smoke_delete_k8s_release "${release}"
-    smoke_delete_mongo_via_api "${mongo_id}" "${path}"
+    smoke_delete_mongo_via_api "${mongo_id}" "${path}" "${vault_path}"
   done < <(echo "${lresp}" | jq -c '(.data.projects // [])[]')
 
   log "Preflight: GitLab paths for ${group_path} are clear"
 }
 
-# When GitLab is already gone, deleteProject may 404 — remove Mongo rows directly.
+# When GitLab is already gone, deleteProject may fail — purge Vault trees then Mongo rows.
 smoke_purge_mongo_group() {
   local group_path="$1"
-  local -a segments=()
-  local seg query js count total=0
+  local query count total=0
+  local legacy_query='{"groupPath.0": "smoke", "groupPath.1": {$exists: false}}'
 
-  IFS='/' read -r -a segments <<< "${group_path}"
-  query="{"
-  local i=0
-  for seg in "${segments[@]}"; do
-    [[ -n "${seg}" ]] || continue
-    [[ "${i}" -gt 0 ]] && query+=", "
-    query+="\"groupPath.${i}\": \"${seg}\""
-    i=$((i + 1))
-  done
-  query+="}"
+  query="$(smoke_mongo_group_query "${group_path}")"
+  smoke_purge_vault_for_mongo_query "${query}"
 
   count="$(docker exec mongo mongosh --quiet platform --eval \
     "db.projects.deleteMany(${query}).deletedCount" 2>/dev/null || echo "0")"
   total=$((total + count))
 
   if [[ "${group_path}" != "smoke" ]]; then
+    smoke_purge_vault_for_mongo_query "${legacy_query}"
     count="$(docker exec mongo mongosh --quiet platform --eval \
-      'db.projects.deleteMany({"groupPath.0": "smoke", "groupPath.1": {$exists: false}}).deletedCount' \
-      2>/dev/null || echo "0")"
+      "db.projects.deleteMany(${legacy_query}).deletedCount" 2>/dev/null || echo "0")"
     total=$((total + count))
   fi
 

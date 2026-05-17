@@ -248,7 +248,7 @@ docker exec \
   -e VAULT_TOKEN="${VAULT_ROOT_TOKEN}" \
   -e VAULT_ADDR=http://localhost:8200 \
   "${VAULT_CONTAINER}" \
-  vault kv delete "secret/${SMOKE_PATH}" >/dev/null 2>&1 || true
+  vault kv metadata delete -mount=secret "${SMOKE_PATH}" >/dev/null 2>&1 || true
 info "Smoke-test resources cleaned up."
 
 # -----------------------------------------------------------------------------

@@ -96,11 +96,35 @@ export class VaultService {
   }
 
   /**
-   * Deletes all versions of secrets at a KV v2 path.
+   * Lists immediate child keys under a KV v2 metadata path (non-recursive).
+   *
+   * @see https://developer.hashicorp.com/vault/api-docs/secret/kv/kv-v2#list-secrets
+   */
+  async listMetadataKeys(path: string): Promise<string[]> {
+    try {
+      const { data } = await firstValueFrom(
+        this.httpService.get<{ data?: { keys?: string[] } }>(
+          `${this.baseUrl}/v1/secret/metadata/${path}`,
+          { headers: this.headers, params: { list: true } },
+        ),
+      );
+      return data?.data?.keys ?? [];
+    } catch (error) {
+      const status = (error as { response?: { status?: number } }).response?.status;
+      if (status === 404) {
+        return [];
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Deletes all versions of secrets at a single KV v2 path.
    *
    * @param path - Vault path to permanently delete
+   * @returns true when metadata was deleted (or already absent)
    */
-  async deleteSecrets(path: string): Promise<void> {
+  async deleteSecrets(path: string): Promise<boolean> {
     this.logger.warn(`Deleting vault secrets at: secret/metadata/${path}`);
 
     try {
@@ -109,8 +133,61 @@ export class VaultService {
           headers: this.headers,
         }),
       );
+      return true;
     } catch (error) {
+      const status = (error as { response?: { status?: number } }).response?.status;
+      if (status === 404) {
+        return true;
+      }
       this.logger.warn(`Failed to delete vault path "${path}": ${(error as Error).message}`);
+      return false;
     }
+  }
+
+  /**
+   * Deletes a project secret tree: base path plus env paths (dev/stg/prod/sonar, etc.).
+   *
+   * KV v2 does not cascade — deleting `projects/foo` leaves `projects/foo/dev` intact.
+   */
+  async deleteSecretsTree(path: string): Promise<{ deleted: number; errors: string[] }> {
+    const errors: string[] = [];
+    let deleted = 0;
+
+    let childKeys: string[];
+    try {
+      childKeys = await this.listMetadataKeys(path);
+    } catch (error) {
+      const message = (error as Error).message;
+      this.logger.warn(`Failed to list vault children under "${path}": ${message}`);
+      errors.push(`${path}: list failed (${message})`);
+      childKeys = [];
+    }
+
+    for (const key of childKeys) {
+      const isFolder = key.endsWith('/');
+      const segment = isFolder ? key.slice(0, -1) : key;
+      const childPath = `${path}/${segment}`;
+
+      if (isFolder) {
+        const nested = await this.deleteSecretsTree(childPath);
+        deleted += nested.deleted;
+        errors.push(...nested.errors);
+      } else if (await this.deleteSecrets(childPath)) {
+        deleted++;
+      } else {
+        errors.push(childPath);
+      }
+    }
+
+    if (await this.deleteSecrets(path)) {
+      deleted++;
+    } else {
+      errors.push(path);
+    }
+
+    this.logger.log(
+      `deleteSecretsTree: path="${path}" deleted=${deleted} errors=${errors.length}`,
+    );
+    return { deleted, errors };
   }
 }

@@ -3,8 +3,8 @@
 # bootstrap/smoke-cleanup.sh
 # =============================================================================
 # Hard-delete smoke E2E assets only (no provision, no pipelines).
-# Clears GitLab smoke/* projects (permanent delete + wait), Mongo via API,
-# Helm/K8s releases for smoke sample slugs.
+# Clears GitLab smoke/* projects (permanent delete + wait), Vault secret trees,
+# Mongo via Management API (or direct purge), Helm/K8s releases for smoke slugs.
 #
 # Requires: API_KEY, GITLAB_ROOT_TOKEN, GITLAB_DOMAIN (Management API up for Mongo).
 #

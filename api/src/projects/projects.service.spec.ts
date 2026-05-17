@@ -77,7 +77,7 @@ describe('ProjectsService', () => {
   let deleteProjectFn: jest.Mock;
   let setProjectCiVariablesFn: jest.Mock;
   let writeSecretsFn: jest.Mock;
-  let deleteSecretsFn: jest.Mock;
+  let deleteSecretsTreeFn: jest.Mock;
   let ensureNamespaceFn: jest.Mock;
   let getKubeconfigB64Fn: jest.Mock;
   let teardownProjectTargetsFn: jest.Mock;
@@ -107,7 +107,7 @@ describe('ProjectsService', () => {
     deleteProjectFn = jest.fn().mockResolvedValue(undefined);
     setProjectCiVariablesFn = jest.fn().mockResolvedValue(undefined);
     writeSecretsFn = jest.fn().mockResolvedValue(undefined);
-    deleteSecretsFn = jest.fn().mockResolvedValue(undefined);
+    deleteSecretsTreeFn = jest.fn().mockResolvedValue({ deleted: 4, errors: [] });
     ensureNamespaceFn = jest.fn().mockResolvedValue(undefined);
     getKubeconfigB64Fn = jest.fn().mockReturnValue('base64-kubeconfig');
     teardownProjectTargetsFn = jest.fn().mockResolvedValue(undefined);
@@ -133,7 +133,7 @@ describe('ProjectsService', () => {
     vaultService = {
       writeSecrets: writeSecretsFn,
       readSecrets: readSecretsFn,
-      deleteSecrets: deleteSecretsFn,
+      deleteSecretsTree: deleteSecretsTreeFn,
     } as unknown as jest.Mocked<VaultService>;
 
     k8sService = {
@@ -435,7 +435,7 @@ describe('ProjectsService', () => {
 
       expect(teardownProjectTargetsFn).toHaveBeenCalledWith('repoa', expect.any(Array));
       expect(tryDeleteProjectFn).toHaveBeenCalledWith(42, { force: false });
-      expect(deleteSecretsFn).toHaveBeenCalledWith('projects/groupa/repoa');
+      expect(deleteSecretsTreeFn).toHaveBeenCalledWith('projects/groupa/repoa');
       expect(mockDoc.deleteOne).toHaveBeenCalled();
       expect(result.outcome).toBe('deleted');
     });
@@ -499,7 +499,7 @@ describe('ProjectsService', () => {
         deleteOne: jest.fn().mockResolvedValue(undefined),
       };
       projectModel.findById.mockReturnValue({ exec: jest.fn().mockResolvedValue(mockDoc) });
-      deleteSecretsFn.mockRejectedValueOnce(new Error('Vault error'));
+      deleteSecretsTreeFn.mockRejectedValueOnce(new Error('Vault error'));
 
       const result = await service.deleteProject('abc');
 

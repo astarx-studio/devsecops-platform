@@ -13,6 +13,7 @@ import type { QueryFilter, Model } from 'mongoose';
 
 import { AppConfiguration } from '../config';
 import { GitLabService } from '../gitlab/gitlab.service';
+import { isGitLabProjectPendingDeletion } from '../gitlab/gitlab-project.util';
 import { K8sService } from '../k8s/k8s.service';
 import { VaultService } from '../vault/vault.service';
 import {
@@ -578,8 +579,16 @@ export class ProjectsService implements OnApplicationBootstrap {
       }
 
       try {
-        this.logger.log(`Deleting Vault secrets at "${doc.vaultBasePath}"`);
-        await this.vaultService.deleteSecrets(doc.vaultBasePath);
+        this.logger.log(
+          `Deleting Vault secret tree at "${doc.vaultBasePath}" (base + env/sonar paths)`,
+        );
+        const vaultResult = await this.vaultService.deleteSecretsTree(doc.vaultBasePath);
+        if (vaultResult.errors.length > 0) {
+          this.logger.warn(
+            `Vault cleanup incomplete for "${doc.vaultBasePath}": ` +
+              `${vaultResult.errors.join('; ')}`,
+          );
+        }
       } catch (err) {
         this.logger.warn(`Vault cleanup failed (non-critical): ${(err as Error).message}`);
       }
@@ -1133,6 +1142,12 @@ export class ProjectsService implements OnApplicationBootstrap {
       throw new NotFoundException(`GitLab project id=${input.gitlabProjectId} not found`);
     });
 
+    if (isGitLabProjectPendingDeletion(glProject)) {
+      throw new BadRequestException(
+        `GitLab project "${glProject.path_with_namespace}" is scheduled for deletion and cannot be registered`,
+      );
+    }
+
     const existing = await this.projectModel
       .findOne({ gitlabProjectId: input.gitlabProjectId })
       .exec();
@@ -1379,7 +1394,7 @@ export class ProjectsService implements OnApplicationBootstrap {
 
     let allProjects: Awaited<ReturnType<typeof this.gitlabService.listProjects>>;
     try {
-      allProjects = await this.gitlabService.listProjects();
+      allProjects = await this.gitlabService.listProjectsForReconciliation();
     } catch (err) {
       this.logger.warn(
         `Reconciliation: failed to list GitLab projects — ${(err as Error).message}`,
@@ -1412,6 +1427,18 @@ export class ProjectsService implements OnApplicationBootstrap {
         this.logger.verbose(
           `Reconciliation: skipping platform project "${glProject.path_with_namespace}" (path-prefix fallback — namespace missing)`,
         );
+        continue;
+      }
+
+      if (isGitLabProjectPendingDeletion(glProject)) {
+        const existing = await this.projectModel.findOne({ gitlabProjectId: glProject.id }).exec();
+        if (existing) {
+          await this.syncArchivedForGitLabScheduledDeletion(existing, glProject.path_with_namespace);
+        } else {
+          this.logger.verbose(
+            `Reconciliation: skipping GitLab project pending deletion "${glProject.path_with_namespace}"`,
+          );
+        }
         continue;
       }
 
@@ -1484,10 +1511,71 @@ export class ProjectsService implements OnApplicationBootstrap {
       backfilled++;
     }
 
+    const archivedFromRegistry = await this.archiveActiveProjectsPendingGitLabDeletion();
+
     this.logger.log(
-      backfilled > 0
-        ? `Reconciliation complete: ${backfilled} legacy project(s) backfilled`
+      backfilled > 0 || archivedFromRegistry > 0
+        ? `Reconciliation complete: ${backfilled} legacy project(s) backfilled, ` +
+            `${archivedFromRegistry} active registry row(s) archived (GitLab pending deletion)`
         : 'Reconciliation complete: no new legacy projects found',
+    );
+  }
+
+  /**
+   * Archives platform rows that are still "active" but GitLab has marked the project
+   * for deletion (including when the path was not renamed to *-deletion_scheduled-*).
+   */
+  private async archiveActiveProjectsPendingGitLabDeletion(): Promise<number> {
+    const activeDocs = await this.projectModel
+      .find({ archived: { $in: [false, null] } })
+      .exec();
+
+    let archived = 0;
+
+    for (const doc of activeDocs) {
+      let glProject;
+      try {
+        glProject = await this.gitlabService.getProject(doc.gitlabProjectId);
+      } catch {
+        continue;
+      }
+
+      if (!isGitLabProjectPendingDeletion(glProject)) {
+        continue;
+      }
+
+      await this.syncArchivedForGitLabScheduledDeletion(doc, glProject.path_with_namespace);
+      archived++;
+    }
+
+    return archived;
+  }
+
+  /**
+   * Marks an existing registry row archived when GitLab renamed the project for scheduled deletion.
+   * Updates gitlabPath to the current GitLab namespace so the Archived tab reflects reality.
+   */
+  private async syncArchivedForGitLabScheduledDeletion(
+    doc: ProjectDocument,
+    gitlabPath: string,
+  ): Promise<void> {
+    const parts = gitlabPath.split('/');
+    const projectSlug = parts.at(-1)!;
+    const groupPath = parts.slice(0, -1);
+
+    doc.archived = true;
+    doc.archivedAt = doc.archivedAt ?? new Date();
+    doc.archiveReason = 'gitlab_scheduled_for_deletion';
+    doc.gitlabDeleteError =
+      doc.gitlabDeleteError ??
+      'GitLab project is scheduled for deletion (pending instance retention)';
+    doc.gitlabPath = gitlabPath;
+    doc.groupPath = groupPath;
+    doc.projectSlug = projectSlug;
+    await doc.save();
+
+    this.logger.log(
+      `Reconciliation: archived pending-deletion project "${gitlabPath}" (mongo id=${String(doc._id)})`,
     );
   }
 }

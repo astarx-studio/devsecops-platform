@@ -75,18 +75,44 @@ describe('VaultService', () => {
     it('should DELETE the metadata path', async () => {
       deleteFn.mockReturnValueOnce(of(axiosResponse({})));
 
-      await service.deleteSecrets('projects/acme/webapp');
+      const ok = await service.deleteSecrets('projects/acme/webapp');
 
+      expect(ok).toBe(true);
       expect(deleteFn).toHaveBeenCalledWith(
         'http://vault:8200/v1/secret/metadata/projects/acme/webapp',
         { headers: { 'X-Vault-Token': 'test-vault-token' } },
       );
     });
 
-    it('should handle errors gracefully', async () => {
+    it('should return false on delete failure', async () => {
       deleteFn.mockReturnValueOnce(throwError(() => new Error('fail')));
 
-      await expect(service.deleteSecrets('bad')).resolves.toBeUndefined();
+      const ok = await service.deleteSecrets('bad');
+
+      expect(ok).toBe(false);
+    });
+  });
+
+  describe('deleteSecretsTree', () => {
+    it('should delete child env paths and base path', async () => {
+      getFn.mockReturnValueOnce(
+        of(axiosResponse({ data: { keys: ['dev/', 'stg/', 'sonar'] } })),
+      );
+      getFn.mockReturnValue(of(axiosResponse({ data: { keys: [] } })));
+      deleteFn.mockReturnValue(of(axiosResponse({})));
+
+      const result = await service.deleteSecretsTree('projects/acme/webapp');
+
+      expect(result.errors).toEqual([]);
+      expect(result.deleted).toBeGreaterThan(0);
+      expect(deleteFn).toHaveBeenCalledWith(
+        'http://vault:8200/v1/secret/metadata/projects/acme/webapp/dev',
+        expect.any(Object),
+      );
+      expect(deleteFn).toHaveBeenCalledWith(
+        'http://vault:8200/v1/secret/metadata/projects/acme/webapp',
+        expect.any(Object),
+      );
     });
   });
 });

@@ -4,6 +4,7 @@ import { ConfigService } from '@nestjs/config';
 import { firstValueFrom } from 'rxjs';
 
 import { AppConfiguration } from '../config';
+import { isGitLabProjectPendingDeletion } from './gitlab-project.util';
 
 export interface GitLabProject {
   id: number;
@@ -24,6 +25,17 @@ export interface GitLabProject {
     id: number;
     full_path: string;
   };
+  /** Set when the project is scheduled for deletion (path may be unchanged). */
+  marked_for_deletion_on?: string | null;
+  /** @deprecated Use marked_for_deletion_on */
+  marked_for_deletion_at?: string | null;
+}
+
+export interface GitLabListProjectsOptions {
+  /** When false, includes marked_for_deletion_* fields (default true for list). */
+  simple?: boolean;
+  /** Include projects pending deletion (admin token). */
+  includePendingDelete?: boolean;
 }
 
 export interface GitLabGroup {
@@ -157,19 +169,41 @@ export class GitLabService {
    * @param groupId - If provided, lists only projects in this group
    * @returns Array of GitLab projects
    */
-  async listProjects(groupId?: number): Promise<GitLabProject[]> {
+  async listProjects(
+    groupId?: number,
+    options?: GitLabListProjectsOptions,
+  ): Promise<GitLabProject[]> {
     const url = groupId
       ? `${this.baseUrl}/api/v4/groups/${groupId}/projects`
       : `${this.baseUrl}/api/v4/projects`;
 
+    const params: Record<string, boolean | number> = {
+      per_page: 100,
+      simple: options?.simple ?? true,
+    };
+    if (options?.includePendingDelete) {
+      params.include_pending_delete = true;
+    }
+
     const { data } = await firstValueFrom(
       this.httpService.get<GitLabProject[]>(url, {
         headers: this.headers,
-        params: { per_page: 100, simple: true },
+        params,
       }),
     );
 
     return data;
+  }
+
+  /**
+   * Lists all projects with fields required for startup reconciliation
+   * (deletion markers, pending-delete projects).
+   */
+  async listProjectsForReconciliation(): Promise<GitLabProject[]> {
+    return this.listProjects(undefined, {
+      simple: false,
+      includePendingDelete: true,
+    });
   }
 
   /**
@@ -704,12 +738,35 @@ export class GitLabService {
 
     try {
       await this.deleteProject(projectId);
-      return { ok: true };
     } catch (error: unknown) {
       const message =
         (error as { response?: { data?: { message?: string } } }).response?.data?.message ??
         (error as Error).message;
       this.logger.warn(`GitLab deleteProject(${projectId}) failed: ${message}`);
+      return { ok: false, message };
+    }
+
+    try {
+      const remaining = await this.getProject(projectId);
+      if (isGitLabProjectPendingDeletion(remaining)) {
+        return {
+          ok: false,
+          message:
+            'GitLab project is scheduled for deletion (pending instance retention). ' +
+            'Use force delete to purge registry and retry, or wait for GitLab to remove it.',
+        };
+      }
+      return {
+        ok: false,
+        message: `GitLab project ${projectId} still exists after delete request`,
+      };
+    } catch (error: unknown) {
+      const status = (error as { response?: { status?: number } }).response?.status;
+      if (status === 404) {
+        return { ok: true };
+      }
+      const message = (error as Error).message;
+      this.logger.warn(`GitLab post-delete check for ${projectId} failed: ${message}`);
       return { ok: false, message };
     }
   }
