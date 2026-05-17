@@ -1,0 +1,42 @@
+---
+description: Separate git-tracked stack config from local-only env fixes (.env, .vols, _local)
+alwaysApply: true
+---
+
+# Stack config vs local-only environment
+
+## Stack configuration (commit to git)
+
+Reproducible platform definition shared by all environments:
+
+- `docker-compose.yml`, `sample.env` (template only — never commit real `.env`)
+- `keycloak/realm-export.json` (applied on **first** Keycloak import only)
+- `postgres/init/`, `sonarqube/`, `bootstrap/`, `api/`, `configs/`, tracked `__DOCS__/`
+- One-shot compose services: `*-init`, `sonarqube-config-init`, `sonarqube-init`
+- Optional **maintainer** scripts (not required for normal `docker compose up`): e.g. `bootstrap/reset-sonarqube.sh`, `bootstrap/reset.sh`
+
+Greenfield path: copy `sample.env` → `.env`, then `make bootstrap` / `docker compose up -d`. Do not require machine-specific recovery scripts for first install.
+
+When changing stack behavior, update **both** code and docs (`__DOCS__/`, `99_maintainers/02_services.md` where relevant). Existing Keycloak realms need manual or scripted client patches documented in `__DOCS__/02_admin/09_sonarqube_sso.md` — `realm-export.json` does not re-apply.
+
+## Local-only (never commit)
+
+Per-developer or runtime state — **exclude from stack PRs**:
+
+| Path | Purpose |
+|------|---------|
+| `.env` | Secrets, domains (`SONARQUBE_DOMAIN`, passwords, tokens) |
+| `.vols/` | Postgres, GitLab, Sonar data, generated `sonar.properties`, bootstrap markers |
+| `_local/` | Gitignored tools (e.g. `_local/management-ui/`) — see `local-management-ui.mdc` |
+| Ad-hoc Keycloak Admin UI clicks | Live realm DB; document procedure, do not assume export re-import |
+
+Troubleshooting (reset Sonar, patch SAML client, rotate creds) belongs in **local ops** or optional bootstrap scripts, not in the default install path unless promoted intentionally to stack docs.
+
+## Management UI
+
+`_local/management-ui/` mirrors GraphQL in `api/` but is **not** part of the shipped stack. After API schema changes, update the local UI in the same session; do not add it to compose/CI unless explicitly requested.
+
+## Commits
+
+- One PR/commit theme per stack concern (API, Sonar ops, infra), not mixed with local recovery notes.
+- Do not stage `.env`, `.vols/`, or `_local/`.

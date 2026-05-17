@@ -443,6 +443,8 @@ Users authenticating via OIDC who belong to the Keycloak `admins` group automati
 3. `docker compose up -d` (full stack) or at minimum: `postgres` → `keycloak` → `sonarqube-config-init` → `sonarqube` → `sonarqube-init`.
 4. Confirm `docker compose ps -a` shows `sonarqube-config-init` and `sonarqube-init` **Exited (0)**.
 5. Run `make verify-sonar` or `sh scripts/verify-sonar-setup.sh` from the repo root (`make bootstrap` runs this automatically).
-6. DNS / tunnel: point `SONARQUBE_DOMAIN` at Traefik; sign in via SAML (no oauth2-proxy on Sonar).
+6. DNS / tunnel: point `SONARQUBE_DOMAIN` at Traefik; sign in via SAML (no oauth2-proxy on Sonar). For **existing** Keycloak installs, align the live `sonarqube` client with Sonar settings — see [SonarQube SSO](../02_admin/09_sonarqube_sso.md).
+
+**Optional maintainer reset (not part of normal install):** `make reset-sonarqube` wipes only Sonar DB/data and re-runs init; does not touch GitLab or Keycloak.
 
 **vs GitLab security templates:** GitLab SAST / Secret Detection / Container Scanning remain in the `test` stage for vulnerability report triage. Sonar adds maintainability, coverage, and quality gates — complementary, not a replacement.
