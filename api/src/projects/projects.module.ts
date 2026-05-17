@@ -4,6 +4,7 @@ import { MongooseModule } from '@nestjs/mongoose';
 import { ConfigsModule } from '../configs/configs.module';
 import { GitLabModule } from '../gitlab/gitlab.module';
 import { K8sModule } from '../k8s/k8s.module';
+import { SonarQubeModule } from '../sonarqube/sonarqube.module';
 import { TemplatesModule } from '../templates/templates.module';
 import { VaultModule } from '../vault/vault.module';
 import { ProjectsResolver } from './graphql/projects.resolver';
@@ -22,6 +23,7 @@ import { SlugService } from './slug.service';
     GitLabModule,
     VaultModule,
     K8sModule,
+    SonarQubeModule,
     TemplatesModule,
     ConfigsModule,
   ],

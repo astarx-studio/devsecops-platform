@@ -9,9 +9,26 @@ import { ConfigsService } from '../../configs/configs.service';
 import { TemplatesService } from '../../templates/templates.service';
 import { SlugService } from '../slug.service';
 import { ProjectsService } from '../projects.service';
-import { Env } from './enums';
-import { CreateProjectInput, ProjectFilterInput, UpdateProjectSonarConfigInput } from './project.inputs';
-import { ConfigType, ProjectSonarType, ProjectType, SonarGatePolicyType, TemplateType } from './project.type';
+import { DeleteProjectOutcome, Env } from './enums';
+import {
+  CreateProjectInput,
+  ProjectFilterInput,
+  RegisterGitLabProjectInput,
+  UpdateProjectSonarConfigInput,
+  UpsertDeploymentTargetInput,
+} from './project.inputs';
+import {
+  ConfigType,
+  DeleteProjectResultType,
+  DeploymentTargetType,
+  ProjectSonarType,
+  ProjectType,
+  SonarBranchProvisionType,
+  SonarGatePolicyType,
+  TemplateType,
+} from './project.type';
+import { ensureDeploymentTargets } from '../deploy/deploy-target.util';
+import { buildSonarProjectKey } from '../sonar/sonar-project-key.util';
 import { isSonarEnabled, resolveSonarGatePolicy } from '../sonar/sonar.types';
 
 import type { ProjectDocument } from '../schemas/project.schema';
@@ -24,7 +41,7 @@ function mapSonar(doc: ProjectDocument, dashboardBaseUrl?: string): ProjectSonar
   const firstBranch = doc.sonar!.allowedBranches[0];
   const dashboardUrl =
     dashboardBaseUrl && firstBranch
-      ? `${dashboardBaseUrl}/dashboard?id=${encodeURIComponent(`${doc.effectiveSlug}_${firstBranch.replaceAll(/[^a-zA-Z0-9_-]/g, '_')}`)}`
+      ? `${dashboardBaseUrl}/dashboard?id=${encodeURIComponent(buildSonarProjectKey(doc.gitlabPath, firstBranch))}`
       : undefined;
 
   return {
@@ -38,7 +55,35 @@ function mapSonar(doc: ProjectDocument, dashboardBaseUrl?: string): ProjectSonar
  * Maps a Mongoose ProjectDocument to the GraphQL ProjectType.
  * Handles the `id` ← `_id` conversion and enum coercion.
  */
-function mapProject(doc: ProjectDocument, sonarPublicUrl?: string): ProjectType {
+function mapDeploymentTargets(
+  doc: ProjectDocument,
+  appsDomain: string,
+): DeploymentTargetType[] {
+  return ensureDeploymentTargets(
+    {
+      deploymentTargets: doc.deploymentTargets,
+      effectiveSlug: doc.effectiveSlug,
+      capabilities: doc.capabilities,
+      appHosts: doc.appHosts,
+      hostnameOverrides: doc.hostnameOverrides,
+    },
+    appsDomain,
+  ).map((t) => ({
+    key: t.key,
+    kubeNamespace: t.kubeNamespace,
+    clusterProfile: t.clusterProfile as DeploymentTargetType['clusterProfile'],
+    appHost: t.appHost,
+    deployRef: t.deployRef,
+    enabled: t.enabled,
+    gitlabEnvironment: t.gitlabEnvironment,
+  }));
+}
+
+function mapProject(
+  doc: ProjectDocument,
+  sonarPublicUrl?: string,
+  appsDomain?: string,
+): ProjectType {
   return {
     id: String(doc._id),
     gitlabProjectId: doc.gitlabProjectId,
@@ -56,6 +101,7 @@ function mapProject(doc: ProjectDocument, sonarPublicUrl?: string): ProjectType 
       stg: doc.appHosts?.stg,
       prod: doc.appHosts?.prod,
     },
+    deploymentTargets: appsDomain ? mapDeploymentTargets(doc, appsDomain) : [],
     capabilities: {
       deployable: doc.capabilities?.deployable ?? false,
       publishable: doc.capabilities?.publishable ?? false,
@@ -63,6 +109,10 @@ function mapProject(doc: ProjectDocument, sonarPublicUrl?: string): ProjectType 
     sonar: mapSonar(doc, sonarPublicUrl),
     legacyV1: doc.legacyV1,
     pinnedV1: doc.pinnedV1,
+    archived: doc.archived ?? false,
+    archivedAt: doc.archivedAt,
+    archiveReason: doc.archiveReason,
+    gitlabDeleteError: doc.gitlabDeleteError,
     createdAt: doc.createdAt!,
     updatedAt: doc.updatedAt!,
   };
@@ -76,6 +126,7 @@ function mapProject(doc: ProjectDocument, sonarPublicUrl?: string): ProjectType 
 @Resolver(() => ProjectType)
 export class ProjectsResolver {
   private readonly sonarPublicUrl: string;
+  private readonly appsDomain: string;
 
   constructor(
     private readonly projectsService: ProjectsService,
@@ -85,10 +136,11 @@ export class ProjectsResolver {
     configService: ConfigService<AppConfiguration>,
   ) {
     this.sonarPublicUrl = configService.get<string>('sonarqube.publicUrl', { infer: true })!;
+    this.appsDomain = configService.get<string>('appsDomain', { infer: true })!;
   }
 
   private mapDoc(doc: ProjectDocument): ProjectType {
-    return mapProject(doc, this.sonarPublicUrl);
+    return mapProject(doc, this.sonarPublicUrl, this.appsDomain);
   }
 
   // ---------------------------------------------------------------------------
@@ -189,12 +241,115 @@ export class ProjectsResolver {
     return this.mapDoc(doc);
   }
 
+  @Mutation(() => [SonarBranchProvisionType], {
+    description:
+      'Creates SonarQube analysis projects for the given Git branches (idempotent). ' +
+      'Project keys match the Auto DevOps pipeline. Optionally updates SONAR_ALLOWED_BRANCHES.',
+  })
+  async provisionSonarProjects(
+    @Args('id', { type: () => ID }) id: string,
+    @Args('branches', { type: () => [String] }) branches: string[],
+    @Args('addToAllowedBranches', {
+      type: () => Boolean,
+      nullable: true,
+      defaultValue: true,
+      description:
+        'When true (default), merges branches into the project Sonar allowlist and syncs GitLab CI variables.',
+    })
+    addToAllowedBranches?: boolean,
+  ): Promise<SonarBranchProvisionType[]> {
+    return this.projectsService.provisionSonarProjects(
+      id,
+      branches,
+      addToAllowedBranches ?? true,
+    );
+  }
+
   @Mutation(() => Boolean, {
     description:
-      'Deletes a project: removes the GitLab project, Vault secrets, and MongoDB record.',
+      'Deletes SonarQube analysis projects for the given branches (best-effort). Does not remove GitLab SONAR_TOKEN.',
   })
-  async deleteProject(@Args('id', { type: () => ID }) id: string): Promise<boolean> {
-    return this.projectsService.deleteProject(id);
+  async deleteSonarProjects(
+    @Args('id', { type: () => ID }) id: string,
+    @Args('branches', { type: () => [String] }) branches: string[],
+  ): Promise<boolean> {
+    await this.projectsService.deleteSonarProjects(id, branches);
+    return true;
+  }
+
+  @Mutation(() => ProjectType, {
+    description:
+      'Registers an existing GitLab project by numeric ID with optional deployment wiring.',
+  })
+  async registerGitLabProject(
+    @Args('input') input: RegisterGitLabProjectInput,
+  ): Promise<ProjectType> {
+    const doc = await this.projectsService.registerGitLabProject(input);
+    return this.mapDoc(doc);
+  }
+
+  @Mutation(() => ProjectType, {
+    description: 'Creates or updates a named deployment target (dev, prod-alt, etc.).',
+  })
+  async upsertDeploymentTarget(
+    @Args('id', { type: () => ID }) id: string,
+    @Args('input') input: UpsertDeploymentTargetInput,
+  ): Promise<ProjectType> {
+    const doc = await this.projectsService.upsertDeploymentTarget(id, input);
+    return this.mapDoc(doc);
+  }
+
+  @Mutation(() => ProjectType, {
+    description: 'Removes a deployment target and tears down its K8s resources.',
+  })
+  async removeDeploymentTarget(
+    @Args('id', { type: () => ID }) id: string,
+    @Args('targetKey') targetKey: string,
+    @Args('teardownK8s', { nullable: true, defaultValue: true }) teardownK8s: boolean,
+  ): Promise<ProjectType> {
+    const doc = await this.projectsService.removeDeploymentTarget(id, targetKey, teardownK8s);
+    return this.mapDoc(doc);
+  }
+
+  @Mutation(() => ProjectType, {
+    description: 'Overrides the application hostname for a deployment target.',
+  })
+  async setDeploymentTargetHostname(
+    @Args('id', { type: () => ID }) id: string,
+    @Args('targetKey') targetKey: string,
+    @Args('hostname') hostname: string,
+  ): Promise<ProjectType> {
+    const doc = await this.projectsService.setDeploymentTargetHostname(id, targetKey, hostname);
+    return this.mapDoc(doc);
+  }
+
+  @Mutation(() => DeleteProjectResultType, {
+    description:
+      'Unregisters a project: tears down K8s/Vault/Sonar, then deletes GitLab. ' +
+      'When GitLab delete fails, archives the registry entry unless forceGitLabDelete purges artifacts first.',
+  })
+  async deleteProject(
+    @Args('id', { type: () => ID }) id: string,
+    @Args('forceGitLabDelete', {
+      type: () => Boolean,
+      nullable: true,
+      defaultValue: false,
+      description: 'Purge container registry and packages before GitLab project delete.',
+    })
+    forceGitLabDelete?: boolean,
+  ): Promise<DeleteProjectResultType> {
+    const result = await this.projectsService.deleteProject(id, {
+      forceGitLabDelete: forceGitLabDelete ?? false,
+    });
+
+    return {
+      outcome:
+        result.outcome === 'deleted'
+          ? DeleteProjectOutcome.DELETED
+          : DeleteProjectOutcome.ARCHIVED,
+      message: result.message,
+      project: result.project ? this.mapDoc(result.project) : undefined,
+    };
   }
 
   @Mutation(() => ProjectType, {

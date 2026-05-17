@@ -49,3 +49,28 @@ registerEnumType(SonarGateMode, {
   name: 'SonarGateMode',
   description: 'Whether a failed Sonar Quality Gate fails the CI job for that deploy tier.',
 });
+
+/**
+ * Cluster profile — selects which platform kubeconfig connects to a deployment target.
+ */
+export enum ClusterProfile {
+  DEV = 'dev',
+  STG = 'stg',
+  PROD = 'prod',
+}
+
+registerEnumType(ClusterProfile, {
+  name: 'ClusterProfile',
+  description: 'Platform kubeconfig profile (dev, stg, prod clusters).',
+});
+
+/** Outcome of deleteProject — removed from registry or archived when GitLab delete fails. */
+export enum DeleteProjectOutcome {
+  DELETED = 'deleted',
+  ARCHIVED = 'archived',
+}
+
+registerEnumType(DeleteProjectOutcome, {
+  name: 'DeleteProjectOutcome',
+  description: 'Whether deleteProject fully removed the project or archived it for retry.',
+});

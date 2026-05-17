@@ -12,6 +12,7 @@ Here's what's covered:
 - **[Secrets](04_secrets.md)** — How to access environment variables and sensitive values in your pipelines.
 - **[Deployments](05_deployments.md)** — What happens after a successful build and what's supported today.
 - **[Manual onboarding](06_manual_onboarding.md)** — Opt an existing repository into deployment without going through the Management API.
+- **[Monorepo / multi-app CI](07_monorepo_multi_app_ci.md)** — Multiple Docker images and shared test/Sonar in one GitLab project (e.g. datahub-fe admin + satudata).
 
 ---
 

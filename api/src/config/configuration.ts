@@ -76,6 +76,10 @@ export interface AppConfiguration {
     publicUrl: string;
     /** In-cluster scanner URL for GitLab Runner jobs on devops-network. */
     internalUrl: string;
+    /** Admin user for Web API provisioning (SONAR_ADMIN_USER). */
+    adminUser?: string;
+    /** Admin password for Web API provisioning (SONAR_ADMIN_PASSWORD). */
+    adminPassword?: string;
   };
 }
 
@@ -142,6 +146,8 @@ const configuration = (): AppConfiguration => {
         optional('SONARQUBE_EXTERNAL_URL') ??
         `https://sonarqube.devops.${domain}`,
       internalUrl: optional('SONARQUBE_INTERNAL_URL') ?? 'http://sonarqube:9000',
+      adminUser: optional('SONAR_ADMIN_USER'),
+      adminPassword: optional('SONAR_ADMIN_PASSWORD'),
     },
   };
 };

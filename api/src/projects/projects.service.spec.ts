@@ -1,5 +1,6 @@
 import { ConflictException, NotFoundException } from '@nestjs/common';
 
+import { SonarQubeService } from '../sonarqube/sonarqube.service';
 import { ProjectsService } from './projects.service';
 import { GitLabService } from '../gitlab/gitlab.service';
 import { K8sService } from '../k8s/k8s.service';
@@ -79,6 +80,8 @@ describe('ProjectsService', () => {
   let deleteSecretsFn: jest.Mock;
   let ensureNamespaceFn: jest.Mock;
   let getKubeconfigB64Fn: jest.Mock;
+  let teardownProjectTargetsFn: jest.Mock;
+  let tryDeleteProjectFn: jest.Mock;
   let slugResolveFn: jest.Mock;
   let slugIsAvailableFn: jest.Mock;
 
@@ -86,6 +89,10 @@ describe('ProjectsService', () => {
   let vaultService: jest.Mocked<VaultService>;
   let k8sService: jest.Mocked<K8sService>;
   let slugService: jest.Mocked<SlugService>;
+  let sonarQubeService: jest.Mocked<SonarQubeService>;
+  let ensureSonarProjectFn: jest.Mock;
+  let generateGlobalAnalysisTokenFn: jest.Mock;
+  let readSecretsFn: jest.Mock;
 
   beforeEach(() => {
     projectModel = createMockModel();
@@ -103,6 +110,8 @@ describe('ProjectsService', () => {
     deleteSecretsFn = jest.fn().mockResolvedValue(undefined);
     ensureNamespaceFn = jest.fn().mockResolvedValue(undefined);
     getKubeconfigB64Fn = jest.fn().mockReturnValue('base64-kubeconfig');
+    teardownProjectTargetsFn = jest.fn().mockResolvedValue(undefined);
+    tryDeleteProjectFn = jest.fn().mockResolvedValue({ ok: true });
     slugResolveFn = jest.fn().mockImplementation((requested: string) => Promise.resolve(requested));
     slugIsAvailableFn = jest.fn().mockResolvedValue(true);
 
@@ -114,25 +123,40 @@ describe('ProjectsService', () => {
       triggerPipeline: triggerPipelineFn,
       listProjects: listProjectsFn,
       deleteProject: deleteProjectFn,
+      tryDeleteProject: tryDeleteProjectFn,
       setProjectCiVariables: setProjectCiVariablesFn,
       templateGroup: 10,
       configGroup: 20,
     } as unknown as jest.Mocked<GitLabService>;
 
+    readSecretsFn = jest.fn().mockResolvedValue({});
     vaultService = {
       writeSecrets: writeSecretsFn,
+      readSecrets: readSecretsFn,
       deleteSecrets: deleteSecretsFn,
     } as unknown as jest.Mocked<VaultService>;
 
     k8sService = {
       ensureNamespace: ensureNamespaceFn,
       getKubeconfigB64: getKubeconfigB64Fn,
+      teardownProjectTargets: teardownProjectTargetsFn,
     } as unknown as jest.Mocked<K8sService>;
 
     slugService = {
       resolve: slugResolveFn,
       isAvailable: slugIsAvailableFn,
     } as unknown as jest.Mocked<SlugService>;
+
+    ensureSonarProjectFn = jest
+      .fn()
+      .mockResolvedValue({ projectKey: 'clients-acme-repo_main', created: true });
+    generateGlobalAnalysisTokenFn = jest.fn().mockResolvedValue('sqp_generated');
+    sonarQubeService = {
+      ensureProject: ensureSonarProjectFn,
+      deleteProject: jest.fn().mockResolvedValue(undefined),
+      generateGlobalAnalysisToken: generateGlobalAnalysisTokenFn,
+      isConfigured: jest.fn().mockReturnValue(true),
+    } as unknown as jest.Mocked<SonarQubeService>;
 
     service = new ProjectsService(
       projectModel as never,
@@ -141,6 +165,7 @@ describe('ProjectsService', () => {
       vaultService,
       k8sService,
       slugService,
+      sonarQubeService,
       createMockConfigService(),
     );
   });
@@ -398,7 +423,9 @@ describe('ProjectsService', () => {
         gitlabProjectId: 42,
         gitlabPath: 'groupa/repoa',
         effectiveSlug: 'repoa',
+        helmReleaseName: 'repoa',
         vaultBasePath: 'projects/groupa/repoa',
+        capabilities: { deployable: true, publishable: false },
         save: jest.fn(),
         deleteOne: jest.fn().mockResolvedValue(undefined),
       };
@@ -406,10 +433,57 @@ describe('ProjectsService', () => {
 
       const result = await service.deleteProject('abc');
 
-      expect(deleteProjectFn).toHaveBeenCalledWith(42);
+      expect(teardownProjectTargetsFn).toHaveBeenCalledWith('repoa', expect.any(Array));
+      expect(tryDeleteProjectFn).toHaveBeenCalledWith(42, { force: false });
       expect(deleteSecretsFn).toHaveBeenCalledWith('projects/groupa/repoa');
       expect(mockDoc.deleteOne).toHaveBeenCalled();
-      expect(result).toBe(true);
+      expect(result.outcome).toBe('deleted');
+    });
+
+    it('should archive when GitLab delete fails', async () => {
+      tryDeleteProjectFn.mockResolvedValueOnce({ ok: false, message: 'registry in use' });
+      const mockDoc = {
+        _id: 'abc',
+        gitlabProjectId: 42,
+        gitlabPath: 'groupa/repoa',
+        effectiveSlug: 'repoa',
+        helmReleaseName: 'repoa',
+        vaultBasePath: 'projects/groupa/repoa',
+        capabilities: { deployable: false, publishable: false },
+        archived: false,
+        save: jest.fn().mockResolvedValue(undefined),
+        deleteOne: jest.fn(),
+      };
+      projectModel.findById.mockReturnValue({ exec: jest.fn().mockResolvedValue(mockDoc) });
+
+      const result = await service.deleteProject('abc');
+
+      expect(result.outcome).toBe('archived');
+      expect(mockDoc.archived).toBe(true);
+      expect(mockDoc.save).toHaveBeenCalled();
+      expect(mockDoc.deleteOne).not.toHaveBeenCalled();
+    });
+
+    it('should purge registry when forceGitLabDelete is set', async () => {
+      const mockDoc = {
+        _id: 'abc',
+        gitlabProjectId: 42,
+        gitlabPath: 'groupa/repoa',
+        effectiveSlug: 'repoa',
+        helmReleaseName: 'repoa',
+        vaultBasePath: 'projects/groupa/repoa',
+        capabilities: { deployable: false, publishable: false },
+        archived: true,
+        save: jest.fn(),
+        deleteOne: jest.fn().mockResolvedValue(undefined),
+      };
+      projectModel.findById.mockReturnValue({ exec: jest.fn().mockResolvedValue(mockDoc) });
+
+      const result = await service.deleteProject('abc', { forceGitLabDelete: true });
+
+      expect(tryDeleteProjectFn).toHaveBeenCalledWith(42, { force: true });
+      expect(teardownProjectTargetsFn).not.toHaveBeenCalled();
+      expect(result.outcome).toBe('deleted');
     });
 
     it('should continue when Vault deletion fails (non-critical)', async () => {
@@ -418,7 +492,9 @@ describe('ProjectsService', () => {
         gitlabProjectId: 42,
         gitlabPath: 'groupa/repoa',
         effectiveSlug: 'repoa',
+        helmReleaseName: 'repoa',
         vaultBasePath: 'projects/groupa/repoa',
+        capabilities: { deployable: false, publishable: false },
         save: jest.fn(),
         deleteOne: jest.fn().mockResolvedValue(undefined),
       };
@@ -427,8 +503,47 @@ describe('ProjectsService', () => {
 
       const result = await service.deleteProject('abc');
 
-      expect(result).toBe(true);
-      expect(deleteProjectFn).toHaveBeenCalled();
+      expect(result.outcome).toBe('deleted');
+      expect(tryDeleteProjectFn).toHaveBeenCalled();
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // provisionSonarProjects
+  // ---------------------------------------------------------------------------
+
+  describe('provisionSonarProjects', () => {
+    it('should create Sonar projects and sync allowed branches', async () => {
+      const saveFn = jest.fn().mockResolvedValue(undefined);
+      const mockDoc = {
+        _id: 'abc',
+        gitlabProjectId: 42,
+        gitlabPath: 'clients/acme/repo',
+        projectSlug: 'repo',
+        displayName: 'Repo',
+        effectiveSlug: 'repo',
+        vaultBasePath: 'projects/clients/acme/repo',
+        sonar: undefined,
+        save: saveFn,
+        deleteOne: jest.fn(),
+      };
+      projectModel.findById.mockReturnValue({ exec: jest.fn().mockResolvedValue(mockDoc) });
+      ensureSonarProjectFn.mockResolvedValue({
+        projectKey: 'clients-acme-repo_main',
+        created: true,
+      });
+
+      const results = await service.provisionSonarProjects('abc', ['main', 'staging']);
+
+      expect(results).toHaveLength(2);
+      expect(ensureSonarProjectFn).toHaveBeenCalledTimes(2);
+      expect(saveFn).toHaveBeenCalled();
+      expect(generateGlobalAnalysisTokenFn).toHaveBeenCalled();
+      expect(writeSecretsFn).toHaveBeenCalledWith('projects/clients/acme/repo/sonar', {
+        SONAR_TOKEN: 'sqp_generated',
+      });
+      expect(setProjectCiVariablesFn).toHaveBeenCalled();
+      expect(mockDoc.sonar?.allowedBranches).toEqual(expect.arrayContaining(['main', 'staging']));
     });
   });
 

@@ -1,6 +1,6 @@
 import { Field, ID, Int, ObjectType } from '@nestjs/graphql';
 
-import { Provisioning, SonarGateMode } from './enums';
+import { ClusterProfile, DeleteProjectOutcome, Provisioning, SonarGateMode } from './enums';
 
 /**
  * GraphQL ObjectType: per-environment hostname map.
@@ -16,6 +16,33 @@ export class AppHostsType {
 
   @Field(() => String, { nullable: true, description: 'Production environment hostname.' })
   prod?: string;
+}
+
+@ObjectType({ description: 'A named deployment target (dev, stg, prod, or custom e.g. prod-alt).' })
+export class DeploymentTargetType {
+  @Field(() => String, { description: 'Target key (DNS label).' })
+  key!: string;
+
+  @Field(() => String, { description: 'Kubernetes namespace for Helm.' })
+  kubeNamespace!: string;
+
+  @Field(() => ClusterProfile, { description: 'Platform kubeconfig profile.' })
+  clusterProfile!: ClusterProfile;
+
+  @Field(() => String, { description: 'Ingress hostname.' })
+  appHost!: string;
+
+  @Field(() => String, { description: 'Branch ref that triggers deploy, or "none" when disabled.' })
+  deployRef!: string;
+
+  @Field(() => Boolean, { description: 'Whether this target is actively deployable.' })
+  enabled!: boolean;
+
+  @Field(() => String, {
+    nullable: true,
+    description: 'GitLab CI environment_scope for env-scoped variables.',
+  })
+  gitlabEnvironment?: string;
 }
 
 /**
@@ -45,6 +72,26 @@ export class SonarGatePolicyType {
 
   @Field(() => SonarGateMode, { nullable: true })
   other?: SonarGateMode;
+}
+
+@ObjectType({ description: 'Result of provisioning one Sonar project for a Git branch.' })
+export class SonarBranchProvisionType {
+  @Field(() => String, { description: 'Git branch name.' })
+  branch!: string;
+
+  @Field(() => String, { description: 'Sonar project key (matches CI sonar-scanner).' })
+  projectKey!: string;
+
+  @Field(() => String, { description: 'Display name in SonarQube.' })
+  projectName!: string;
+
+  @Field(() => Boolean, {
+    description: 'True when the Sonar project was created; false if it already existed.',
+  })
+  created!: boolean;
+
+  @Field(() => String, { description: 'Public dashboard URL for this branch analysis project.' })
+  dashboardUrl!: string;
 }
 
 @ObjectType({ description: 'SonarQube opt-in configuration for a project.' })
@@ -120,8 +167,15 @@ export class ProjectType {
   })
   helmReleaseName!: string;
 
-  @Field(() => AppHostsType, { description: 'Computed application hostnames per environment.' })
+  @Field(() => AppHostsType, {
+    description: 'Legacy hostname map (dev/stg/prod) derived from deploymentTargets.',
+  })
   appHosts!: AppHostsType;
+
+  @Field(() => [DeploymentTargetType], {
+    description: 'Named deployment targets and their CI/K8s wiring.',
+  })
+  deploymentTargets!: DeploymentTargetType[];
 
   @Field(() => CapabilitiesType, { description: 'Capability flags.' })
   capabilities!: CapabilitiesType;
@@ -142,11 +196,54 @@ export class ProjectType {
   })
   pinnedV1!: boolean;
 
+  @Field(() => Boolean, {
+    description:
+      'True when platform cleanup ran but GitLab project could not be deleted (dangling repo).',
+  })
+  archived!: boolean;
+
+  @Field(() => Date, {
+    nullable: true,
+    description: 'When the project was archived after failed GitLab deletion.',
+  })
+  archivedAt?: Date;
+
+  @Field(() => String, {
+    nullable: true,
+    description: 'Machine-readable archive reason (e.g. gitlab_delete_failed).',
+  })
+  archiveReason?: string;
+
+  @Field(() => String, {
+    nullable: true,
+    description: 'Last GitLab delete error when archived.',
+  })
+  gitlabDeleteError?: string;
+
   @Field(() => Date, { description: 'Provisioning timestamp.' })
   createdAt!: Date;
 
   @Field(() => Date, { description: 'Last modification timestamp.' })
   updatedAt!: Date;
+}
+
+/** Result of deleteProject — full removal or archived for operator retry. */
+@ObjectType({ description: 'Outcome of deleteProject mutation.' })
+export class DeleteProjectResultType {
+  @Field(() => DeleteProjectOutcome)
+  outcome!: DeleteProjectOutcome;
+
+  @Field(() => String, {
+    nullable: true,
+    description: 'Human-readable detail (e.g. GitLab error when archived).',
+  })
+  message?: string;
+
+  @Field(() => ProjectType, {
+    nullable: true,
+    description: 'Present when outcome is archived — the dangling registry entry.',
+  })
+  project?: ProjectType;
 }
 
 /**

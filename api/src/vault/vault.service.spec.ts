@@ -17,15 +17,22 @@ describe('VaultService', () => {
    * Standalone mock function references — avoids @typescript-eslint/unbound-method
    * when these are passed to `expect()`.
    */
+  let getFn: jest.Mock;
   let postFn: jest.Mock;
   let deleteFn: jest.Mock;
 
   beforeEach(() => {
+    getFn = jest.fn();
     postFn = jest.fn();
     deleteFn = jest.fn();
 
     service = new VaultService(
-      { get: jest.fn(), post: postFn, put: jest.fn(), delete: deleteFn } as unknown as HttpService,
+      {
+        get: getFn,
+        post: postFn,
+        put: jest.fn(),
+        delete: deleteFn,
+      } as unknown as HttpService,
       createMockConfigService(),
     );
   });
@@ -41,6 +48,26 @@ describe('VaultService', () => {
         { data: { DB_URL: 'pg://...' } },
         { headers: { 'X-Vault-Token': 'test-vault-token' } },
       );
+    });
+  });
+
+  describe('readSecrets', () => {
+    it('should return data from KV v2 read', async () => {
+      getFn.mockReturnValueOnce(
+        of(axiosResponse({ data: { data: { SONAR_TOKEN: 'sqp_test' } } })),
+      );
+
+      const secrets = await service.readSecrets('projects/acme/webapp/sonar');
+
+      expect(secrets).toEqual({ SONAR_TOKEN: 'sqp_test' });
+    });
+
+    it('should return empty object on 404', async () => {
+      getFn.mockReturnValueOnce(throwError(() => ({ response: { status: 404 } })));
+
+      const secrets = await service.readSecrets('missing');
+
+      expect(secrets).toEqual({});
     });
   });
 

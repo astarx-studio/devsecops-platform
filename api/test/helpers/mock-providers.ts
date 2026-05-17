@@ -32,6 +32,8 @@ const TEST_CONFIG: Record<string, unknown> = {
   'oidc.audience': undefined,
   'sonarqube.publicUrl': 'https://sonarqube.devops.test.net',
   'sonarqube.internalUrl': 'http://sonarqube:9000',
+  'sonarqube.adminUser': 'admin',
+  'sonarqube.adminPassword': 'test-sonar-admin',
 };
 
 export function createMockConfigService(

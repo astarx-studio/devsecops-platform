@@ -1,6 +1,6 @@
 import GraphQLJSON from 'graphql-type-json';
 
-import { Field, InputType } from '@nestjs/graphql';
+import { Field, InputType, Int } from '@nestjs/graphql';
 import { Type } from 'class-transformer';
 import {
   IsArray,
@@ -16,7 +16,7 @@ import {
   ValidateNested,
 } from 'class-validator';
 
-import { Provisioning, SonarGateMode } from './enums';
+import { ClusterProfile, Provisioning, SonarGateMode } from './enums';
 
 /** Slug validation pattern: lowercase alphanumeric with internal hyphens. */
 const SLUG_PATTERN = /^[a-z0-9][a-z0-9-]*[a-z0-9]$|^[a-z0-9]$/;
@@ -229,6 +229,159 @@ export class CreateProjectInput {
   @Type(() => UpdateProjectSonarConfigInput)
   @IsOptional()
   sonar?: UpdateProjectSonarConfigInput;
+
+  @Field(() => [DeploymentTargetInput], {
+    nullable: true,
+    description:
+      'Optional deployment targets at create time. Defaults to dev/stg/prod when deployable.',
+  })
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => DeploymentTargetInput)
+  @IsOptional()
+  deploymentTargets?: DeploymentTargetInput[];
+}
+
+@InputType({ description: 'Deployment target definition for create/register.' })
+export class DeploymentTargetInput {
+  @Field(() => String, { description: 'Target key (e.g. dev, prod-alt).' })
+  @IsString()
+  @IsNotEmpty()
+  @Matches(SLUG_PATTERN, { message: `key ${SLUG_MESSAGE}` })
+  key!: string;
+
+  @Field(() => String, { nullable: true, description: 'K8s namespace (defaults to key).' })
+  @IsString()
+  @IsOptional()
+  kubeNamespace?: string;
+
+  @Field(() => ClusterProfile, {
+    nullable: true,
+    description: 'Kubeconfig profile (required for non-standard keys if not inferrable).',
+  })
+  @IsEnum(ClusterProfile)
+  @IsOptional()
+  clusterProfile?: ClusterProfile;
+
+  @Field(() => String, { nullable: true, description: 'Ingress hostname (computed if omitted).' })
+  @IsString()
+  @IsOptional()
+  appHost?: string;
+
+  @Field(() => String, { nullable: true, description: 'Branch ref (standard defaults for dev/stg/prod).' })
+  @IsString()
+  @IsOptional()
+  deployRef?: string;
+
+  @Field(() => Boolean, { nullable: true, defaultValue: true })
+  @IsBoolean()
+  @IsOptional()
+  enabled?: boolean;
+}
+
+@InputType({ description: 'Adopt an existing GitLab project into the platform registry.' })
+export class RegisterGitLabProjectInput {
+  @Field(() => Int, { description: 'Existing GitLab numeric project ID.' })
+  gitlabProjectId!: number;
+
+  @Field(() => [String], {
+    nullable: true,
+    description: 'Override group path segments (derived from GitLab path if omitted).',
+  })
+  @IsArray()
+  @IsString({ each: true })
+  @IsOptional()
+  groupPath?: string[];
+
+  @Field(() => String, { nullable: true, description: 'Override project slug (derived if omitted).' })
+  @IsString()
+  @IsOptional()
+  @Matches(SLUG_PATTERN, { message: `projectSlug ${SLUG_MESSAGE}` })
+  projectSlug?: string;
+
+  @Field(() => String, { nullable: true })
+  @IsString()
+  @IsOptional()
+  displayName?: string;
+
+  @Field(() => Provisioning, { nullable: true, defaultValue: Provisioning.AUTO_DEVOPS })
+  @IsEnum(Provisioning)
+  @IsOptional()
+  provisioning?: Provisioning;
+
+  @Field(() => CapabilitiesInput, { nullable: true })
+  @ValidateNested()
+  @Type(() => CapabilitiesInput)
+  @IsOptional()
+  capabilities?: CapabilitiesInput;
+
+  @Field(() => [DeploymentTargetInput], { nullable: true })
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => DeploymentTargetInput)
+  @IsOptional()
+  deploymentTargets?: DeploymentTargetInput[];
+
+  @Field(() => GraphQLJSON, { nullable: true })
+  @IsObject()
+  @IsOptional()
+  envVars?: Record<string, string>;
+
+  @Field(() => EnvScopedVarsInput, { nullable: true })
+  @ValidateNested()
+  @Type(() => EnvScopedVarsInput)
+  @IsOptional()
+  envScopedVars?: EnvScopedVarsInput;
+
+  @Field(() => String, { nullable: true })
+  @IsString()
+  @IsOptional()
+  @Matches(SLUG_PATTERN, { message: `slugOverride ${SLUG_MESSAGE}` })
+  slugOverride?: string;
+
+  @Field(() => UpdateProjectSonarConfigInput, { nullable: true })
+  @ValidateNested()
+  @Type(() => UpdateProjectSonarConfigInput)
+  @IsOptional()
+  sonar?: UpdateProjectSonarConfigInput;
+}
+
+@InputType({ description: 'Create or update a deployment target on an existing project.' })
+export class UpsertDeploymentTargetInput {
+  @Field(() => String, { description: 'Target key.' })
+  @IsString()
+  @IsNotEmpty()
+  @Matches(SLUG_PATTERN, { message: `targetKey ${SLUG_MESSAGE}` })
+  targetKey!: string;
+
+  @Field(() => Boolean, { description: 'Enable or disable this target.' })
+  @IsBoolean()
+  enabled!: boolean;
+
+  @Field(() => String, { nullable: true, description: 'Branch ref when enabling (not none).' })
+  @IsString()
+  @IsOptional()
+  deployRef?: string;
+
+  @Field(() => String, { nullable: true })
+  @IsString()
+  @IsOptional()
+  appHost?: string;
+
+  @Field(() => String, { nullable: true })
+  @IsString()
+  @IsOptional()
+  kubeNamespace?: string;
+
+  @Field(() => ClusterProfile, { nullable: true })
+  @IsEnum(ClusterProfile)
+  @IsOptional()
+  clusterProfile?: ClusterProfile;
+
+  @Field(() => Boolean, { nullable: true, defaultValue: true })
+  @IsBoolean()
+  @IsOptional()
+  teardownK8sOnDisable?: boolean;
 }
 
 /**
@@ -260,4 +413,13 @@ export class ProjectFilterInput {
   @IsBoolean()
   @IsOptional()
   pinnedV1?: boolean;
+
+  @Field(() => Boolean, {
+    nullable: true,
+    description:
+      'When true, return only archived (dangling) projects. When false, active projects only.',
+  })
+  @IsBoolean()
+  @IsOptional()
+  archived?: boolean;
 }

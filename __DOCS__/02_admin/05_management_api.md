@@ -46,7 +46,7 @@ Authorization: Bearer <token>
 
 Use Apollo-compatible clients against **`POST /graphql`**. The schema is code-first from the NestJS module under `api/src/projects/graphql/`.
 
-**Primary mutations** include `createProject`, `deleteProject`, `migrateProjectToAutoDevops`, hostname overrides, and audit queries. Inputs mirror the old REST body (client/group slugs, template, capabilities, optional configs).
+**Primary mutations** include `createProject`, `registerGitLabProject`, `upsertDeploymentTarget`, `removeDeploymentTarget`, `setDeploymentTargetHostname`, `deleteProject`, `migrateProjectToAutoDevops`, Sonar config, and audit queries.
 
 Example `createProject` variables (illustrative):
 
@@ -111,6 +111,24 @@ The `capabilities` object controls optional HTTP hosting and package publishing 
 **`publishable`** — Adds GitLab package registry metadata.
 
 Projects may set **both**, **one**, or **neither** capability.
+
+---
+
+## Deployment targets
+
+Each project has a **`deploymentTargets`** array (not limited to dev/stg/prod). Standard keys `dev`, `stg`, and `prod` map to the shared pipeline jobs; extra keys (e.g. `prod-alt`) get a generated job in **`.dsoaas/deploy-targets.gitlab-ci.yml`**.
+
+| Mutation | Purpose |
+| -------- | ------- |
+| `upsertDeploymentTarget` | Enable/disable a target, set branch ref, sync Vault + GitLab CI, optional K8s teardown when disabling |
+| `removeDeploymentTarget` | Remove target from registry, tear down K8s, delete env-scoped CI vars |
+| `setDeploymentTargetHostname` | Override `APP_HOST` for any target key |
+
+**Deploy deactivation:** set `DEPLOY_<KEY>_REF` to **`none`** (only this value). The API uses `none` when a target is disabled.
+
+**`registerGitLabProject`:** adopt an existing GitLab project by numeric `gitlabProjectId` (409 if already registered). Optionally wires Auto DevOps the same as `createProject`.
+
+**`deleteProject`:** tears down **all** deployment targets in K8s, deletes Vault, removes the MongoDB record, then attempts GitLab project delete **without** bulk registry/package purge. If GitLab refuses deletion (artifacts in use elsewhere), the API logs a warning and still unregisters the project from the platform.
 
 ---
 

@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   Injectable,
   Logger,
@@ -14,12 +15,48 @@ import { AppConfiguration } from '../config';
 import { GitLabService } from '../gitlab/gitlab.service';
 import { K8sService } from '../k8s/k8s.service';
 import { VaultService } from '../vault/vault.service';
-import { CreateProjectInput, ProjectFilterInput, UpdateProjectSonarConfigInput } from './graphql/project.inputs';
+import {
+  buildGitlabCiWithIncludes,
+  generateDeployTargetsCiYaml,
+  DEPLOY_TARGETS_CI_PATH,
+} from './deploy/deploy-ci-generator';
+import { DEPLOY_REF_DISABLED, STANDARD_DEPLOY_TARGET_KEYS } from './deploy/deploy.constants';
+import {
+  appHostsFromTargets,
+  assertValidActiveDeployRef,
+  assertValidTargetKey,
+  buildDefaultAppHost,
+  deriveStandardDeploymentTargets,
+  ensureDeploymentTargets,
+  inferClusterProfile,
+  resolveDefaultDeployRef,
+} from './deploy/deploy-target.util';
+import {
+  buildDeployRefVariable,
+  buildDeploymentTargetFromInput,
+  buildEnvScopedDeployVariables,
+  ENV_SCOPED_DEPLOY_VAR_KEYS,
+} from './deploy/deployment-wiring';
+import type { DeleteProjectOptions, DeleteProjectResult } from './delete-project-result';
+import {
+  CreateProjectInput,
+  DeploymentTargetInput,
+  ProjectFilterInput,
+  RegisterGitLabProjectInput,
+  UpdateProjectSonarConfigInput,
+  UpsertDeploymentTargetInput,
+} from './graphql/project.inputs';
 import { Provisioning } from './graphql/enums';
 import { AuditLog } from './schemas/audit-log.schema';
 import { Project, ProjectDocument } from './schemas/project.schema';
+import type { ClusterProfile, DeployEnv, DeploymentTarget } from './schemas/project.schema';
+import { SonarQubeService } from '../sonarqube/sonarqube.service';
 import { SlugService } from './slug.service';
 import { buildSonarCiVariables } from './sonar/sonar-ci-sync';
+import {
+  buildSonarProjectKey,
+  buildSonarProjectName,
+} from './sonar/sonar-project-key.util';
 import {
   isSonarEnabled,
   resolveSonarGatePolicy,
@@ -27,9 +64,16 @@ import {
   type SonarGatePolicy,
 } from './sonar/sonar.types';
 
-import type { DeployEnv } from './schemas/project.schema';
+/** Result of provisioning one Sonar project for a Git branch. */
+export interface SonarBranchProvisionResult {
+  branch: string;
+  projectKey: string;
+  projectName: string;
+  created: boolean;
+  dashboardUrl: string;
+}
 
-/** Environments provisioned for every project. */
+/** Standard deployment target keys (template includes jobs for these). */
 const DEPLOY_ENVS: DeployEnv[] = ['dev', 'stg', 'prod'];
 
 /**
@@ -72,6 +116,7 @@ export class ProjectsService implements OnApplicationBootstrap {
     private readonly vaultService: VaultService,
     private readonly k8sService: K8sService,
     private readonly slugService: SlugService,
+    private readonly sonarQubeService: SonarQubeService,
     private readonly configService: ConfigService<AppConfiguration>,
   ) {
     this.domain = this.configService.get<string>('domain', { infer: true })!;
@@ -89,11 +134,50 @@ export class ProjectsService implements OnApplicationBootstrap {
    *
    * @returns YAML string for the `.gitlab-ci.yml` include block
    */
-  private buildAutoDevopsCi(): string {
+  private buildAutoDevopsCi(hasExtraTargets = false): string {
     const project = this.configService.get<string>('autoDevops.pipelineProject', { infer: true })!;
     const file = this.configService.get<string>('autoDevops.pipelineFile', { infer: true })!;
     this.logger.verbose(`buildAutoDevopsCi: project="${project}" file="${file}"`);
-    return `include:\n  - project: ${project}\n    file: ${file}\n`;
+    return buildGitlabCiWithIncludes(project, file, hasExtraTargets);
+  }
+
+  /**
+   * Resolves deployment targets for a new or updated project document.
+   */
+  private resolveInitialDeploymentTargets(
+    effectiveSlug: string,
+    deployable: boolean,
+    inputTargets?: DeploymentTargetInput[],
+    appHosts?: { dev?: string; stg?: string; prod?: string },
+  ): DeploymentTarget[] {
+    if (inputTargets?.length) {
+      return inputTargets.map((t) =>
+        buildDeploymentTargetFromInput(t, effectiveSlug, this.appsDomain, deployable),
+      );
+    }
+    const standard = deriveStandardDeploymentTargets(
+      effectiveSlug,
+      this.appsDomain,
+      deployable,
+      appHosts,
+    );
+    return standard;
+  }
+
+  private hasExtraDeployTargets(targets: DeploymentTarget[]): boolean {
+    return targets.some(
+      (t) => !(STANDARD_DEPLOY_TARGET_KEYS as readonly string[]).includes(t.key),
+    );
+  }
+
+  private syncAppHostsFromTargets(doc: ProjectDocument): void {
+    doc.appHosts = appHostsFromTargets(ensureDeploymentTargets(doc, this.appsDomain));
+  }
+
+  private recomputeDeployable(doc: ProjectDocument): void {
+    const targets = ensureDeploymentTargets(doc, this.appsDomain);
+    doc.deploymentTargets = targets;
+    doc.capabilities.deployable = targets.some((t) => t.enabled);
   }
 
   /**
@@ -186,6 +270,12 @@ export class ProjectsService implements OnApplicationBootstrap {
       query['pinnedV1'] = filter.pinnedV1;
     }
 
+    if (filter?.archived === true) {
+      query['archived'] = true;
+    } else {
+      query['archived'] = { $in: [false, null] };
+    }
+
     this.logger.debug(
       `listProjects: filter=${JSON.stringify(filter)} page=${page} perPage=${perPage}`,
     );
@@ -269,8 +359,14 @@ export class ProjectsService implements OnApplicationBootstrap {
     const vaultBasePath = `projects/${[...groupPath, projectSlug].join('/')}`;
     const helmReleaseName = effectiveSlug;
 
-    // Compute app hostnames
     const appHosts = this.buildAppHosts(effectiveSlug);
+    const deploymentTargets = this.resolveInitialDeploymentTargets(
+      effectiveSlug,
+      isDeployable,
+      input.deploymentTargets,
+      appHosts,
+    );
+    const hasExtraTargets = this.hasExtraDeployTargets(deploymentTargets);
 
     // Step 2: Create GitLab group hierarchy
     this.logger.log(`Step 2: Ensuring GitLab group hierarchy: ${groupPath.join('/')}`);
@@ -305,7 +401,7 @@ export class ProjectsService implements OnApplicationBootstrap {
       await this.gitlabService.upsertFile(
         gitlabProjectId,
         '.gitlab-ci.yml',
-        this.buildAutoDevopsCi(),
+        this.buildAutoDevopsCi(hasExtraTargets),
         'chore: add Auto DevOps pipeline include',
       );
 
@@ -338,89 +434,67 @@ export class ProjectsService implements OnApplicationBootstrap {
     // has a populated secret path.  Sentinel keys (DEPLOY_ENV, VAULT_PROJECT_PATH)
     // ensure the ExternalSecret can sync even when no caller-supplied values exist.
     // Additional caller-supplied keys from envScopedVars are merged on top.
-    const envScopedEnvsWritten: DeployEnv[] = [];
-    for (const env of DEPLOY_ENVS) {
-      const envPath = `${vaultBasePath}/${env}`;
+    const envScopedEnvsWritten: string[] = [];
+    for (const target of deploymentTargets) {
+      const envPath = `${vaultBasePath}/${target.key}`;
 
-      // Sentinel values: always present so ESO has something to sync.
       const envData: Record<string, string> = {
-        DEPLOY_ENV: env,
+        DEPLOY_ENV: target.key,
         VAULT_PROJECT_PATH: vaultBasePath,
       };
 
-      const raw = input.envScopedVars?.[env];
+      const raw = input.envScopedVars?.[target.key as DeployEnv];
       if (raw) {
         try {
           Object.assign(envData, JSON.parse(raw) as Record<string, string>);
-          envScopedEnvsWritten.push(env);
+          envScopedEnvsWritten.push(target.key);
         } catch (err) {
           this.logger.warn(
-            `envScopedVars.${env} is not valid JSON — keeping sentinels only: ${(err as Error).message}`,
+            `envScopedVars.${target.key} is not valid JSON — keeping sentinels only: ${(err as Error).message}`,
           );
         }
       }
 
       await this.vaultService.writeSecrets(envPath, envData);
       this.logger.log(
-        `Step 4b: Seeded env-scoped Vault secrets at "${envPath}" (${Object.keys(envData).length} keys)`,
+        `Step 4b: Seeded Vault at "${envPath}" (${Object.keys(envData).length} keys)`,
       );
     }
 
-    // Step 5: Ensure k3d namespaces exist
-    this.logger.log('Step 5: Ensuring k3d namespaces exist');
-    await Promise.all(DEPLOY_ENVS.map((env) => this.k8sService.ensureNamespace(env)));
+    this.logger.log('Step 5: Ensuring Kubernetes namespaces for deployment targets');
+    await Promise.all(
+      deploymentTargets.map((t) =>
+        this.k8sService.ensureNamespace(t.clusterProfile, t.kubeNamespace),
+      ),
+    );
 
-    // Step 6: Set env-scoped CI variables on the GitLab project
-    if (isDeployable) {
-      this.logger.log('Step 6: Setting env-scoped CI variables on GitLab project');
-      const ciVariables: Array<{
-        key: string;
-        value: string;
-        environmentScope: string;
-        masked?: boolean;
-      }> = [];
-
-      for (const env of DEPLOY_ENVS) {
-        // Short / non-sensitive values must use masked:false — GitLab requires
-        // masked variable values to be ≥8 characters and match a strict charset.
-        ciVariables.push({
-          key: 'KUBE_NAMESPACE',
-          value: env,
-          environmentScope: env,
-          masked: false,
-        });
-        ciVariables.push({
-          key: 'APP_HOST',
-          value: appHosts[env] ?? `${effectiveSlug}.${env}.${this.appsDomain}`,
-          environmentScope: env,
-          masked: false,
-        });
-        ciVariables.push({
-          key: 'VAULT_PROJECT_PATH',
-          value: vaultBasePath,
-          environmentScope: env,
-          masked: false,
-        });
-
-        // KUBECONFIG_B64: set per-project so CI jobs can connect to the right cluster env.
-        // The bootstrap runner-rbac.sh generates these kubeconfig files.
-        const kubeconfigB64 = this.k8sService.getKubeconfigB64(env);
-        if (kubeconfigB64) {
-          ciVariables.push({
-            key: 'KUBECONFIG_B64',
-            value: kubeconfigB64,
-            environmentScope: env,
-            masked: true,
-          });
-        } else {
+    if (isDeployable || deploymentTargets.some((t) => t.enabled)) {
+      this.logger.log('Step 6: Setting deployment CI variables on GitLab project');
+      const ciVariables = deploymentTargets.flatMap((target) => {
+        const kubeconfigB64 = this.k8sService.getKubeconfigB64(target.clusterProfile);
+        if (!kubeconfigB64) {
           this.logger.warn(
-            `KUBECONFIG_B64 not set for env="${env}" — kubeconfig file missing. ` +
-              'Run bootstrap/runner-rbac.sh to generate kubeconfigs.',
+            `KUBECONFIG_B64 missing for profile="${target.clusterProfile}" (target ${target.key})`,
+          );
+        }
+        return [
+          ...buildEnvScopedDeployVariables(target, vaultBasePath, kubeconfigB64),
+          buildDeployRefVariable(target),
+        ];
+      });
+      await this.gitlabService.setProjectCiVariables(gitlabProjectId, ciVariables);
+
+      if (hasExtraTargets) {
+        const extraYaml = generateDeployTargetsCiYaml(deploymentTargets);
+        if (extraYaml) {
+          await this.gitlabService.upsertFile(
+            gitlabProjectId,
+            DEPLOY_TARGETS_CI_PATH,
+            extraYaml,
+            'chore: add deployment targets CI (DSOaaS)',
           );
         }
       }
-
-      await this.gitlabService.setProjectCiVariables(gitlabProjectId, ciVariables);
     }
 
     // Step 7: Persist to MongoDB
@@ -436,15 +510,13 @@ export class ProjectsService implements OnApplicationBootstrap {
       templateSlug: provisioning === Provisioning.TEMPLATE ? templateSlug : undefined,
       vaultBasePath,
       helmReleaseName,
-      appHosts: {
-        dev: appHosts['dev'],
-        stg: appHosts['stg'],
-        prod: appHosts['prod'],
-      },
-      // hostnameOverrides always starts empty at create time;
-      // per-env hostname overrides are set via the setHostnameOverride mutation.
+      appHosts: appHostsFromTargets(deploymentTargets),
       hostnameOverrides: {},
-      capabilities: { deployable: isDeployable, publishable: isPublishable },
+      deploymentTargets,
+      capabilities: {
+        deployable: deploymentTargets.some((t) => t.enabled),
+        publishable: isPublishable,
+      },
       legacyV1: false,
       pinnedV1: false,
     });
@@ -475,41 +547,107 @@ export class ProjectsService implements OnApplicationBootstrap {
   }
 
   /**
-   * Deletes a project and all associated resources.
+   * Deletes a project and associated platform resources.
+   *
+   * When GitLab delete fails (often due to container registry), the MongoDB record is
+   * marked archived instead of removed so operators can retry with force delete.
    *
    * @param id - MongoDB document ID
-   * @returns true on success
+   * @param options.forceGitLabDelete - purge registry/packages before GitLab delete
+   * @param options.skipPlatformCleanup - skip K8s/Vault/Sonar (retry on archived project)
    */
-  async deleteProject(id: string): Promise<boolean> {
-    this.logger.log(`deleteProject: id=${id}`);
+  async deleteProject(id: string, options?: DeleteProjectOptions): Promise<DeleteProjectResult> {
+    const forceGitLabDelete = options?.forceGitLabDelete ?? false;
+    const skipPlatformCleanup =
+      options?.skipPlatformCleanup ?? false;
+
+    this.logger.log(
+      `deleteProject: id=${id} forceGitLab=${forceGitLabDelete} skipPlatform=${skipPlatformCleanup}`,
+    );
     const doc = await this.findProject({ id });
+    const skipPlatform = skipPlatformCleanup || doc.archived;
 
-    // Delete GitLab project (critical)
-    this.logger.log(`Deleting GitLab project ${doc.gitlabProjectId}`);
-    await this.gitlabService.deleteProject(doc.gitlabProjectId);
+    if (!skipPlatform) {
+      const targets = ensureDeploymentTargets(doc, this.appsDomain);
 
-    // Delete Vault secrets (non-critical)
-    try {
-      this.logger.log(`Deleting Vault secrets at "${doc.vaultBasePath}"`);
-      await this.vaultService.deleteSecrets(doc.vaultBasePath);
-    } catch (err) {
-      this.logger.warn(`Vault cleanup failed (non-critical): ${(err as Error).message}`);
+      try {
+        this.logger.log(`Tearing down K8s releases for "${doc.helmReleaseName}"`);
+        await this.k8sService.teardownProjectTargets(doc.helmReleaseName, targets);
+      } catch (err) {
+        this.logger.warn(`K8s teardown failed (non-critical): ${(err as Error).message}`);
+      }
+
+      try {
+        this.logger.log(`Deleting Vault secrets at "${doc.vaultBasePath}"`);
+        await this.vaultService.deleteSecrets(doc.vaultBasePath);
+      } catch (err) {
+        this.logger.warn(`Vault cleanup failed (non-critical): ${(err as Error).message}`);
+      }
+
+      if (isSonarEnabled(doc.sonar) && this.sonarQubeService.isConfigured()) {
+        try {
+          await this.deleteSonarProjects(id, doc.sonar!.allowedBranches);
+        } catch (err) {
+          this.logger.warn(`Sonar cleanup failed (non-critical): ${(err as Error).message}`);
+        }
+      }
     }
 
-    // Audit log
+    const gitlabResult = await this.gitlabService.tryDeleteProject(doc.gitlabProjectId, {
+      force: forceGitLabDelete,
+    });
+
+    if (!gitlabResult.ok) {
+      const message = gitlabResult.message ?? 'GitLab project delete failed';
+      this.logger.warn(
+        `GitLab project ${doc.gitlabProjectId} could not be deleted: ${message}. ` +
+          (doc.archived ? 'Updating archived record.' : 'Archiving platform record.'),
+      );
+
+      if (!doc.archived) {
+        doc.archived = true;
+        doc.archivedAt = new Date();
+        doc.archiveReason = 'gitlab_delete_failed';
+        doc.gitlabDeleteError = message;
+        await doc.save();
+
+        await this.auditLogModel.create({
+          eventType: 'project.archived',
+          projectId: id,
+          gitlabPath: doc.gitlabPath,
+          effectiveSlug: doc.effectiveSlug,
+          metadata: {
+            gitlabDeleteError: message,
+            forceGitLabDelete,
+            platformCleanupPerformed: !skipPlatform,
+          },
+        });
+
+        this.logger.log(`Project "${doc.gitlabPath}" archived (GitLab repo may still exist)`);
+        return { outcome: 'archived', message, project: doc };
+      }
+
+      doc.gitlabDeleteError = message;
+      await doc.save();
+      return { outcome: 'archived', message, project: doc };
+    }
+
     await this.auditLogModel.create({
       eventType: 'project.deleted',
       projectId: id,
       gitlabPath: doc.gitlabPath,
       effectiveSlug: doc.effectiveSlug,
-      metadata: {},
+      metadata: {
+        gitlabDeleted: true,
+        forceGitLabDelete,
+        wasArchived: doc.archived ?? false,
+      },
     });
 
-    // Remove MongoDB document
     await doc.deleteOne();
 
-    this.logger.log(`Project "${doc.gitlabPath}" deleted successfully`);
-    return true;
+    this.logger.log(`Project "${doc.gitlabPath}" unregistered from platform`);
+    return { outcome: 'deleted' };
   }
 
   /**
@@ -535,56 +673,32 @@ export class ProjectsService implements OnApplicationBootstrap {
 
     // Step 1: Write Auto DevOps .gitlab-ci.yml
     this.logger.log(`Writing .gitlab-ci.yml for project ${doc.gitlabProjectId}`);
-    await this.gitlabService.upsertFile(
-      doc.gitlabProjectId,
-      '.gitlab-ci.yml',
-      this.buildAutoDevopsCi(),
-      'chore: migrate to Auto DevOps pipeline',
-    );
-
-    if (doc.capabilities.deployable) {
-      await this.gitlabService.upsertFile(
-        doc.gitlabProjectId,
-        'chart-values.yaml',
-        ProjectsService.buildChartValues(),
-        'chore: add chart-values.yaml for v2 Auto DevOps',
+    if (!doc.deploymentTargets?.length) {
+      doc.deploymentTargets = deriveStandardDeploymentTargets(
+        doc.effectiveSlug,
+        this.appsDomain,
+        doc.capabilities.deployable,
+        doc.appHosts,
+        doc.hostnameOverrides,
       );
     }
 
-    // Step 2: Set env-scoped CI variables
-    if (doc.capabilities.deployable) {
-      const ciVars: Array<{
-        key: string;
-        value: string;
-        environmentScope: string;
-        masked?: boolean;
-      }> = [];
-      for (const env of DEPLOY_ENVS) {
-        ciVars.push({ key: 'KUBE_NAMESPACE', value: env, environmentScope: env, masked: false });
-        ciVars.push({
-          key: 'APP_HOST',
-          value: doc.appHosts[env] ?? `${doc.effectiveSlug}.${env}.${this.appsDomain}`,
-          environmentScope: env,
-          masked: false,
-        });
-        ciVars.push({
-          key: 'VAULT_PROJECT_PATH',
-          value: doc.vaultBasePath,
-          environmentScope: env,
-          masked: false,
-        });
+    await this.gitlabService.upsertFile(
+      doc.gitlabProjectId,
+      'chart-values.yaml',
+      ProjectsService.buildChartValues(),
+      'chore: add chart-values.yaml for v2 Auto DevOps',
+    );
 
-        const kubeconfigB64 = this.k8sService.getKubeconfigB64(env);
-        if (kubeconfigB64) {
-          ciVars.push({
-            key: 'KUBECONFIG_B64',
-            value: kubeconfigB64,
-            environmentScope: env,
-            masked: true,
-          });
-        }
-      }
-      await this.gitlabService.setProjectCiVariables(doc.gitlabProjectId, ciVars);
+    if (doc.capabilities.deployable || doc.deploymentTargets.some((t) => t.enabled)) {
+      await this.syncAllDeploymentWiring(doc);
+    } else {
+      await this.gitlabService.upsertFile(
+        doc.gitlabProjectId,
+        '.gitlab-ci.yml',
+        this.buildAutoDevopsCi(false),
+        'chore: migrate to Auto DevOps pipeline',
+      );
     }
 
     // Step 3: Trigger pipeline on default branch
@@ -621,19 +735,37 @@ export class ProjectsService implements OnApplicationBootstrap {
    */
   async setHostnameOverride(
     id: string,
-    env: DeployEnv,
+    targetKey: string,
     hostname: string,
   ): Promise<ProjectDocument> {
-    this.logger.log(`setHostnameOverride: id=${id} env=${env} hostname="${hostname}"`);
+    this.logger.log(
+      `setHostnameOverride: id=${id} target=${targetKey} hostname="${hostname}"`,
+    );
     const doc = await this.findProject({ id });
+    const targets = ensureDeploymentTargets(doc, this.appsDomain);
+    const idx = targets.findIndex((t) => t.key === targetKey);
+    if (idx < 0) {
+      throw new NotFoundException(`Deployment target "${targetKey}" not found`);
+    }
 
-    doc.hostnameOverrides = { ...(doc.hostnameOverrides ?? {}), [env]: hostname };
-    doc.appHosts = { ...(doc.appHosts ?? {}), [env]: hostname };
+    targets[idx] = { ...targets[idx], appHost: hostname };
+    doc.deploymentTargets = targets;
+
+    if (targetKey === 'dev' || targetKey === 'stg' || targetKey === 'prod') {
+      doc.hostnameOverrides = { ...(doc.hostnameOverrides ?? {}), [targetKey]: hostname };
+    }
+    this.syncAppHostsFromTargets(doc);
     await doc.save();
 
-    // Update APP_HOST CI var for this env
+    const scope = targets[idx].gitlabEnvironment ?? targetKey;
     try {
-      await this.gitlabService.setProjectCiVariable(doc.gitlabProjectId, 'APP_HOST', hostname, env);
+      await this.gitlabService.setProjectCiVariable(
+        doc.gitlabProjectId,
+        'APP_HOST',
+        hostname,
+        scope,
+        false,
+      );
     } catch (err) {
       this.logger.warn(
         `Failed to update APP_HOST CI var (non-critical): ${(err as Error).message}`,
@@ -645,7 +777,7 @@ export class ProjectsService implements OnApplicationBootstrap {
       projectId: id,
       gitlabPath: doc.gitlabPath,
       effectiveSlug: doc.effectiveSlug,
-      metadata: { env, hostname },
+      metadata: { targetKey, hostname },
     });
 
     return doc;
@@ -695,18 +827,7 @@ export class ProjectsService implements OnApplicationBootstrap {
     const publicUrl = this.configService.get<string>('sonarqube.publicUrl', { infer: true })!;
     const internalUrl = this.configService.get<string>('sonarqube.internalUrl', { infer: true })!;
 
-    if (input.sonarToken && isSonarEnabled(sonarConfig)) {
-      const vaultPath = `${doc.vaultBasePath}/sonar`;
-      await this.vaultService.writeSecrets(vaultPath, { SONAR_TOKEN: input.sonarToken });
-      this.logger.log(`Sonar token written to Vault at secret/data/${vaultPath}`);
-    }
-
-    const ciVars = buildSonarCiVariables(sonarConfig, {
-      publicUrl,
-      internalUrl,
-      token: input.sonarToken,
-    });
-    await this.gitlabService.setProjectCiVariables(doc.gitlabProjectId, ciVars);
+    await this.syncSonarCiToGitLab(doc, sonarConfig, input.sonarToken);
 
     await this.auditLogModel.create({
       eventType: 'project.sonar_config_updated',
@@ -726,14 +847,200 @@ export class ProjectsService implements OnApplicationBootstrap {
   }
 
   /**
-   * Builds the public Sonar dashboard URL for a project branch key when Sonar is enabled.
+   * Resolves a Sonar analysis token: explicit input, Vault, or auto-generated global token.
    */
-  getSonarDashboardUrl(effectiveSlug: string, branch: string): string | undefined {
+  private async resolveSonarAnalysisToken(
+    doc: ProjectDocument,
+    explicitToken?: string,
+  ): Promise<string | undefined> {
+    if (explicitToken?.trim()) {
+      return explicitToken.trim();
+    }
+
+    const vaultPath = `${doc.vaultBasePath}/sonar`;
+    const stored = await this.vaultService.readSecrets(vaultPath);
+    if (stored.SONAR_TOKEN) {
+      this.logger.debug(`Using Sonar token from Vault at secret/data/${vaultPath}`);
+      return stored.SONAR_TOKEN;
+    }
+
+    if (!this.sonarQubeService.isConfigured()) {
+      return undefined;
+    }
+
+    const baseName = `dsoaas-gitlab-${doc.gitlabProjectId}`;
+    let token: string | undefined;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const name = attempt === 0 ? baseName : `${baseName}-${attempt}`;
+      try {
+        token = await this.sonarQubeService.generateGlobalAnalysisToken(name);
+        break;
+      } catch (err) {
+        this.logger.warn(
+          `Sonar token generation attempt ${attempt + 1} failed: ${(err as Error).message}`,
+        );
+      }
+    }
+
+    if (!token) {
+      throw new BadRequestException(
+        'Could not create a Sonar analysis token. Set SONAR_ADMIN_USER/PASSWORD on the API or provide sonarToken manually.',
+      );
+    }
+
+    await this.vaultService.writeSecrets(vaultPath, { SONAR_TOKEN: token });
+    this.logger.log(`Sonar analysis token stored at secret/data/${vaultPath}`);
+    return token;
+  }
+
+  /**
+   * Writes Sonar-related GitLab CI variables (branches, URLs, token).
+   */
+  private async syncSonarCiToGitLab(
+    doc: ProjectDocument,
+    sonarConfig: ProjectSonarConfig | undefined,
+    explicitToken?: string,
+  ): Promise<void> {
+    const publicUrl = this.configService.get<string>('sonarqube.publicUrl', { infer: true })!;
+    const internalUrl = this.configService.get<string>('sonarqube.internalUrl', { infer: true })!;
+
+    let token: string | undefined;
+    if (isSonarEnabled(sonarConfig)) {
+      token = await this.resolveSonarAnalysisToken(doc, explicitToken);
+      if (!token) {
+        this.logger.warn(
+          `Sonar enabled for "${doc.gitlabPath}" but no SONAR_TOKEN — CI sonar:scan will skip until a token is set.`,
+        );
+      }
+    }
+
+    const ciVars = buildSonarCiVariables(sonarConfig, {
+      publicUrl,
+      internalUrl,
+      token,
+    });
+    await this.gitlabService.setProjectCiVariables(doc.gitlabProjectId, ciVars);
+  }
+
+  /**
+   * Creates SonarQube analysis projects for the given Git branches (idempotent).
+   *
+   * Keys match the Auto DevOps pipeline (`CI_PROJECT_PATH_SLUG` + branch). Optionally
+   * merges branches into the project's Sonar allowlist and syncs GitLab CI variables.
+   *
+   * @param id - MongoDB project ID
+   * @param branches - Git branch names (e.g. main, staging, develop)
+   * @param addToAllowedBranches - When true, union branches into `project.sonar` and sync CI
+   * @returns Per-branch provision results with dashboard URLs
+   */
+  async provisionSonarProjects(
+    id: string,
+    branches: string[],
+    addToAllowedBranches = true,
+  ): Promise<SonarBranchProvisionResult[]> {
+    if (!branches.length) {
+      throw new BadRequestException('At least one branch is required to provision Sonar projects.');
+    }
+
+    const normalizedBranches = [...new Set(branches.map((b) => b.trim()).filter(Boolean))];
+    if (!normalizedBranches.length) {
+      throw new BadRequestException('At least one non-empty branch name is required.');
+    }
+
+    this.logger.log(
+      `provisionSonarProjects: id=${id} branches=[${normalizedBranches.join(',')}]`,
+    );
+    const doc = await this.findProject({ id });
+    const publicUrl = this.configService.get<string>('sonarqube.publicUrl', { infer: true })!;
+    const projectLabel = doc.displayName ?? doc.projectSlug;
+    const results: SonarBranchProvisionResult[] = [];
+
+    for (const branch of normalizedBranches) {
+      const projectKey = buildSonarProjectKey(doc.gitlabPath, branch);
+      const projectName = buildSonarProjectName(projectLabel, branch);
+      const { created } = await this.sonarQubeService.ensureProject(
+        projectKey,
+        projectName,
+        branch,
+      );
+      results.push({
+        branch,
+        projectKey,
+        projectName,
+        created,
+        dashboardUrl: `${publicUrl}/dashboard?id=${encodeURIComponent(projectKey)}`,
+      });
+    }
+
+    if (addToAllowedBranches) {
+      const existing = doc.sonar?.allowedBranches ?? [];
+      const merged = [...new Set([...existing, ...normalizedBranches])];
+      const gatePolicy = resolveSonarGatePolicy(doc.sonar?.gatePolicy);
+      doc.sonar = { allowedBranches: merged, gatePolicy };
+      await doc.save();
+
+      await this.syncSonarCiToGitLab(doc, doc.sonar);
+    }
+
+    await this.auditLogModel.create({
+      eventType: 'project.sonar_provisioned',
+      projectId: id,
+      gitlabPath: doc.gitlabPath,
+      effectiveSlug: doc.effectiveSlug,
+      metadata: {
+        branches: normalizedBranches,
+        provisioned: results.map((r) => ({
+          branch: r.branch,
+          projectKey: r.projectKey,
+          created: r.created,
+        })),
+        addToAllowedBranches,
+      },
+    });
+
+    this.logger.log(
+      `Provisioned ${results.length} Sonar project(s) for "${doc.gitlabPath}"`,
+    );
+    return results;
+  }
+
+  /**
+   * Deletes SonarQube analysis projects for the given branches (best-effort).
+   *
+   * @param id - MongoDB project ID
+   * @param branches - Git branch names whose Sonar keys should be removed
+   */
+  async deleteSonarProjects(id: string, branches: string[]): Promise<void> {
+    const doc = await this.findProject({ id });
+    for (const branch of branches) {
+      const projectKey = buildSonarProjectKey(doc.gitlabPath, branch);
+      try {
+        await this.sonarQubeService.deleteProject(projectKey);
+      } catch (err) {
+        this.logger.warn(
+          `Sonar delete failed for ${projectKey} (non-critical): ${(err as Error).message}`,
+        );
+      }
+    }
+
+    await this.auditLogModel.create({
+      eventType: 'project.sonar_deleted',
+      projectId: id,
+      gitlabPath: doc.gitlabPath,
+      effectiveSlug: doc.effectiveSlug,
+      metadata: { branches },
+    });
+  }
+
+  /**
+   * Builds the public Sonar dashboard URL for a GitLab path and branch.
+   */
+  getSonarDashboardUrl(gitlabPath: string, branch: string): string | undefined {
     const publicUrl = this.configService.get<string>('sonarqube.publicUrl', { infer: true });
     if (!publicUrl) {
       return undefined;
     }
-    const projectKey = `${effectiveSlug}_${branch.replaceAll(/[^a-zA-Z0-9_-]/g, '_')}`;
+    const projectKey = buildSonarProjectKey(gitlabPath, branch);
     return `${publicUrl}/dashboard?id=${encodeURIComponent(projectKey)}`;
   }
 
@@ -752,6 +1059,309 @@ export class ProjectsService implements OnApplicationBootstrap {
     });
 
     return doc;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Deployment target wiring
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Seeds Vault paths and syncs GitLab CI + generated deploy jobs for all targets.
+   */
+  private async syncAllDeploymentWiring(doc: ProjectDocument): Promise<void> {
+    const targets = ensureDeploymentTargets(doc, this.appsDomain);
+    doc.deploymentTargets = targets;
+    this.syncAppHostsFromTargets(doc);
+
+    for (const target of targets) {
+      await this.seedVaultForTarget(doc, target);
+      await this.k8sService.ensureNamespace(target.clusterProfile, target.kubeNamespace);
+    }
+
+    const ciVars = targets.flatMap((target) => {
+      const kubeconfigB64 = this.k8sService.getKubeconfigB64(target.clusterProfile);
+      return [
+        ...buildEnvScopedDeployVariables(target, doc.vaultBasePath, kubeconfigB64),
+        buildDeployRefVariable(target),
+      ];
+    });
+
+    if (ciVars.length > 0) {
+      await this.gitlabService.setProjectCiVariables(doc.gitlabProjectId, ciVars);
+    }
+
+    await this.regenerateDeployCiFiles(doc);
+    this.recomputeDeployable(doc);
+    await doc.save();
+  }
+
+  private async seedVaultForTarget(doc: ProjectDocument, target: DeploymentTarget): Promise<void> {
+    const envPath = `${doc.vaultBasePath}/${target.key}`;
+    await this.vaultService.writeSecrets(envPath, {
+      DEPLOY_ENV: target.key,
+      VAULT_PROJECT_PATH: doc.vaultBasePath,
+    });
+  }
+
+  private async regenerateDeployCiFiles(doc: ProjectDocument): Promise<void> {
+    const targets = ensureDeploymentTargets(doc, this.appsDomain);
+    const extraYaml = generateDeployTargetsCiYaml(targets);
+    const hasExtra = this.hasExtraDeployTargets(targets);
+
+    if (hasExtra && extraYaml) {
+      await this.gitlabService.upsertFile(
+        doc.gitlabProjectId,
+        DEPLOY_TARGETS_CI_PATH,
+        extraYaml,
+        'chore: update deployment targets CI (DSOaaS)',
+      );
+    }
+
+    await this.gitlabService.upsertFile(
+      doc.gitlabProjectId,
+      '.gitlab-ci.yml',
+      this.buildAutoDevopsCi(hasExtra),
+      'chore: sync Auto DevOps pipeline include',
+    );
+  }
+
+  /**
+   * Registers an existing GitLab project in the platform registry with optional deploy wiring.
+   */
+  async registerGitLabProject(input: RegisterGitLabProjectInput): Promise<ProjectDocument> {
+    const glProject = await this.gitlabService.getProject(input.gitlabProjectId).catch(() => {
+      throw new NotFoundException(`GitLab project id=${input.gitlabProjectId} not found`);
+    });
+
+    const existing = await this.projectModel
+      .findOne({ gitlabProjectId: input.gitlabProjectId })
+      .exec();
+    if (existing) {
+      throw new ConflictException(
+        `GitLab project ${input.gitlabProjectId} is already registered (mongo id=${String(existing._id)})`,
+      );
+    }
+
+    const parts = glProject.path_with_namespace.split('/');
+    const derivedSlug = parts.at(-1)!;
+    const derivedGroupPath = parts.slice(0, -1);
+    const projectSlug = input.projectSlug ?? derivedSlug;
+    const groupPath = input.groupPath ?? derivedGroupPath;
+    const gitlabPath = [...groupPath, projectSlug].join('/');
+    const isDeployable = input.capabilities?.deployable ?? false;
+    const isPublishable = input.capabilities?.publishable ?? false;
+
+    const effectiveSlug = await this.slugService.resolve(
+      projectSlug,
+      groupPath,
+      input.slugOverride,
+    );
+    const vaultBasePath = `projects/${gitlabPath}`;
+    const appHosts = this.buildAppHosts(effectiveSlug);
+    const deploymentTargets = this.resolveInitialDeploymentTargets(
+      effectiveSlug,
+      isDeployable,
+      input.deploymentTargets,
+      appHosts,
+    );
+
+    const doc = await this.projectModel.create({
+      gitlabProjectId: input.gitlabProjectId,
+      gitlabPath,
+      groupPath,
+      projectSlug,
+      effectiveSlug,
+      displayName: input.displayName ?? glProject.name,
+      provisioning: input.provisioning ?? Provisioning.AUTO_DEVOPS,
+      vaultBasePath,
+      helmReleaseName: effectiveSlug,
+      appHosts: appHostsFromTargets(deploymentTargets),
+      hostnameOverrides: {},
+      deploymentTargets,
+      capabilities: { deployable: isDeployable, publishable: isPublishable },
+      legacyV1: false,
+      pinnedV1: false,
+    });
+
+    if (input.envVars) {
+      await this.vaultService.writeSecrets(vaultBasePath, {
+        PROJECT_SLUG: projectSlug,
+        EFFECTIVE_SLUG: effectiveSlug,
+        GITLAB_PROJECT_ID: String(input.gitlabProjectId),
+        GITLAB_PATH: gitlabPath,
+        ...input.envVars,
+      });
+    }
+
+    if (isDeployable || deploymentTargets.some((t) => t.enabled)) {
+      await this.gitlabService.upsertFile(
+        doc.gitlabProjectId,
+        'chart-values.yaml',
+        ProjectsService.buildChartValues(),
+        'chore: add chart-values.yaml for DSOaaS',
+      );
+      await this.syncAllDeploymentWiring(doc);
+    }
+
+    await this.auditLogModel.create({
+      eventType: 'project.registered',
+      projectId: String(doc._id),
+      gitlabPath,
+      effectiveSlug,
+      metadata: { gitlabProjectId: input.gitlabProjectId },
+    });
+
+    if (input.sonar?.allowedBranches?.length) {
+      return this.updateProjectSonarConfig(String(doc._id), input.sonar);
+    }
+
+    return this.findProject({ id: String(doc._id) });
+  }
+
+  async upsertDeploymentTarget(
+    id: string,
+    input: UpsertDeploymentTargetInput,
+  ): Promise<ProjectDocument> {
+    const doc = await this.findProject({ id });
+    assertValidTargetKey(input.targetKey);
+
+    let targets = ensureDeploymentTargets(doc, this.appsDomain);
+    const idx = targets.findIndex((t) => t.key === input.targetKey);
+    const existing = idx >= 0 ? targets[idx] : undefined;
+
+    const clusterProfile =
+      (input.clusterProfile as ClusterProfile | undefined) ??
+      existing?.clusterProfile ??
+      inferClusterProfile(input.targetKey);
+
+    if (!clusterProfile) {
+      throw new BadRequestException(
+        `clusterProfile is required for target "${input.targetKey}"`,
+      );
+    }
+
+    let deployRef = input.deployRef ?? existing?.deployRef;
+    if (input.enabled) {
+      deployRef = deployRef ?? resolveDefaultDeployRef(input.targetKey);
+      if (!deployRef) {
+        throw new BadRequestException(
+          `deployRef is required when enabling custom target "${input.targetKey}"`,
+        );
+      }
+    } else {
+      deployRef = DEPLOY_REF_DISABLED;
+    }
+
+    assertValidActiveDeployRef(deployRef, input.enabled);
+
+    const target: DeploymentTarget = {
+      key: input.targetKey,
+      kubeNamespace: input.kubeNamespace ?? existing?.kubeNamespace ?? input.targetKey,
+      clusterProfile,
+      appHost:
+        input.appHost ??
+        existing?.appHost ??
+        buildDefaultAppHost(input.targetKey, doc.effectiveSlug, this.appsDomain),
+      deployRef,
+      enabled: input.enabled,
+      gitlabEnvironment: existing?.gitlabEnvironment ?? input.targetKey,
+    };
+
+    if (idx >= 0) {
+      targets[idx] = target;
+    } else {
+      targets = [...targets, target];
+    }
+
+    if (!input.enabled && (input.teardownK8sOnDisable ?? true)) {
+      await this.k8sService.teardownRelease(
+        target.clusterProfile,
+        target.kubeNamespace,
+        doc.helmReleaseName,
+      );
+    }
+
+    doc.deploymentTargets = targets;
+    await this.seedVaultForTarget(doc, target);
+    await this.k8sService.ensureNamespace(target.clusterProfile, target.kubeNamespace);
+
+    const kubeconfigB64 = this.k8sService.getKubeconfigB64(target.clusterProfile);
+    await this.gitlabService.setProjectCiVariables(doc.gitlabProjectId, [
+      ...buildEnvScopedDeployVariables(target, doc.vaultBasePath, kubeconfigB64),
+      buildDeployRefVariable(target),
+    ]);
+
+    await this.regenerateDeployCiFiles(doc);
+    this.recomputeDeployable(doc);
+    await doc.save();
+
+    await this.auditLogModel.create({
+      eventType: 'project.deployment.upserted',
+      projectId: id,
+      gitlabPath: doc.gitlabPath,
+      effectiveSlug: doc.effectiveSlug,
+      metadata: { targetKey: input.targetKey, enabled: input.enabled, deployRef },
+    });
+
+    return doc;
+  }
+
+  async removeDeploymentTarget(
+    id: string,
+    targetKey: string,
+    teardownK8s = true,
+  ): Promise<ProjectDocument> {
+    const doc = await this.findProject({ id });
+    assertValidTargetKey(targetKey);
+
+    const targets = ensureDeploymentTargets(doc, this.appsDomain);
+    const target = targets.find((t) => t.key === targetKey);
+    if (!target) {
+      throw new NotFoundException(`Deployment target "${targetKey}" not found`);
+    }
+
+    if (teardownK8s) {
+      await this.k8sService.teardownRelease(
+        target.clusterProfile,
+        target.kubeNamespace,
+        doc.helmReleaseName,
+      );
+    }
+
+    const scope = target.gitlabEnvironment ?? target.key;
+    for (const key of ENV_SCOPED_DEPLOY_VAR_KEYS) {
+      await this.gitlabService.deleteProjectCiVariable(doc.gitlabProjectId, key, scope);
+    }
+    await this.gitlabService.setProjectCiVariable(
+      doc.gitlabProjectId,
+      buildDeployRefVariable({ ...target, deployRef: DEPLOY_REF_DISABLED }).key,
+      DEPLOY_REF_DISABLED,
+      '*',
+      false,
+    );
+
+    doc.deploymentTargets = targets.filter((t) => t.key !== targetKey);
+    await this.regenerateDeployCiFiles(doc);
+    this.recomputeDeployable(doc);
+    await doc.save();
+
+    await this.auditLogModel.create({
+      eventType: 'project.deployment.removed',
+      projectId: id,
+      gitlabPath: doc.gitlabPath,
+      effectiveSlug: doc.effectiveSlug,
+      metadata: { targetKey },
+    });
+
+    return doc;
+  }
+
+  async setDeploymentTargetHostname(
+    id: string,
+    targetKey: string,
+    hostname: string,
+  ): Promise<ProjectDocument> {
+    return this.setHostnameOverride(id, targetKey, hostname);
   }
 
   // ---------------------------------------------------------------------------

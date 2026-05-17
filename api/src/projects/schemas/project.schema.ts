@@ -4,8 +4,41 @@ import type { HydratedDocument } from 'mongoose';
 
 import type { ProjectSonarConfig } from '../sonar/sonar.types';
 
-/** Deployment environment identifiers. */
+/** Deployment environment identifiers (standard k3d namespaces). */
 export type DeployEnv = 'dev' | 'stg' | 'prod';
+
+/** Kubeconfig / cluster profile used to reach a target namespace. */
+export type ClusterProfile = 'dev' | 'stg' | 'prod';
+
+/**
+ * One deployable surface for a project (hostname, namespace, branch ref, CI wiring).
+ * Keys are not limited to dev/stg/prod — e.g. `prod-alt` is valid.
+ */
+export class DeploymentTarget {
+  /** Unique target identifier (DNS label), e.g. dev, prod-alt. */
+  key!: string;
+
+  /** Kubernetes namespace for Helm releases (often equals key). */
+  kubeNamespace!: string;
+
+  /** Which kubeconfig file (dev|stg|prod) backs this target. */
+  clusterProfile!: ClusterProfile;
+
+  /** Ingress hostname for this target. */
+  appHost!: string;
+
+  /** Git branch that triggers deploy, or `none` when disabled. */
+  deployRef!: string;
+
+  /** When false, deploy ref should be `none` and CI must not schedule deploy. */
+  enabled!: boolean;
+
+  /** GitLab CI environment_scope for env-scoped variables (defaults to key). */
+  gitlabEnvironment?: string;
+
+  /** Optional Sonar tier mapping for custom targets. */
+  sonarTier?: 'dev' | 'stg' | 'prod' | 'other';
+}
 
 /** Provisioning strategy for a project. */
 export type ProvisioningStrategy = 'auto-devops' | 'template';
@@ -123,6 +156,13 @@ export class Project {
   capabilities!: Capabilities;
 
   /**
+   * Named deployment targets (source of truth for deploy wiring).
+   * When absent on read, derived from appHosts + capabilities.deployable.
+   */
+  @Prop({ type: [Object], default: [] })
+  deploymentTargets!: DeploymentTarget[];
+
+  /**
    * Optional SonarQube opt-in: branch allowlist and per-tier quality gate policy.
    * Empty or missing `allowedBranches` means Sonar is disabled for this project.
    */
@@ -142,6 +182,25 @@ export class Project {
    */
   @Prop({ default: false })
   pinnedV1!: boolean;
+
+  /**
+   * When true, platform resources were torn down but the GitLab project could not be
+   * deleted (often due to container registry). The record remains for operator visibility.
+   */
+  @Prop({ default: false, index: true })
+  archived!: boolean;
+
+  /** When the project was archived in the platform registry. */
+  @Prop()
+  archivedAt?: Date;
+
+  /** Machine-readable reason (e.g. gitlab_delete_failed). */
+  @Prop()
+  archiveReason?: string;
+
+  /** Last GitLab delete error message when archived due to failed deletion. */
+  @Prop()
+  gitlabDeleteError?: string;
 
   /** Managed by `timestamps: true` — set on first insert. */
   createdAt?: Date;

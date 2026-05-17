@@ -11,7 +11,7 @@ Most projects on this platform are created through the Management API, which sca
 Use manual onboarding when:
 
 - You already have a repository and want to add deployment without re-provisioning it.
-- You want a special CI flow (custom stages, alternate triggers, monorepo paths) that doesn't fit the API's defaults.
+- You want a special CI flow (custom stages, alternate triggers, monorepo paths) that doesn't fit the API's defaults. See [Monorepo / multi-app CI](07_monorepo_multi_app_ci.md) for multiple images in one repository.
 - You're experimenting outside the API's managed group path (e.g., a personal scratch project).
 - You don't have access to the Management API for some reason (no API key, the API is down, etc.).
 
@@ -185,16 +185,36 @@ Now pushing to `trunk` deploys to dev, and so on.
 
 ### Disable a specific environment
 
-Either set its `DEPLOY_*_REF` to a branch nobody uses, or override the job entirely in your `.gitlab-ci.yml`:
+Set that target’s `DEPLOY_*_REF` CI variable to **`none`** (the only supported disable keyword). The shared pipeline and generated `.dsoaas/deploy-targets.gitlab-ci.yml` jobs skip deploy when the ref is `none`.
 
-```yaml
-include:
-  - project: "system/devsecops-platform/configs/auto-devops-pipeline"
-    file: "/.gitlab-ci.yml"
+Via the Management API:
 
-deploy:stg:
-  rules:
-    - when: never
+```graphql
+mutation {
+  upsertDeploymentTarget(
+    id: "<mongo-project-id>"
+    input: { targetKey: "prod", enabled: false, teardownK8sOnDisable: true }
+  ) { id deploymentTargets { key deployRef enabled } }
+}
+```
+
+Or in GitLab: **Settings → CI/CD → Variables** → set `DEPLOY_PROD_REF` = `none`.
+
+### Custom deployment targets (e.g. prod-alt)
+
+Use `upsertDeploymentTarget` with a new `targetKey` (DNS label, e.g. `prod-alt`). The API seeds Vault, env-scoped CI variables, ensures the namespace on the chosen cluster profile, and commits **`.dsoaas/deploy-targets.gitlab-ci.yml`** with a matching `deploy:prod-alt` job.
+
+### Register an existing GitLab repo
+
+When the repository already exists in GitLab:
+
+```graphql
+mutation {
+  registerGitLabProject(input: {
+    gitlabProjectId: 12345
+    capabilities: { deployable: true }
+  }) { id gitlabPath deploymentTargets { key appHost deployRef enabled } }
+}
 ```
 
 ### Manual approval on dev too

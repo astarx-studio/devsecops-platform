@@ -5,11 +5,17 @@ import type { HydratedDocument } from 'mongoose';
 export type AuditEventType =
   | 'project.created'
   | 'project.deleted'
+  | 'project.archived'
   | 'project.migrated'
   | 'project.hostname_override'
   | 'project.pinned_v1'
   | 'project.reconciled_legacy'
-  | 'project.sonar_config_updated';
+  | 'project.sonar_config_updated'
+  | 'project.sonar_provisioned'
+  | 'project.sonar_deleted'
+  | 'project.registered'
+  | 'project.deployment.upserted'
+  | 'project.deployment.removed';
 
 export type AuditLogDocument = HydratedDocument<AuditLog>;
 
@@ -33,11 +39,17 @@ export class AuditLog {
     enum: Object.values([
       'project.created',
       'project.deleted',
+      'project.archived',
       'project.migrated',
       'project.hostname_override',
       'project.pinned_v1',
       'project.reconciled_legacy',
       'project.sonar_config_updated',
+      'project.sonar_provisioned',
+      'project.sonar_deleted',
+      'project.registered',
+      'project.deployment.upserted',
+      'project.deployment.removed',
     ]),
   })
   eventType!: AuditEventType;

@@ -535,6 +535,185 @@ export class GitLabService {
     this.logger.log(`All ${variables.length} CI variable(s) set on project ${projectId}`);
   }
 
+  /**
+   * Deletes a project CI variable for a specific key and environment scope.
+   * No-op when the variable does not exist (HTTP 404).
+   */
+  async deleteProjectCiVariable(
+    projectId: number,
+    key: string,
+    environmentScope: string,
+  ): Promise<void> {
+    const url = `${this.baseUrl}/api/v4/projects/${projectId}/variables/${encodeURIComponent(key)}`;
+    try {
+      await firstValueFrom(
+        this.httpService.delete(url, {
+          headers: this.headers,
+          params: { filter: { environment_scope: environmentScope } },
+        }),
+      );
+      this.logger.debug(
+        `Deleted CI variable "${key}" [${environmentScope}] on project ${projectId}`,
+      );
+    } catch (error: unknown) {
+      const status = (error as { response?: { status?: number } }).response?.status;
+      if (status === 404) {
+        return;
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Lists container registry repositories for a GitLab project.
+   *
+   * @see https://docs.gitlab.com/ee/api/container_registry.html#list-registry-repositories
+   */
+  private async listRegistryRepositories(
+    projectId: number,
+  ): Promise<Array<{ id: number; name: string }>> {
+    const { data } = await firstValueFrom(
+      this.httpService.get<Array<{ id: number; name: string }>>(
+        `${this.baseUrl}/api/v4/projects/${projectId}/registry/repositories`,
+        { headers: this.headers, params: { per_page: 100 } },
+      ),
+    );
+    return data ?? [];
+  }
+
+  /**
+   * Deletes a container registry repository (and its tags) for a project.
+   */
+  private async deleteRegistryRepository(projectId: number, repositoryId: number): Promise<void> {
+    await firstValueFrom(
+      this.httpService.delete(
+        `${this.baseUrl}/api/v4/projects/${projectId}/registry/repositories/${repositoryId}`,
+        { headers: this.headers },
+      ),
+    );
+  }
+
+  /**
+   * Removes all container registry repositories for a project (best-effort per repo).
+   */
+  async purgeContainerRegistry(projectId: number): Promise<{ deleted: number; errors: string[] }> {
+    const repos = await this.listRegistryRepositories(projectId);
+    const errors: string[] = [];
+    let deleted = 0;
+
+    for (const repo of repos) {
+      try {
+        await this.deleteRegistryRepository(projectId, repo.id);
+        deleted++;
+        this.logger.debug(
+          `purgeContainerRegistry: deleted repository id=${repo.id} name=${repo.name} project=${projectId}`,
+        );
+      } catch (error: unknown) {
+        const message = (error as Error).message;
+        errors.push(`registry ${repo.name}: ${message}`);
+        this.logger.warn(
+          `purgeContainerRegistry: failed repository id=${repo.id} project=${projectId}: ${message}`,
+        );
+      }
+    }
+
+    return { deleted, errors };
+  }
+
+  /**
+   * Deletes all GitLab packages for a project (paginated).
+   *
+   * @see https://docs.gitlab.com/ee/api/packages.html
+   */
+  async purgeProjectPackages(projectId: number): Promise<{ deleted: number; errors: string[] }> {
+    const errors: string[] = [];
+    let deleted = 0;
+    let page = 1;
+
+    while (true) {
+      const { data } = await firstValueFrom(
+        this.httpService.get<Array<{ id: number; name: string }>>(
+          `${this.baseUrl}/api/v4/projects/${projectId}/packages`,
+          { headers: this.headers, params: { per_page: 100, page } },
+        ),
+      );
+
+      if (!data?.length) {
+        break;
+      }
+
+      for (const pkg of data) {
+        try {
+          await firstValueFrom(
+            this.httpService.delete(
+              `${this.baseUrl}/api/v4/projects/${projectId}/packages/${pkg.id}`,
+              { headers: this.headers },
+            ),
+          );
+          deleted++;
+        } catch (error: unknown) {
+          const message = (error as Error).message;
+          errors.push(`package ${pkg.name}#${pkg.id}: ${message}`);
+          this.logger.warn(
+            `purgeProjectPackages: failed package id=${pkg.id} project=${projectId}: ${message}`,
+          );
+        }
+      }
+
+      if (data.length < 100) {
+        break;
+      }
+      page++;
+    }
+
+    return { deleted, errors };
+  }
+
+  /**
+   * Purges container registry and generic packages before project deletion.
+   */
+  async purgeProjectArtifacts(projectId: number): Promise<void> {
+    const registry = await this.purgeContainerRegistry(projectId);
+    const packages = await this.purgeProjectPackages(projectId);
+    this.logger.log(
+      `purgeProjectArtifacts: project=${projectId} registryDeleted=${registry.deleted} ` +
+        `packagesDeleted=${packages.deleted} registryErrors=${registry.errors.length} ` +
+        `packageErrors=${packages.errors.length}`,
+    );
+  }
+
+  /**
+   * Attempts permanent GitLab project deletion.
+   *
+   * @param options.force - purge registry and packages before delete
+   * @returns false when GitLab rejects deletion (e.g. registry still in use)
+   */
+  async tryDeleteProject(
+    projectId: number,
+    options?: { force?: boolean },
+  ): Promise<{ ok: boolean; message?: string }> {
+    if (options?.force) {
+      try {
+        await this.purgeProjectArtifacts(projectId);
+      } catch (error: unknown) {
+        this.logger.warn(
+          `purgeProjectArtifacts(${projectId}) failed before delete: ${(error as Error).message}`,
+        );
+      }
+    }
+
+    try {
+      await this.deleteProject(projectId);
+      return { ok: true };
+    } catch (error: unknown) {
+      const message =
+        (error as { response?: { data?: { message?: string } } }).response?.data?.message ??
+        (error as Error).message;
+      this.logger.warn(`GitLab deleteProject(${projectId}) failed: ${message}`);
+      return { ok: false, message };
+    }
+  }
+
   private async findGroup(name: string, parentId?: number): Promise<GitLabGroup | undefined> {
     const { data } = await firstValueFrom(
       this.httpService.get<GitLabGroup[]>(`${this.baseUrl}/api/v4/groups`, {

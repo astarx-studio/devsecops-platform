@@ -12,11 +12,12 @@
 SHELL := /usr/bin/bash
 ROOT := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 
-.PHONY: help bootstrap smoke smoke-deploy smoke-cleanup reset backup restore migrate-v1 verify-sonar
+.PHONY: help bootstrap update-dso-configs smoke smoke-deploy smoke-cleanup reset backup restore migrate-v1 verify-sonar
 
 help:
 	@echo "Targets:"
-	@echo "  make bootstrap     - ./bootstrap/bootstrap.sh (compose + Sonar init → k3d → vault auth → RBAC → seed → smoke)"
+	@echo "  make bootstrap          - ./bootstrap/bootstrap.sh (compose + Sonar init → k3d → vault auth → RBAC → seed → smoke)"
+	@echo "  make update-dso-configs - ./bootstrap/seed-platform-projects.sh (push configs/* to GitLab; no full bootstrap)"
 	@echo "  make verify-sonar  - scripts/verify-sonar-setup.sh (Sonar .env, properties, containers)"
 	@echo "  make smoke         - ./bootstrap/smoke-test.sh (lightweight infra checks)"
 	@echo "  make smoke-deploy  - ./bootstrap/smoke-deploy.sh (smoke-api + smoke-web; ARGS='--cleanup' tears down)"
@@ -28,6 +29,9 @@ help:
 
 bootstrap:
 	@cd "$(ROOT)" && bash ./bootstrap/bootstrap.sh
+
+update-dso-configs:
+	@cd "$(ROOT)" && bash ./bootstrap/seed-platform-projects.sh
 
 verify-sonar:
 	@cd "$(ROOT)" && bash ./scripts/verify-sonar-setup.sh

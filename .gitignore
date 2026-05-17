@@ -42,3 +42,9 @@ Thumbs.db
 acme.json
 
 coverage
+
+# Local-only tooling (not part of platform deliverables)
+/_local/
+
+# Maintainer rules for local UI — keep out of repo; copy from _local/management-ui/RULES.sample.mdc if needed
+.cursor/rules/local-management-ui.mdc

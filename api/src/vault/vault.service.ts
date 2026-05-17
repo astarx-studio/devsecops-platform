@@ -69,6 +69,33 @@ export class VaultService {
   }
 
   /**
+   * Reads the latest KV v2 secret version at a path.
+   *
+   * @param path - Vault path (e.g. "projects/acme/webapp/sonar")
+   * @returns Key-value pairs, or empty object when the path has no data
+   */
+  async readSecrets(path: string): Promise<Record<string, string>> {
+    this.logger.debug(`Reading secrets from vault path: secret/data/${path}`);
+
+    try {
+      const { data } = await firstValueFrom(
+        this.httpService.get<{ data?: { data?: Record<string, string> } }>(
+          `${this.baseUrl}/v1/secret/data/${path}`,
+          { headers: this.headers },
+        ),
+      );
+      return data?.data?.data ?? {};
+    } catch (error) {
+      const status = (error as { response?: { status?: number } }).response?.status;
+      if (status === 404) {
+        return {};
+      }
+      this.logger.warn(`Failed to read vault path "${path}": ${(error as Error).message}`);
+      return {};
+    }
+  }
+
+  /**
    * Deletes all versions of secrets at a KV v2 path.
    *
    * @param path - Vault path to permanently delete

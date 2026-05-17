@@ -13,7 +13,11 @@ import { ConfigService } from '@nestjs/config';
 
 import { AppConfiguration } from '../config';
 
-import type { DeployEnv } from '../projects/schemas/project.schema';
+import type {
+  ClusterProfile,
+  DeployEnv,
+  DeploymentTarget,
+} from '../projects/schemas/project.schema';
 
 /** Kubernetes API clients bundled per deployment environment. */
 interface EnvClients {
@@ -42,7 +46,7 @@ export type DeploymentStatusMap = Partial<Record<DeployEnv, string>>;
 export class K8sService implements OnModuleInit {
   private readonly logger = new Logger(K8sService.name);
   private readonly configDir: string;
-  private readonly clients = new Map<DeployEnv, EnvClients>();
+  private readonly clients = new Map<ClusterProfile, EnvClients>();
 
   constructor(configService: ConfigService<AppConfiguration>) {
     this.configDir = configService.get<string>('kube.configDir', { infer: true })!;
@@ -50,8 +54,8 @@ export class K8sService implements OnModuleInit {
 
   onModuleInit(): void {
     this.logger.log(`Loading kubeconfigs from: ${this.configDir}`);
-    for (const env of ['dev', 'stg', 'prod'] as DeployEnv[]) {
-      this.initEnv(env);
+    for (const profile of ['dev', 'stg', 'prod'] as ClusterProfile[]) {
+      this.initProfile(profile);
     }
     const loaded = [...this.clients.keys()];
     this.logger.log(
@@ -62,35 +66,34 @@ export class K8sService implements OnModuleInit {
   }
 
   /**
-   * Ensures the target Kubernetes namespace exists.
-   * In the current platform model dev/stg/prod namespaces are pre-created
-   * by bootstrap/k8s-primitives.sh, so this is effectively a no-op health check.
-   * If the namespace is missing (e.g. on a fresh cluster), it will be created.
+   * Ensures a Kubernetes namespace exists on the given cluster profile.
    *
-   * @param env - Target deployment environment
+   * @param clusterProfile - Which kubeconfig to use (dev|stg|prod)
+   * @param namespace - Namespace name (may differ from profile, e.g. prod-alt)
    */
-  async ensureNamespace(env: DeployEnv): Promise<void> {
-    const clients = this.clients.get(env);
+  async ensureNamespace(clusterProfile: ClusterProfile, namespace: string): Promise<void> {
+    const clients = this.clients.get(clusterProfile);
     if (!clients) {
-      this.logger.warn(`ensureNamespace(${env}): no kubeconfig available, skipping`);
+      this.logger.warn(
+        `ensureNamespace(${clusterProfile}, ${namespace}): no kubeconfig available, skipping`,
+      );
       return;
     }
 
     try {
-      await clients.core.readNamespace({ name: env });
-      this.logger.debug(`Namespace "${env}" already exists`);
+      await clients.core.readNamespace({ name: namespace });
+      this.logger.debug(`Namespace "${namespace}" already exists on profile ${clusterProfile}`);
     } catch (error: unknown) {
       const status = (error as { response?: { statusCode?: number } }).response?.statusCode;
       if (status === 404) {
-        this.logger.log(`Namespace "${env}" not found — creating`);
+        this.logger.log(`Namespace "${namespace}" not found on ${clusterProfile} — creating`);
         await clients.core.createNamespace({
-          body: { metadata: { name: env } },
+          body: { metadata: { name: namespace } },
         });
-        this.logger.log(`Namespace "${env}" created`);
+        this.logger.log(`Namespace "${namespace}" created`);
       } else {
-        // 403 = no permissions to read namespaces (limited RBAC) — assume it exists
         this.logger.warn(
-          `ensureNamespace(${env}): cannot verify namespace existence (HTTP ${status ?? 'unknown'}), assuming it exists`,
+          `ensureNamespace(${clusterProfile}, ${namespace}): cannot verify (HTTP ${status ?? 'unknown'}), assuming it exists`,
         );
       }
     }
@@ -204,10 +207,10 @@ export class K8sService implements OnModuleInit {
    * @param env - Target deployment environment
    * @returns Base64-encoded kubeconfig string, or undefined if not available
    */
-  getKubeconfigB64(env: DeployEnv): string | undefined {
-    const filePath = join(this.configDir, `kubeconfig-${env}.yaml`);
+  getKubeconfigB64(clusterProfile: ClusterProfile): string | undefined {
+    const filePath = join(this.configDir, `kubeconfig-${clusterProfile}.yaml`);
     if (!existsSync(filePath)) {
-      this.logger.warn(`getKubeconfigB64(${env}): file not found at ${filePath}`);
+      this.logger.warn(`getKubeconfigB64(${clusterProfile}): file not found at ${filePath}`);
       return undefined;
     }
     // Base64-encode the raw YAML so it can be stored as a single-line GitLab
@@ -215,16 +218,127 @@ export class K8sService implements OnModuleInit {
     return Buffer.from(readFileSync(filePath, 'utf-8').trim()).toString('base64');
   }
 
+  /**
+   * Removes Helm-managed workload resources for a release in a namespace.
+   * Idempotent — 404 responses are ignored.
+   */
+  async teardownRelease(
+    clusterProfile: ClusterProfile,
+    namespace: string,
+    releaseName: string,
+  ): Promise<void> {
+    const clients = this.clients.get(clusterProfile);
+    if (!clients) {
+      this.logger.warn(
+        `teardownRelease(${clusterProfile}, ${namespace}, ${releaseName}): no kubeconfig, skipping`,
+      );
+      return;
+    }
+
+    this.logger.log(
+      `Teardown release="${releaseName}" namespace="${namespace}" profile=${clusterProfile}`,
+    );
+
+    await this.deleteNamespacedResource(
+      () =>
+        clients.apps.deleteNamespacedDeployment({
+          name: releaseName,
+          namespace,
+        }),
+      'Deployment',
+      releaseName,
+      namespace,
+    );
+
+    await this.deleteNamespacedResource(
+      () =>
+        clients.core.deleteNamespacedService({
+          name: releaseName,
+          namespace,
+        }),
+      'Service',
+      releaseName,
+      namespace,
+    );
+
+    await this.deleteNamespacedResource(
+      () =>
+        clients.networking.deleteNamespacedIngress({
+          name: releaseName,
+          namespace,
+        }),
+      'Ingress',
+      releaseName,
+      namespace,
+    );
+
+    try {
+      const secrets = await clients.core.listNamespacedSecret({
+        namespace,
+        labelSelector: `owner=helm,name=${releaseName}`,
+      });
+      for (const secret of secrets.items) {
+        if (secret.metadata?.name) {
+          await this.deleteNamespacedResource(
+            () =>
+              clients.core.deleteNamespacedSecret({
+                name: secret.metadata!.name!,
+                namespace,
+              }),
+            'Secret',
+            secret.metadata.name,
+            namespace,
+          );
+        }
+      }
+    } catch (err) {
+      this.logger.warn(
+        `teardownRelease: could not list helm secrets for ${releaseName}: ${(err as Error).message}`,
+      );
+    }
+  }
+
+  /** Tears down all targets for a project release. */
+  async teardownProjectTargets(
+    releaseName: string,
+    targets: Pick<DeploymentTarget, 'clusterProfile' | 'kubeNamespace'>[],
+  ): Promise<void> {
+    for (const target of targets) {
+      await this.teardownRelease(target.clusterProfile, target.kubeNamespace, releaseName);
+    }
+  }
+
   // ---------------------------------------------------------------------------
   // Private helpers
   // ---------------------------------------------------------------------------
 
-  /** Initialises K8s clients for one environment from its kubeconfig file. */
-  private initEnv(env: DeployEnv): void {
-    const filePath = join(this.configDir, `kubeconfig-${env}.yaml`);
+  private async deleteNamespacedResource(
+    deleteFn: () => Promise<unknown>,
+    kind: string,
+    name: string,
+    namespace: string,
+  ): Promise<void> {
+    try {
+      await deleteFn();
+      this.logger.debug(`Deleted ${kind} "${name}" in namespace "${namespace}"`);
+    } catch (error: unknown) {
+      const status = (error as { response?: { statusCode?: number } }).response?.statusCode;
+      if (status === 404) {
+        this.logger.debug(`${kind} "${name}" not found in "${namespace}" (ok)`);
+      } else {
+        this.logger.warn(
+          `Failed to delete ${kind} "${name}" in "${namespace}": HTTP ${status ?? 'unknown'}`,
+        );
+      }
+    }
+  }
+
+  /** Initialises K8s clients for one cluster profile from its kubeconfig file. */
+  private initProfile(profile: ClusterProfile): void {
+    const filePath = join(this.configDir, `kubeconfig-${profile}.yaml`);
 
     if (!existsSync(filePath)) {
-      this.logger.warn(`Kubeconfig not found for env "${env}" at: ${filePath}`);
+      this.logger.warn(`Kubeconfig not found for profile "${profile}" at: ${filePath}`);
       return;
     }
 
@@ -232,15 +346,17 @@ export class K8sService implements OnModuleInit {
       const kc = new KubeConfig();
       kc.loadFromFile(filePath);
 
-      this.clients.set(env, {
+      this.clients.set(profile, {
         core: kc.makeApiClient(CoreV1Api),
         apps: kc.makeApiClient(AppsV1Api),
         networking: kc.makeApiClient(NetworkingV1Api),
       });
 
-      this.logger.debug(`Kubeconfig loaded for env "${env}" from: ${filePath}`);
+      this.logger.debug(`Kubeconfig loaded for profile "${profile}" from: ${filePath}`);
     } catch (error) {
-      this.logger.error(`Failed to load kubeconfig for env "${env}": ${(error as Error).message}`);
+      this.logger.error(
+        `Failed to load kubeconfig for profile "${profile}": ${(error as Error).message}`,
+      );
     }
   }
 

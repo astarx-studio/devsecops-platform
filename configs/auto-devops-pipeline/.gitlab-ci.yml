@@ -19,11 +19,18 @@
 #   KUBECONFIG_B64        Base64-encoded kubeconfig scoped to $KUBE_NAMESPACE
 #
 # Optional overrides (project-level CI variables):
+#   KANIKO_DOCKERFILE     Dockerfile path relative to repo root (default: Dockerfile)
+#   KANIKO_IMAGE_NAME     Optional registry path suffix for monorepos, e.g. "admin"
+#                         → pushes to $CI_REGISTRY_IMAGE/admin:$CI_COMMIT_SHORT_SHA
 #   CHART_VERSION         Pin a chart version  (default: latest stable)
 #   EXTRA_HELM_ARGS       Pass extra --set flags to helm upgrade
-#   DEPLOY_DEV_REF        Branch/pattern that triggers dev deploy (default: develop)
-#   DEPLOY_STG_REF        Branch/pattern that triggers stg deploy (default: staging)
-#   DEPLOY_PROD_REF       Branch/pattern that triggers prod deploy (default: main)
+#   DEPLOY_DEV_REF        Branch that triggers dev deploy (default: develop)
+#   DEPLOY_STG_REF        Branch that triggers stg deploy (default: staging)
+#   DEPLOY_PROD_REF       Branch that triggers prod deploy (default: main)
+#   DEPLOY_<KEY>_REF      Per-target refs for custom targets (e.g. DEPLOY_PROD_ALT_REF)
+#
+#   Set any DEPLOY_*_REF to "none" (only this value) to disable deploy jobs for that target.
+#   The Management API sets "none" when a target is disabled.
 #
 # Optional SonarQube (opt-in per project — set via Management API or GitLab CI variables):
 #   SONAR_ALLOWED_BRANCHES   Comma-separated branch names (empty = skip Sonar)
@@ -102,18 +109,30 @@ stages:
   image:
     name: gcr.io/kaniko-project/executor:v1.23.2-debug
     entrypoint: [""]
+  variables:
+    KANIKO_DOCKERFILE: "Dockerfile"
+    KANIKO_IMAGE_NAME: ""
   script:
     - mkdir -p /kaniko/.docker
     - |
       echo "{\"auths\":{\"${CI_REGISTRY}\":{\"auth\":\"$(echo -n "${CI_REGISTRY_USER}:${CI_REGISTRY_PASSWORD}" | base64 | tr -d '\n')\"}}}" \
         > /kaniko/.docker/config.json
+    - |
+      IMAGE_BASE="${CI_REGISTRY_IMAGE}"
+      if [ -n "${KANIKO_IMAGE_NAME:-}" ]; then
+        IMAGE_BASE="${CI_REGISTRY_IMAGE}/${KANIKO_IMAGE_NAME}"
+      fi
+      export KANIKO_DEST_SHA="${IMAGE_BASE}:${CI_COMMIT_SHORT_SHA}"
+      export KANIKO_DEST_LATEST="${IMAGE_BASE}:latest"
+      export KANIKO_CACHE_REPO="${IMAGE_BASE}/cache"
+      echo "Kaniko image base: ${IMAGE_BASE} (dockerfile=${KANIKO_DOCKERFILE})"
     - /kaniko/executor
         --context "${CI_PROJECT_DIR}"
-        --dockerfile "${CI_PROJECT_DIR}/Dockerfile"
-        --destination "${CI_REGISTRY_IMAGE}:${CI_COMMIT_SHORT_SHA}"
-        --destination "${CI_REGISTRY_IMAGE}:latest"
+        --dockerfile "${CI_PROJECT_DIR}/${KANIKO_DOCKERFILE}"
+        --destination "${KANIKO_DEST_SHA}"
+        --destination "${KANIKO_DEST_LATEST}"
         --cache=true
-        --cache-repo "${CI_REGISTRY_IMAGE}/cache"
+        --cache-repo "${KANIKO_CACHE_REPO}"
   rules:
     - if: '$CI_COMMIT_BRANCH'
 
@@ -134,6 +153,10 @@ test:
 
 # =============================================================================
 # SonarQube — static analysis (opt-in via SONAR_ALLOWED_BRANCHES + SONAR_TOKEN)
+#
+# Runs in the test stage with no job dependencies so it is not skipped when a
+# project's `test` job fails. Do not add `needs: [test]` unless you also set
+# optional: true on that need, or Sonar will be skipped on test failure.
 # =============================================================================
 .sonar-scan:
   stage: test
@@ -156,7 +179,8 @@ test:
       fi
       SCAN_URL="${SONAR_HOST_URL_INTERNAL:-http://sonarqube:9000}"
       PROJECT_KEY="${CI_PROJECT_PATH_SLUG}_${CI_COMMIT_REF_SLUG}"
-      PROJECT_KEY=$(echo "$PROJECT_KEY" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9._-' '_')
+      # printf avoids echo's trailing newline (was turned into a stray '_' by tr)
+      PROJECT_KEY=$(printf '%s' "$PROJECT_KEY" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9._-' '_' | sed 's/^_\+//;s/_\+$//')
       export SONAR_HOST_URL="$SCAN_URL"
       export SONAR_TOKEN
       TIER=other
@@ -312,6 +336,8 @@ deploy:dev:
     name: dev
     url: https://$APP_HOST
   rules:
+    - if: '$DEPLOY_DEV_REF == "none"'
+      when: never
     - if: '$CI_COMMIT_BRANCH == $DEPLOY_DEV_REF'
       when: on_success
 
@@ -323,6 +349,8 @@ deploy:stg:
     name: stg
     url: https://$APP_HOST
   rules:
+    - if: '$DEPLOY_STG_REF == "none"'
+      when: never
     - if: '$CI_COMMIT_BRANCH == $DEPLOY_STG_REF'
       when: on_success
 
@@ -334,6 +362,8 @@ deploy:prod:
     name: prod
     url: https://$APP_HOST
   rules:
+    - if: '$DEPLOY_PROD_REF == "none"'
+      when: never
     - if: '$CI_COMMIT_BRANCH == $DEPLOY_PROD_REF'
       when: manual
       allow_failure: false
