@@ -6,12 +6,14 @@ import {
   IsArray,
   IsBoolean,
   IsEnum,
+  IsInt,
   IsNotEmpty,
   IsObject,
   IsOptional,
   IsString,
   Matches,
   MaxLength,
+  Min,
   MinLength,
   ValidateNested,
 } from 'class-validator';
@@ -282,6 +284,8 @@ export class DeploymentTargetInput {
 @InputType({ description: 'Adopt an existing GitLab project into the platform registry.' })
 export class RegisterGitLabProjectInput {
   @Field(() => Int, { description: 'Existing GitLab numeric project ID.' })
+  @IsInt()
+  @Min(1)
   gitlabProjectId!: number;
 
   @Field(() => [String], {

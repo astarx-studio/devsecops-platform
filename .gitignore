@@ -44,7 +44,6 @@ acme.json
 coverage
 
 # Local-only tooling (not part of platform deliverables)
+# Untracked operator-specific files (not part of the published stack)
 /_local/
-
-# Maintainer rules for local UI — keep out of repo; copy from _local/management-ui/RULES.sample.mdc if needed
 .cursor/rules/local-management-ui.mdc

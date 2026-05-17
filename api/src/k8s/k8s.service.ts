@@ -29,6 +29,28 @@ interface EnvClients {
 /** Deployment status keyed by environment. */
 export type DeploymentStatusMap = Partial<Record<DeployEnv, string>>;
 
+/** HTTP status from @kubernetes/client-node errors (`code` or `response.statusCode`). */
+function readK8sErrorStatus(error: unknown): number | undefined {
+  if (!error || typeof error !== 'object') {
+    return undefined;
+  }
+  const candidate = error as {
+    code?: number;
+    status?: number;
+    response?: { statusCode?: number };
+  };
+  if (typeof candidate.code === 'number') {
+    return candidate.code;
+  }
+  if (typeof candidate.response?.statusCode === 'number') {
+    return candidate.response.statusCode;
+  }
+  if (typeof candidate.status === 'number') {
+    return candidate.status;
+  }
+  return undefined;
+}
+
 /**
  * Kubernetes client module that manages one kubeconfig per deployment
  * environment (dev, stg, prod).
@@ -84,7 +106,7 @@ export class K8sService implements OnModuleInit {
       await clients.core.readNamespace({ name: namespace });
       this.logger.debug(`Namespace "${namespace}" already exists on profile ${clusterProfile}`);
     } catch (error: unknown) {
-      const status = (error as { response?: { statusCode?: number } }).response?.statusCode;
+      const status = readK8sErrorStatus(error);
       if (status === 404) {
         this.logger.log(`Namespace "${namespace}" not found on ${clusterProfile} — creating`);
         await clients.core.createNamespace({
@@ -120,7 +142,7 @@ export class K8sService implements OnModuleInit {
           `listProjectDeployments(${effectiveSlug}, ${env}): status="${result[env]}"`,
         );
       } catch (error: unknown) {
-        const status = (error as { response?: { statusCode?: number } }).response?.statusCode;
+        const status = readK8sErrorStatus(error);
         if (status === 404) {
           this.logger.debug(`No deployment "${effectiveSlug}" in namespace "${env}"`);
         } else {
@@ -157,7 +179,7 @@ export class K8sService implements OnModuleInit {
       this.logger.debug(`getAppUrl(${env}, ${effectiveSlug}): host="${host ?? 'none'}"`);
       return host;
     } catch (error: unknown) {
-      const status = (error as { response?: { statusCode?: number } }).response?.statusCode;
+      const status = readK8sErrorStatus(error);
       this.logger.debug(
         `getAppUrl(${env}, ${effectiveSlug}): Ingress not found (HTTP ${status ?? 'unknown'})`,
       );
@@ -308,6 +330,55 @@ export class K8sService implements OnModuleInit {
     }
   }
 
+  /**
+   * Returns true when a Helm release workload (Deployment) still exists for any target.
+   */
+  async hasReleaseInTargets(
+    releaseName: string,
+    targets: Pick<DeploymentTarget, 'clusterProfile' | 'kubeNamespace'>[],
+  ): Promise<boolean> {
+    for (const target of targets) {
+      if (
+        await this.hasReleaseWorkload(
+          target.clusterProfile,
+          target.kubeNamespace,
+          releaseName,
+        )
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private async hasReleaseWorkload(
+    clusterProfile: ClusterProfile,
+    namespace: string,
+    releaseName: string,
+  ): Promise<boolean> {
+    const clients = this.clients.get(clusterProfile);
+    if (!clients) {
+      return false;
+    }
+
+    try {
+      await clients.apps.readNamespacedDeployment({
+        name: releaseName,
+        namespace,
+      });
+      return true;
+    } catch (error: unknown) {
+      const status = readK8sErrorStatus(error);
+      if (status === 404) {
+        return false;
+      }
+      this.logger.warn(
+        `hasReleaseWorkload(${clusterProfile}, ${namespace}, ${releaseName}): HTTP ${status ?? 'unknown'} — assuming resources remain`,
+      );
+      return true;
+    }
+  }
+
   // ---------------------------------------------------------------------------
   // Private helpers
   // ---------------------------------------------------------------------------
@@ -322,7 +393,7 @@ export class K8sService implements OnModuleInit {
       await deleteFn();
       this.logger.debug(`Deleted ${kind} "${name}" in namespace "${namespace}"`);
     } catch (error: unknown) {
-      const status = (error as { response?: { statusCode?: number } }).response?.statusCode;
+      const status = readK8sErrorStatus(error);
       if (status === 404) {
         this.logger.debug(`${kind} "${name}" not found in "${namespace}" (ok)`);
       } else {

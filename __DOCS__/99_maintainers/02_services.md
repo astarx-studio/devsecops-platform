@@ -13,7 +13,7 @@ All services share the `devops-network` Docker bridge network. The network name 
 | Boot phase | Services |
 |---|---|
 | Phase 1 — immediate | `traefik`, `mongo`, `postgres`, `vault` |
-| Phase 2 — after postgres healthy | `postgres-sonar-init`, `keycloak`, `sonarqube-config-init`, `sonarqube` (first boot may take several minutes), then `sonarqube-init` (must exit 0) |
+| Phase 2 — after postgres healthy | `postgres-keycloak-init`, `postgres-sonar-init`, `postgres-gitlab-init`, `postgres-registry-init`, `keycloak`, `sonarqube-config-init`, `sonarqube` (first boot may take several minutes), then `sonarqube-init` (must exit 0) |
 | Phase 3 — after keycloak healthy | `oauth2-proxy` |
 | Phase 4 — after vault + keycloak healthy | `vault-oidc-init` |
 | Phase 5 — after mongo + vault healthy | `api` |
@@ -83,15 +83,17 @@ All services share the `devops-network` Docker bridge network. The network name 
 | Volumes | `./.vols/keycloak-db` → `/var/lib/postgresql/data` (path unchanged for upgrades) |
 | Depends on | — |
 
-Shared PostgreSQL for **Keycloak** (`KC_DB_*`) and **SonarQube** (`SONAR_DB_*`). On first boot (empty data directory), the image bootstraps operator superuser `${POSTGRES_ADMIN_USER}` / database `postgres`; `postgres/init/01-keycloak-database.sh` and `02-sonar-database.sh` create app roles and databases. Keycloak and Sonar JDBC use app credentials only.
+Shared PostgreSQL for **Keycloak** (`KC_DB_*`), **SonarQube** (`SONAR_DB_*`), **GitLab Rails** (`GITLAB_DB_*`), and **container registry metadata** (`REGISTRY_DB_*`). On first boot (empty data directory), the image bootstraps operator superuser `${POSTGRES_ADMIN_USER}` / database `postgres`; `postgres/init/01-keycloak-database.sh` through `04-registry-database.sh` create app roles and databases. Application services use app credentials only (not the admin user).
 
 **DNS:** Hostname `postgres`. Legacy alias `keycloak-db` still resolves on `devops-network` if `.env` still has `KC_DB_HOST=keycloak-db`; prefer `KC_DB_HOST=postgres` in new installs (`sample.env`).
 
 **Renaming without data loss:** Safe when the bind-mount path stays `.vols/keycloak-db`. Stop the stack, then `docker compose up -d` — data lives on the host volume, not the container name. Do not delete `.vols/keycloak-db` unless you intend a full DB reset.
 
-**App databases on compose up:** `postgres-keycloak-init` and `postgres-sonar-init` create Keycloak/Sonar roles and databases idempotently (as `${POSTGRES_ADMIN_USER}`). Fresh installs also run `postgres/init/01-keycloak-database.sh` and `02-sonar-database.sh` when the data directory is empty.
+**App databases on compose up:** `postgres-keycloak-init`, `postgres-sonar-init`, `postgres-gitlab-init`, and `postgres-registry-init` create roles, databases, and (for GitLab) required extensions idempotently as `${POSTGRES_ADMIN_USER}`. Fresh installs also run `postgres/init/01-keycloak-database.sh` through `04-registry-database.sh` when the data directory is empty.
 
-**Key environment variables:** `POSTGRES_ADMIN_USER`, `POSTGRES_ADMIN_PASSWORD` (cluster bootstrap + host `psql`); `KC_DB_*`, `SONAR_DB_*` (application users).
+**Key environment variables:** `POSTGRES_ADMIN_USER`, `POSTGRES_ADMIN_PASSWORD` (cluster bootstrap + host `psql`); `KC_DB_*`, `SONAR_DB_*`, `GITLAB_DB_*`, `REGISTRY_DB_*` (application users).
+
+**Backup / DR:** `make backup` archives `.vols/` and, when GitLab/registry DBs exist on this instance, writes `backups/gitlabhq_production-*.dump` and `backups/registry-*.dump`. `gitlab-backup` does **not** include the registry metadata database — keep logical dumps with MinIO registry blobs.
 
 **Health check:** `pg_isready -U ${POSTGRES_ADMIN_USER} -d postgres`. Interval 10s, timeout 5s, 5 retries.
 
@@ -242,13 +244,17 @@ No additional iptables configuration is needed inside the container.
 | Image | `gitlab/gitlab-ce:18.10.1-ce.0` |
 | Host ports | `12222→22` (SSH git) |
 | Volumes | `./.vols/gitlab/config`, `./.vols/gitlab/logs`, `./.vols/gitlab/data` |
-| Depends on | — |
+| Depends on | `postgres` (healthy), `postgres-gitlab-init`, `postgres-registry-init`, `minio` (healthy) |
 
-**Key environment variables (via `GITLAB_OMNIBUS_CONFIG`):**
+**Databases:** Rails uses shared `postgres` (`GITLAB_DB_*`, default database `gitlabhq_production`). Container registry metadata uses a separate database (`REGISTRY_DB_*`, default `registry`) on the same host. Embedded Omnibus PostgreSQL is disabled (`postgresql['enable'] = false`). Fresh installs: empty DBs are created by `postgres-gitlab-init` / `postgres-registry-init` on first `compose up`. Upgrading from embedded PostgreSQL requires a planned cutover (logical dump/restore of `gitlabhq_production`, then registry metadata import per [GitLab docs](https://docs.gitlab.com/administration/packages/container_registry_metadata_database/)) before relying on this layout.
+
+**Key environment variables (via `GITLAB_OMNIBUS_CONFIG` and `.env`):**
 
 | Config key | Purpose |
 |---|---|
 | `external_url` | Public HTTPS URL (e.g. `https://gitlab.devops.yourdomain.com`) |
+| `gitlab_rails['db_*']` | External Rails PostgreSQL on service `postgres` |
+| `registry['database']` | External registry metadata PostgreSQL; `REGISTRY_DB_ENABLED=true` only after metadata import |
 | `gitlab_rails['omniauth_*']` | OmniAuth OIDC config pointing to Keycloak |
 | `registry_external_url` | Container registry public URL |
 | `gitlab_rails['smtp_*']` | SMTP config for email notifications |
@@ -261,6 +267,7 @@ No additional iptables configuration is needed inside the container.
 - OIDC SSO via Keycloak uses the `gitlab` client configured in the `devops` realm. If Keycloak is not yet running when GitLab first starts, users can still log in with the local root account.
 - The root account credentials are set via `GITLAB_ROOT_PASSWORD` (first boot only). After that, use the admin console or API.
 - `GITLAB_ROOT_TOKEN` is a personal access token for the root account, created manually after first boot. It is used by the Management API.
+- Keep `REGISTRY_DB_ENABLED=false` until registry metadata import to the shared `registry` database completes; then set `true` and recreate GitLab.
 
 ---
 

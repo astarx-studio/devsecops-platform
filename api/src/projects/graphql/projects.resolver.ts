@@ -326,7 +326,8 @@ export class ProjectsResolver {
   @Mutation(() => DeleteProjectResultType, {
     description:
       'Unregisters a project: tears down K8s/Vault/Sonar, then deletes GitLab. ' +
-      'When GitLab delete fails, archives the registry entry unless forceGitLabDelete purges artifacts first.',
+      'Archives the registry row only when GitLab, Kubernetes, or Vault resources still exist ' +
+      '(use forceGitLabDelete to purge registry before GitLab delete). Removes the Mongo row when nothing remains.',
   })
   async deleteProject(
     @Args('id', { type: () => ID }) id: string,

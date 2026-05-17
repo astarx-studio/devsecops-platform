@@ -1,6 +1,6 @@
 import type { ProjectDocument } from './schemas/project.schema';
 
-/** Result of deleteProject — full removal or archived when GitLab blocks deletion. */
+/** Result of deleteProject — full removal or archived when platform resources still exist. */
 export type DeleteProjectOutcome = 'deleted' | 'archived';
 
 export interface DeleteProjectResult {

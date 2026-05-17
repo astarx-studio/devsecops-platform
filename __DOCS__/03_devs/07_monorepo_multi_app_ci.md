@@ -71,7 +71,7 @@ Legacy per-app `.gitlab-ci.yml` under `apps/*` (Docker-in-Docker, SSH deploy) is
 
 ## Current pipeline behaviour (build + test, no deploy)
 
-The datahub-fe `.gitlab-ci.yml` (in `_local/datahub-fe` or your GitLab clone) does the following.
+The datahub-fe `.gitlab-ci.yml` (in your GitLab clone) does the following.
 
 ### Disable deploy
 

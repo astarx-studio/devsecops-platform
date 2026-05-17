@@ -40,6 +40,11 @@ import {
 } from './deploy/deployment-wiring';
 import type { DeleteProjectOptions, DeleteProjectResult } from './delete-project-result';
 import {
+  type DeletionRemainders,
+  formatDeletionRemainders,
+  hasDeletionRemainders,
+} from './deletion-remainders';
+import {
   CreateProjectInput,
   DeploymentTargetInput,
   ProjectFilterInput,
@@ -93,11 +98,11 @@ const DEPLOY_ENVS: DeployEnv[] = ['dev', 'stg', 'prod'];
  *  7. Persist Project document to MongoDB
  *  8. Write AuditLog entry
  *
- * Delete flow:
- *  1. Delete GitLab project (critical)
- *  2. Delete Vault secrets (non-critical)
- *  3. Remove MongoDB document
- *  4. Write AuditLog entry
+ * Delete flow (delete / force-delete mutations only):
+ *  1. Tear down K8s, Vault, Sonar (skipped when retrying an archived row)
+ *  2. Attempt GitLab project delete (force = registry/package purge first)
+ *  3. Probe whether GitLab, K8s, or Vault resources still exist
+ *  4. If none remain → remove MongoDB row; if any remain → archive with error detail
  *
  * Startup reconciliation (4.10):
  *  Scans GitLab for projects without a Mongo record → backfills as legacyV1=true.
@@ -550,8 +555,9 @@ export class ProjectsService implements OnApplicationBootstrap {
   /**
    * Deletes a project and associated platform resources.
    *
-   * When GitLab delete fails (often due to container registry), the MongoDB record is
-   * marked archived instead of removed so operators can retry with force delete.
+   * Archives the MongoDB row only when GitLab, Kubernetes, or Vault resources still
+   * exist after cleanup (so maintainers retain error context). When nothing remains,
+   * the registry row is removed even if an intermediate delete step reported failure.
    *
    * @param id - MongoDB document ID
    * @param options.forceGitLabDelete - purge registry/packages before GitLab delete
@@ -559,23 +565,24 @@ export class ProjectsService implements OnApplicationBootstrap {
    */
   async deleteProject(id: string, options?: DeleteProjectOptions): Promise<DeleteProjectResult> {
     const forceGitLabDelete = options?.forceGitLabDelete ?? false;
-    const skipPlatformCleanup =
-      options?.skipPlatformCleanup ?? false;
+    const skipPlatformCleanup = options?.skipPlatformCleanup ?? false;
 
     this.logger.log(
       `deleteProject: id=${id} forceGitLab=${forceGitLabDelete} skipPlatform=${skipPlatformCleanup}`,
     );
     const doc = await this.findProject({ id });
     const skipPlatform = skipPlatformCleanup || doc.archived;
+    const targets = ensureDeploymentTargets(doc, this.appsDomain);
+    const cleanupNotes: string[] = [];
 
     if (!skipPlatform) {
-      const targets = ensureDeploymentTargets(doc, this.appsDomain);
-
       try {
         this.logger.log(`Tearing down K8s releases for "${doc.helmReleaseName}"`);
         await this.k8sService.teardownProjectTargets(doc.helmReleaseName, targets);
       } catch (err) {
-        this.logger.warn(`K8s teardown failed (non-critical): ${(err as Error).message}`);
+        const note = `Kubernetes teardown: ${(err as Error).message}`;
+        cleanupNotes.push(note);
+        this.logger.warn(`K8s teardown failed (non-critical): ${note}`);
       }
 
       try {
@@ -584,20 +591,23 @@ export class ProjectsService implements OnApplicationBootstrap {
         );
         const vaultResult = await this.vaultService.deleteSecretsTree(doc.vaultBasePath);
         if (vaultResult.errors.length > 0) {
-          this.logger.warn(
-            `Vault cleanup incomplete for "${doc.vaultBasePath}": ` +
-              `${vaultResult.errors.join('; ')}`,
-          );
+          const note = `Vault cleanup incomplete: ${vaultResult.errors.join('; ')}`;
+          cleanupNotes.push(note);
+          this.logger.warn(note);
         }
       } catch (err) {
-        this.logger.warn(`Vault cleanup failed (non-critical): ${(err as Error).message}`);
+        const note = `Vault cleanup: ${(err as Error).message}`;
+        cleanupNotes.push(note);
+        this.logger.warn(`Vault cleanup failed (non-critical): ${note}`);
       }
 
       if (isSonarEnabled(doc.sonar) && this.sonarQubeService.isConfigured()) {
         try {
           await this.deleteSonarProjects(id, doc.sonar!.allowedBranches);
         } catch (err) {
-          this.logger.warn(`Sonar cleanup failed (non-critical): ${(err as Error).message}`);
+          const note = `Sonar cleanup: ${(err as Error).message}`;
+          cleanupNotes.push(note);
+          this.logger.warn(`Sonar cleanup failed (non-critical): ${note}`);
         }
       }
     }
@@ -605,58 +615,128 @@ export class ProjectsService implements OnApplicationBootstrap {
     const gitlabResult = await this.gitlabService.tryDeleteProject(doc.gitlabProjectId, {
       force: forceGitLabDelete,
     });
-
-    if (!gitlabResult.ok) {
-      const message = gitlabResult.message ?? 'GitLab project delete failed';
-      this.logger.warn(
-        `GitLab project ${doc.gitlabProjectId} could not be deleted: ${message}. ` +
-          (doc.archived ? 'Updating archived record.' : 'Archiving platform record.'),
-      );
-
-      if (!doc.archived) {
-        doc.archived = true;
-        doc.archivedAt = new Date();
-        doc.archiveReason = 'gitlab_delete_failed';
-        doc.gitlabDeleteError = message;
-        await doc.save();
-
-        await this.auditLogModel.create({
-          eventType: 'project.archived',
-          projectId: id,
-          gitlabPath: doc.gitlabPath,
-          effectiveSlug: doc.effectiveSlug,
-          metadata: {
-            gitlabDeleteError: message,
-            forceGitLabDelete,
-            platformCleanupPerformed: !skipPlatform,
-          },
-        });
-
-        this.logger.log(`Project "${doc.gitlabPath}" archived (GitLab repo may still exist)`);
-        return { outcome: 'archived', message, project: doc };
-      }
-
-      doc.gitlabDeleteError = message;
-      await doc.save();
-      return { outcome: 'archived', message, project: doc };
+    if (!gitlabResult.ok && gitlabResult.message) {
+      cleanupNotes.push(`GitLab: ${gitlabResult.message}`);
     }
 
+    const remainders = await this.detectDeletionRemainders(doc, targets);
+
+    if (!hasDeletionRemainders(remainders)) {
+      const message =
+        cleanupNotes.length > 0
+          ? `Unregistered: no platform resources remain. Notes: ${cleanupNotes.join('; ')}`
+          : undefined;
+
+      await this.auditLogModel.create({
+        eventType: 'project.deleted',
+        projectId: id,
+        gitlabPath: doc.gitlabPath,
+        effectiveSlug: doc.effectiveSlug,
+        metadata: {
+          forceGitLabDelete,
+          wasArchived: doc.archived ?? false,
+          cleanupNotes,
+          resourcesRemaining: remainders,
+        },
+      });
+
+      await doc.deleteOne();
+      this.logger.log(
+        `Project "${doc.gitlabPath}" unregistered (no GitLab/K8s/Vault resources remaining)`,
+      );
+      return { outcome: 'deleted', message };
+    }
+
+    const message = this.buildDeletionArchiveMessage(gitlabResult.message, cleanupNotes, remainders);
+    this.logger.warn(
+      `Project "${doc.gitlabPath}" not fully removed — archiving registry row: ${message}`,
+    );
+
+    if (!doc.archived) {
+      doc.archived = true;
+      doc.archivedAt = new Date();
+      doc.archiveReason = 'resources_remaining';
+    }
+    doc.gitlabDeleteError = message;
+    await doc.save();
+
     await this.auditLogModel.create({
-      eventType: 'project.deleted',
+      eventType: 'project.archived',
       projectId: id,
       gitlabPath: doc.gitlabPath,
       effectiveSlug: doc.effectiveSlug,
       metadata: {
-        gitlabDeleted: true,
+        gitlabDeleteError: message,
         forceGitLabDelete,
-        wasArchived: doc.archived ?? false,
+        platformCleanupPerformed: !skipPlatform,
+        cleanupNotes,
+        resourcesRemaining: remainders,
       },
     });
 
-    await doc.deleteOne();
+    return { outcome: 'archived', message, project: doc };
+  }
 
-    this.logger.log(`Project "${doc.gitlabPath}" unregistered from platform`);
-    return { outcome: 'deleted' };
+  private async detectDeletionRemainders(
+    doc: ProjectDocument,
+    targets: DeploymentTarget[],
+  ): Promise<DeletionRemainders> {
+    const gitlab = await this.gitlabProjectRemains(doc.gitlabProjectId);
+
+    let kubernetes = false;
+    if (doc.capabilities?.deployable) {
+      try {
+        kubernetes = await this.k8sService.hasReleaseInTargets(doc.helmReleaseName, targets);
+      } catch (err) {
+        this.logger.warn(
+          `Could not verify K8s resources for "${doc.helmReleaseName}": ${(err as Error).message}`,
+        );
+        kubernetes = true;
+      }
+    }
+
+    let vault = false;
+    try {
+      vault = await this.vaultService.hasSecretTree(doc.vaultBasePath);
+    } catch (err) {
+      this.logger.warn(
+        `Could not verify Vault tree "${doc.vaultBasePath}": ${(err as Error).message}`,
+      );
+      vault = true;
+    }
+
+    return { gitlab, kubernetes, vault };
+  }
+
+  private async gitlabProjectRemains(projectId: number): Promise<boolean> {
+    try {
+      await this.gitlabService.getProject(projectId);
+      return true;
+    } catch (err) {
+      const status = (err as { response?: { status?: number } }).response?.status;
+      if (status === 404) {
+        return false;
+      }
+      this.logger.warn(
+        `Could not verify GitLab project ${projectId}: ${(err as Error).message} — assuming it remains`,
+      );
+      return true;
+    }
+  }
+
+  private buildDeletionArchiveMessage(
+    gitlabMessage: string | undefined,
+    cleanupNotes: string[],
+    remainders: DeletionRemainders,
+  ): string {
+    const parts = [...formatDeletionRemainders(remainders)];
+    if (gitlabMessage) {
+      parts.push(gitlabMessage);
+    }
+    if (cleanupNotes.length > 0) {
+      parts.push(...cleanupNotes);
+    }
+    return parts.length > 0 ? parts.join('; ') : 'Platform resources still exist after delete';
   }
 
   /**

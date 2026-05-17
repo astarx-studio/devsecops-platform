@@ -53,9 +53,7 @@ describe('VaultService', () => {
 
   describe('readSecrets', () => {
     it('should return data from KV v2 read', async () => {
-      getFn.mockReturnValueOnce(
-        of(axiosResponse({ data: { data: { SONAR_TOKEN: 'sqp_test' } } })),
-      );
+      getFn.mockReturnValueOnce(of(axiosResponse({ data: { data: { SONAR_TOKEN: 'sqp_test' } } })));
 
       const secrets = await service.readSecrets('projects/acme/webapp/sonar');
 
@@ -93,11 +91,22 @@ describe('VaultService', () => {
     });
   });
 
+  describe('hasSecretTree', () => {
+    it('returns false when metadata is absent', async () => {
+      httpService.get.mockImplementation((url: string) => {
+        if (String(url).includes('/metadata/projects/acme/webapp')) {
+          return throwError(() => ({ response: { status: 404 } }));
+        }
+        return throwError(() => ({ response: { status: 404 } }));
+      });
+
+      await expect(service.hasSecretTree('projects/acme/webapp')).resolves.toBe(false);
+    });
+  });
+
   describe('deleteSecretsTree', () => {
     it('should delete child env paths and base path', async () => {
-      getFn.mockReturnValueOnce(
-        of(axiosResponse({ data: { keys: ['dev/', 'stg/', 'sonar'] } })),
-      );
+      getFn.mockReturnValueOnce(of(axiosResponse({ data: { keys: ['dev/', 'stg/', 'sonar'] } })));
       getFn.mockReturnValue(of(axiosResponse({ data: { keys: [] } })));
       deleteFn.mockReturnValue(of(axiosResponse({})));
 

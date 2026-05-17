@@ -119,6 +119,50 @@ export class VaultService {
   }
 
   /**
+   * Returns true when KV v2 metadata exists at `path` or under any child path.
+   * Used after delete to decide whether the platform registry row should be kept.
+   */
+  async hasSecretTree(path: string): Promise<boolean> {
+    if (await this.metadataPathExists(path)) {
+      return true;
+    }
+
+    const keys = await this.listMetadataKeys(path);
+    for (const key of keys) {
+      const isFolder = key.endsWith('/');
+      const segment = isFolder ? key.slice(0, -1) : key;
+      const childPath = `${path}/${segment}`;
+      if (isFolder) {
+        if (await this.hasSecretTree(childPath)) {
+          return true;
+        }
+      } else if (await this.metadataPathExists(childPath)) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  /** True when secret/metadata/{path} exists (any versions). */
+  async metadataPathExists(path: string): Promise<boolean> {
+    try {
+      await firstValueFrom(
+        this.httpService.get(`${this.baseUrl}/v1/secret/metadata/${path}`, {
+          headers: this.headers,
+        }),
+      );
+      return true;
+    } catch (error) {
+      const status = (error as { response?: { status?: number } }).response?.status;
+      if (status === 404) {
+        return false;
+      }
+      throw error;
+    }
+  }
+
+  /**
    * Deletes all versions of secrets at a single KV v2 path.
    *
    * @param path - Vault path to permanently delete

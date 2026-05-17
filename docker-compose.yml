@@ -3,7 +3,8 @@
 # ==========================================================================
 # Containers: traefik, mongo, postgres, keycloak, vault (OpenBao),
 #             cloudflared, wireguard, gitlab, gitlab-runner, api, sonarqube,
-#             postgres-keycloak-init, postgres-sonar-init, mongo-init,
+#             postgres-keycloak-init, postgres-sonar-init, postgres-gitlab-init,
+#             postgres-registry-init, mongo-init,
 #             sonarqube-config-init, sonarqube-init,
 #             minio, minio-init
 # Network:    devops-network (bridge)
@@ -151,15 +152,20 @@ services:
       - devops-network
 
   # ========================================================================
-  # POSTGRES — Shared PostgreSQL (Keycloak + SonarQube databases)
+  # POSTGRES — Shared PostgreSQL (Keycloak, SonarQube, GitLab, registry metadata)
   # ========================================================================
-  # Bootstrap: POSTGRES_ADMIN_* → superuser on DB postgres; KC_DB_* / SONAR_DB_* via init scripts.
+  # Bootstrap: POSTGRES_ADMIN_* → superuser on DB postgres; app DBs via init scripts.
   # Data directory remains .vols/keycloak-db for upgrades from older layouts.
   # DNS: postgres (service name). Alias keycloak-db keeps old KC_DB_HOST working.
   postgres:
     image: postgres:17-alpine
     container_name: postgres
     restart: unless-stopped
+    # GitLab Rails + registry + Sonar + Keycloak share this instance; default 100 is too low.
+    command:
+      - postgres
+      - -c
+      - max_connections=${POSTGRES_MAX_CONNECTIONS:-300}
     ports:
       - "15433:5432"
     environment:
@@ -172,6 +178,12 @@ services:
       SONAR_DB_NAME: ${SONAR_DB_NAME}
       SONAR_DB_USER: ${SONAR_DB_USER}
       SONAR_DB_PASSWORD: ${SONAR_DB_PASSWORD}
+      GITLAB_DB_NAME: ${GITLAB_DB_NAME:-gitlabhq_production}
+      GITLAB_DB_USER: ${GITLAB_DB_USER:-gitlab}
+      GITLAB_DB_PASSWORD: ${GITLAB_DB_PASSWORD:?set GITLAB_DB_PASSWORD in .env}
+      REGISTRY_DB_NAME: ${REGISTRY_DB_NAME:-registry}
+      REGISTRY_DB_USER: ${REGISTRY_DB_USER:-registry}
+      REGISTRY_DB_PASSWORD: ${REGISTRY_DB_PASSWORD:?set REGISTRY_DB_PASSWORD in .env}
     volumes:
       - ./.vols/keycloak-db:/var/lib/postgresql/data
       - ./postgres/init:/docker-entrypoint-initdb.d:ro
@@ -390,7 +402,8 @@ services:
   # ========================================================================
   # GITLAB CE — Source Control, CI/CD, Container & Package Registry
   # ========================================================================
-  # Omnibus: embedded PostgreSQL, Redis, Nginx, Puma, Sidekiq.
+  # Omnibus: external PostgreSQL (Rails + registry metadata on `postgres`), embedded Redis.
+  # Instances previously on embedded PostgreSQL need a one-time DB cutover before recreate.
   # Internal Nginx listens HTTP on :80 (TLS terminated at Traefik edge).
   # Container Registry listens on :5000 internally.
   # First boot takes 3-5 minutes (database migrations). shm_size: 256m
@@ -416,8 +429,37 @@ services:
       # MinIO credentials consumed by the GITLAB_OMNIBUS_CONFIG object_store block.
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
+      GITLAB_DB_NAME: ${GITLAB_DB_NAME:-gitlabhq_production}
+      GITLAB_DB_USER: ${GITLAB_DB_USER:-gitlab}
+      GITLAB_DB_PASSWORD: ${GITLAB_DB_PASSWORD:?set GITLAB_DB_PASSWORD in .env}
+      REGISTRY_DB_NAME: ${REGISTRY_DB_NAME:-registry}
+      REGISTRY_DB_USER: ${REGISTRY_DB_USER:-registry}
+      REGISTRY_DB_PASSWORD: ${REGISTRY_DB_PASSWORD:?set REGISTRY_DB_PASSWORD in .env}
+      REGISTRY_DB_ENABLED: ${REGISTRY_DB_ENABLED:-false}
       GITLAB_OMNIBUS_CONFIG: |
         external_url '${GITLAB_EXTERNAL_URL}'
+        postgresql['enable'] = false
+        gitlab_rails['db_adapter'] = 'postgresql'
+        gitlab_rails['db_encoding'] = 'unicode'
+        gitlab_rails['db_host'] = 'postgres'
+        gitlab_rails['db_port'] = 5432
+        gitlab_rails['db_database'] = ENV['GITLAB_DB_NAME'] || 'gitlabhq_production'
+        gitlab_rails['db_username'] = ENV['GITLAB_DB_USER'] || 'gitlab'
+        gitlab_rails['db_password'] = ENV['GITLAB_DB_PASSWORD']
+        registry['database'] = {
+          'enabled' => ENV['REGISTRY_DB_ENABLED'] == 'true',
+          'host' => 'postgres',
+          'port' => 5432,
+          'user' => ENV['REGISTRY_DB_USER'] || 'registry',
+          'password' => ENV['REGISTRY_DB_PASSWORD'],
+          'dbname' => ENV['REGISTRY_DB_NAME'] || 'registry',
+          'sslmode' => 'disable',
+        }
+        registry['storage'] = {
+          'filesystem' => {
+            'rootdirectory' => '/var/opt/gitlab/gitlab-rails/shared/registry',
+          },
+        }
         nginx['listen_port'] = 80
         nginx['listen_https'] = false
         nginx['proxy_set_headers'] = {
@@ -517,6 +559,12 @@ services:
       retries: 5
       start_period: 300s
     depends_on:
+      postgres:
+        condition: service_healthy
+      postgres-gitlab-init:
+        condition: service_completed_successfully
+      postgres-registry-init:
+        condition: service_completed_successfully
       minio:
         condition: service_healthy
     labels:
@@ -780,6 +828,54 @@ services:
       SONAR_DB_PASSWORD: ${SONAR_DB_PASSWORD:?set SONAR_DB_PASSWORD in .env}
     volumes:
       - ./postgres/init-ensure-sonar-db.sh:/scripts/init-ensure-sonar-db.sh:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - devops-network
+
+  # ========================================================================
+  # POSTGRES GITLAB INIT — GitLab Rails DB/user + extensions on shared PostgreSQL
+  # ========================================================================
+  postgres-gitlab-init:
+    image: postgres:17-alpine
+    container_name: postgres-gitlab-init
+    restart: "no"
+    entrypoint: ["/bin/sh", "/scripts/init-ensure-gitlab-db.sh"]
+    environment:
+      PGHOST: postgres
+      PGUSER: ${POSTGRES_ADMIN_USER:?set POSTGRES_ADMIN_USER in .env}
+      PGPASSWORD: ${POSTGRES_ADMIN_PASSWORD:?set POSTGRES_ADMIN_PASSWORD in .env}
+      PGDATABASE: postgres
+      GITLAB_DB_NAME: ${GITLAB_DB_NAME:-gitlabhq_production}
+      GITLAB_DB_USER: ${GITLAB_DB_USER:-gitlab}
+      GITLAB_DB_PASSWORD: ${GITLAB_DB_PASSWORD:?set GITLAB_DB_PASSWORD in .env}
+    volumes:
+      - ./postgres/init-ensure-gitlab-db.sh:/scripts/init-ensure-gitlab-db.sh:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - devops-network
+
+  # ========================================================================
+  # POSTGRES REGISTRY INIT — Container registry metadata DB on shared PostgreSQL
+  # ========================================================================
+  postgres-registry-init:
+    image: postgres:17-alpine
+    container_name: postgres-registry-init
+    restart: "no"
+    entrypoint: ["/bin/sh", "/scripts/init-ensure-registry-db.sh"]
+    environment:
+      PGHOST: postgres
+      PGUSER: ${POSTGRES_ADMIN_USER:?set POSTGRES_ADMIN_USER in .env}
+      PGPASSWORD: ${POSTGRES_ADMIN_PASSWORD:?set POSTGRES_ADMIN_PASSWORD in .env}
+      PGDATABASE: postgres
+      REGISTRY_DB_NAME: ${REGISTRY_DB_NAME:-registry}
+      REGISTRY_DB_USER: ${REGISTRY_DB_USER:-registry}
+      REGISTRY_DB_PASSWORD: ${REGISTRY_DB_PASSWORD:?set REGISTRY_DB_PASSWORD in .env}
+    volumes:
+      - ./postgres/init-ensure-registry-db.sh:/scripts/init-ensure-registry-db.sh:ro
     depends_on:
       postgres:
         condition: service_healthy

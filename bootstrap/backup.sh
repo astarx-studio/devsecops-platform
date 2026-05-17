@@ -19,7 +19,37 @@ ARCHIVE="${DST_DIR}/platform-${STAMP}.tar.gz"
 
 log() { echo "[backup] $*"; }
 
+# Optional logical dumps when GitLab uses shared PostgreSQL (gitlab-backup excludes registry metadata DB).
+dump_shared_pg() {
+  local stamp="${1:?stamp required}"
+  if ! command -v docker >/dev/null 2>&1; then
+    return 0
+  fi
+  if ! docker inspect postgres >/dev/null 2>&1; then
+    return 0
+  fi
+  # shellcheck source=/dev/null
+  if [[ -f "${ROOT}/.env" ]]; then
+    # shellcheck source=/dev/null
+    source "${ROOT}/bootstrap/lib/load-env.sh"
+    load_dotenv "${ROOT}/.env" 2>/dev/null || true
+  fi
+  local admin="${POSTGRES_ADMIN_USER:-admin}"
+  local gitlab_db="${GITLAB_DB_NAME:-gitlabhq_production}"
+  local registry_db="${REGISTRY_DB_NAME:-registry}"
+  for db in "${gitlab_db}" "${registry_db}"; do
+    if MSYS_NO_PATHCONV=1 docker exec postgres psql -U "${admin}" -d postgres -tAc \
+      "SELECT 1 FROM pg_database WHERE datname='${db}';" 2>/dev/null | grep -q 1; then
+      local out="${DST_DIR}/${db}-${stamp}.dump"
+      log "Dumping shared PostgreSQL database ${db} → ${out}"
+      MSYS_NO_PATHCONV=1 docker exec postgres pg_dump -U "${admin}" -d "${db}" -Fc -f "/tmp/${db}.dump"
+      docker cp "postgres:/tmp/${db}.dump" "${out}"
+    fi
+  done
+}
+
 mkdir -p "${DST_DIR}"
+dump_shared_pg "${STAMP}"
 log "Creating ${ARCHIVE}..."
 
 members=()

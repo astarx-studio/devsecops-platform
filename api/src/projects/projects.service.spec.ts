@@ -81,7 +81,10 @@ describe('ProjectsService', () => {
   let ensureNamespaceFn: jest.Mock;
   let getKubeconfigB64Fn: jest.Mock;
   let teardownProjectTargetsFn: jest.Mock;
+  let hasReleaseInTargetsFn: jest.Mock;
   let tryDeleteProjectFn: jest.Mock;
+  let getProjectFn: jest.Mock;
+  let hasSecretTreeFn: jest.Mock;
   let slugResolveFn: jest.Mock;
   let slugIsAvailableFn: jest.Mock;
 
@@ -111,7 +114,10 @@ describe('ProjectsService', () => {
     ensureNamespaceFn = jest.fn().mockResolvedValue(undefined);
     getKubeconfigB64Fn = jest.fn().mockReturnValue('base64-kubeconfig');
     teardownProjectTargetsFn = jest.fn().mockResolvedValue(undefined);
+    hasReleaseInTargetsFn = jest.fn().mockResolvedValue(false);
     tryDeleteProjectFn = jest.fn().mockResolvedValue({ ok: true });
+    getProjectFn = jest.fn().mockRejectedValue({ response: { status: 404 } });
+    hasSecretTreeFn = jest.fn().mockResolvedValue(false);
     slugResolveFn = jest.fn().mockImplementation((requested: string) => Promise.resolve(requested));
     slugIsAvailableFn = jest.fn().mockResolvedValue(true);
 
@@ -124,6 +130,7 @@ describe('ProjectsService', () => {
       listProjects: listProjectsFn,
       deleteProject: deleteProjectFn,
       tryDeleteProject: tryDeleteProjectFn,
+      getProject: getProjectFn,
       setProjectCiVariables: setProjectCiVariablesFn,
       templateGroup: 10,
       configGroup: 20,
@@ -134,12 +141,14 @@ describe('ProjectsService', () => {
       writeSecrets: writeSecretsFn,
       readSecrets: readSecretsFn,
       deleteSecretsTree: deleteSecretsTreeFn,
+      hasSecretTree: hasSecretTreeFn,
     } as unknown as jest.Mocked<VaultService>;
 
     k8sService = {
       ensureNamespace: ensureNamespaceFn,
       getKubeconfigB64: getKubeconfigB64Fn,
       teardownProjectTargets: teardownProjectTargetsFn,
+      hasReleaseInTargets: hasReleaseInTargetsFn,
     } as unknown as jest.Mocked<K8sService>;
 
     slugService = {
@@ -440,8 +449,9 @@ describe('ProjectsService', () => {
       expect(result.outcome).toBe('deleted');
     });
 
-    it('should archive when GitLab delete fails', async () => {
+    it('should archive when GitLab delete fails and GitLab project still exists', async () => {
       tryDeleteProjectFn.mockResolvedValueOnce({ ok: false, message: 'registry in use' });
+      getProjectFn.mockResolvedValueOnce(gitlabProjectFactory({ id: 42 }));
       const mockDoc = {
         _id: 'abc',
         gitlabProjectId: 42,
@@ -460,8 +470,38 @@ describe('ProjectsService', () => {
 
       expect(result.outcome).toBe('archived');
       expect(mockDoc.archived).toBe(true);
+      expect(mockDoc.archiveReason).toBe('resources_remaining');
       expect(mockDoc.save).toHaveBeenCalled();
       expect(mockDoc.deleteOne).not.toHaveBeenCalled();
+    });
+
+    it('should remove MongoDB row when GitLab delete fails but no resources remain', async () => {
+      tryDeleteProjectFn.mockResolvedValueOnce({
+        ok: false,
+        message: 'Rename Not Supported',
+      });
+      getProjectFn.mockRejectedValueOnce({ response: { status: 404 } });
+      const mockDoc = {
+        _id: 'abc',
+        gitlabProjectId: 42,
+        gitlabPath: 'groupa/repoa',
+        effectiveSlug: 'repoa',
+        helmReleaseName: 'repoa',
+        vaultBasePath: 'projects/groupa/repoa',
+        capabilities: { deployable: true, publishable: false },
+        archived: false,
+        save: jest.fn(),
+        deleteOne: jest.fn().mockResolvedValue(undefined),
+      };
+      projectModel.findById.mockReturnValue({ exec: jest.fn().mockResolvedValue(mockDoc) });
+
+      const result = await service.deleteProject('abc');
+
+      expect(result.outcome).toBe('deleted');
+      expect(hasReleaseInTargetsFn).toHaveBeenCalled();
+      expect(hasSecretTreeFn).toHaveBeenCalledWith('projects/groupa/repoa');
+      expect(mockDoc.deleteOne).toHaveBeenCalled();
+      expect(mockDoc.save).not.toHaveBeenCalled();
     });
 
     it('should purge registry when forceGitLabDelete is set', async () => {

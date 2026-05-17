@@ -20,17 +20,18 @@ smoke_mongosh() {
   shift
   local -a auth=()
   if docker exec mongo test -f /data/db/.auth-enabled 2>/dev/null; then
-    if [[ -n "${MONGO_ADMIN_USER:-}" && -n "${MONGO_ADMIN_PASSWORD:-}" ]]; then
-      auth=(
-        --username "${MONGO_ADMIN_USER}"
-        --password "${MONGO_ADMIN_PASSWORD}"
-        --authenticationDatabase admin
-      )
-    elif [[ -n "${MONGO_APP_USER:-}" && -n "${MONGO_APP_PASSWORD:-}" ]]; then
+    # Platform DB documents use MONGO_APP_*; admin credentials may not have platform write access.
+    if [[ -n "${MONGO_APP_USER:-}" && -n "${MONGO_APP_PASSWORD:-}" ]]; then
       auth=(
         --username "${MONGO_APP_USER}"
         --password "${MONGO_APP_PASSWORD}"
         --authenticationDatabase "${MONGO_DB_NAME:-platform}"
+      )
+    elif [[ -n "${MONGO_ADMIN_USER:-}" && -n "${MONGO_ADMIN_PASSWORD:-}" ]]; then
+      auth=(
+        --username "${MONGO_ADMIN_USER}"
+        --password "${MONGO_ADMIN_PASSWORD}"
+        --authenticationDatabase admin
       )
     else
       warn "Mongo auth enabled; set MONGO_ADMIN_* or MONGO_APP_* in .env for smoke-cleanup"
@@ -623,6 +624,9 @@ smoke_preflight_clear_slots() {
     smoke_delete_mongo_via_api "${mongo_id}" "${path}" "${vault_path}"
   done < <(echo "${lresp}" | jq -c '(.data.projects // [])[]')
 
+  # GraphQL listProjects hides archived rows; drop any leftover Mongo docs for this group.
+  smoke_purge_mongo_group "${group_path}"
+
   log "Preflight: GitLab paths for ${group_path} are clear"
 }
 
@@ -637,6 +641,7 @@ smoke_purge_mongo_group() {
 
   count="$(smoke_mongosh platform --eval \
     "db.projects.deleteMany(${query}).deletedCount" 2>/dev/null || echo "0")"
+  count="${count//$'\r'/}"
   total=$((total + count))
 
   if [[ "${group_path}" != "smoke" ]]; then
@@ -648,6 +653,13 @@ smoke_purge_mongo_group() {
 
   if [[ "${total}" != "0" ]]; then
     log "Mongo: removed ${total} project document(s) under group ${group_path}"
+  fi
+
+  local remaining
+  remaining="$(smoke_mongosh platform --eval \
+    "db.projects.countDocuments(${query})" 2>/dev/null | tr -d '\r\n ' || echo "?")"
+  if [[ "${remaining}" =~ ^[0-9]+$ && "${remaining}" != "0" ]]; then
+    die "Mongo: ${remaining} project document(s) still present for ${group_path} (including archived) — set MONGO_APP_* in .env or purge manually"
   fi
 }
 
