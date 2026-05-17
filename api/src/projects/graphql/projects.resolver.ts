@@ -13,6 +13,7 @@ import { DeleteProjectOutcome, Env } from './enums';
 import {
   CreateProjectInput,
   ProjectFilterInput,
+  MigrateProjectToAutoDevopsInput,
   RegisterGitLabProjectInput,
   UpdateProjectSonarConfigInput,
   UpsertDeploymentTargetInput,
@@ -20,6 +21,7 @@ import {
 import {
   ConfigType,
   DeleteProjectResultType,
+  ReconcileGitLabProjectsResultType,
   DeploymentTargetType,
   ProjectSonarType,
   ProjectType,
@@ -277,6 +279,16 @@ export class ProjectsResolver {
     return true;
   }
 
+  @Mutation(() => ReconcileGitLabProjectsResultType, {
+    description:
+      'Scans GitLab for projects missing from the registry and backfills them as legacyV1. ' +
+      'Also archives active registry rows whose GitLab project is pending deletion. ' +
+      'Does not run on API startup — invoke explicitly when needed.',
+  })
+  async reconcileGitLabProjects(): Promise<ReconcileGitLabProjectsResultType> {
+    return this.projectsService.reconcileGitLabProjects();
+  }
+
   @Mutation(() => ProjectType, {
     description:
       'Registers an existing GitLab project by numeric ID with optional deployment wiring.',
@@ -361,8 +373,12 @@ export class ProjectsResolver {
   })
   async migrateProjectToAutoDevops(
     @Args('id', { type: () => ID }) id: string,
+    @Args('input', { nullable: true }) input?: MigrateProjectToAutoDevopsInput,
   ): Promise<ProjectType> {
-    const doc = await this.projectsService.migrateProjectToAutoDevops(id);
+    const doc = await this.projectsService.migrateProjectToAutoDevops(
+      id,
+      input?.branchOptions,
+    );
     return this.mapDoc(doc);
   }
 

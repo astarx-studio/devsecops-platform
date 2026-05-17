@@ -324,7 +324,7 @@ Manual onboarding is fine indefinitely, but the API gives you a few things you c
 - Per-env secret seeding via `envScopedVars`.
 - Hostname overrides via `setHostnameOverride` mutation (no manual CI variable juggling).
 
-If you decide to "promote" a manual-onboarded project to API-managed later, the API's `reconcileLegacyProjects` hook does the backfill automatically on next API restart — your project shows up as `legacyV1: true` with `provisioning: 'template'`. From there, you can either accept the legacy state or run additional API mutations to update the record.
+If you decide to "promote" a manual-onboarded project to API-managed later, run the **`reconcileGitLabProjects`** mutation (Management UI: **Detect from GitLab** on the Projects list) — your project shows up as `legacyV1: true` with `provisioning: 'template'`. From there, you can either accept the legacy state or run additional API mutations to update the record. This scan does **not** run automatically when the API restarts.
 
 ---
 

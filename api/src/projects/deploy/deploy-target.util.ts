@@ -124,6 +124,65 @@ export function appHostsFromTargets(targets: DeploymentTarget[]): {
 /**
  * Builds three standard targets from legacy appHosts / deployable flag.
  */
+/** Per-environment branch overrides for dev/stg/prod deploy refs. */
+export interface DeployBranchRefs {
+  dev?: string;
+  stg?: string;
+  prod?: string;
+}
+
+export interface ApplyDeployBranchOverridesOptions {
+  deployRefs?: DeployBranchRefs;
+  /**
+   * Default Git branch: used for pipeline trigger and as prod deploy ref
+   * when deployRefs.prod is omitted.
+   */
+  defaultBranch?: string;
+  /** When true, sets all enabled standard targets to defaultBranch. */
+  useDefaultBranchForAllDeployTargets?: boolean;
+}
+
+/**
+ * Applies optional branch overrides to standard deployment targets (dev/stg/prod).
+ */
+export function applyDeployBranchOverrides(
+  targets: DeploymentTarget[],
+  options: ApplyDeployBranchOverridesOptions,
+): DeploymentTarget[] {
+  const defaultBranch = options.defaultBranch?.trim();
+  const useAll = options.useDefaultBranchForAllDeployTargets === true && !!defaultBranch;
+
+  if (!defaultBranch && !options.deployRefs && !useAll) {
+    return targets;
+  }
+
+  return targets.map((target) => {
+    if (!(STANDARD_DEPLOY_TARGET_KEYS as readonly string[]).includes(target.key)) {
+      return target;
+    }
+
+    const key = target.key as StandardDeployTargetKey;
+    const explicit = options.deployRefs?.[key]?.trim();
+
+    if (explicit) {
+      assertValidActiveDeployRef(explicit, target.enabled);
+      return { ...target, deployRef: explicit };
+    }
+
+    if (useAll && target.enabled) {
+      assertValidActiveDeployRef(defaultBranch!, true);
+      return { ...target, deployRef: defaultBranch! };
+    }
+
+    if (defaultBranch && key === 'prod' && target.enabled) {
+      assertValidActiveDeployRef(defaultBranch, true);
+      return { ...target, deployRef: defaultBranch };
+    }
+
+    return target;
+  });
+}
+
 export function deriveStandardDeploymentTargets(
   effectiveSlug: string,
   appsDomain: string,

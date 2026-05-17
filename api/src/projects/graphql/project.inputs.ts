@@ -244,6 +244,75 @@ export class CreateProjectInput {
   deploymentTargets?: DeploymentTargetInput[];
 }
 
+@InputType({
+  description: 'Per-environment Git branch refs for dev/stg/prod deploy jobs.',
+})
+export class DeployBranchRefsInput {
+  @Field(() => String, {
+    nullable: true,
+    description: 'Branch for dev deploy (default: develop).',
+  })
+  @IsString()
+  @IsOptional()
+  dev?: string;
+
+  @Field(() => String, {
+    nullable: true,
+    description: 'Branch for stg deploy (default: staging).',
+  })
+  @IsString()
+  @IsOptional()
+  stg?: string;
+
+  @Field(() => String, {
+    nullable: true,
+    description: 'Branch for prod deploy (default: main or defaultBranch).',
+  })
+  @IsString()
+  @IsOptional()
+  prod?: string;
+}
+
+@InputType({
+  description:
+    'Optional Git branch overrides when importing a manual repo (non-standard default branch).',
+})
+export class DeployBranchOptionsInput {
+  @Field(() => String, {
+    nullable: true,
+    description:
+      'Default Git branch for pipeline trigger; also used as prod deploy ref unless deployRefs.prod is set.',
+  })
+  @IsString()
+  @IsOptional()
+  defaultBranch?: string;
+
+  @Field(() => DeployBranchRefsInput, { nullable: true })
+  @ValidateNested()
+  @Type(() => DeployBranchRefsInput)
+  @IsOptional()
+  deployRefs?: DeployBranchRefsInput;
+
+  @Field(() => Boolean, {
+    nullable: true,
+    defaultValue: false,
+    description:
+      'When true with defaultBranch, applies that branch to all enabled dev/stg/prod targets.',
+  })
+  @IsBoolean()
+  @IsOptional()
+  useDefaultBranchForAllDeployTargets?: boolean;
+}
+
+@InputType({ description: 'Options for migrateProjectToAutoDevops.' })
+export class MigrateProjectToAutoDevopsInput {
+  @Field(() => DeployBranchOptionsInput, { nullable: true })
+  @ValidateNested()
+  @Type(() => DeployBranchOptionsInput)
+  @IsOptional()
+  branchOptions?: DeployBranchOptionsInput;
+}
+
 @InputType({ description: 'Deployment target definition for create/register.' })
 export class DeploymentTargetInput {
   @Field(() => String, { description: 'Target key (e.g. dev, prod-alt).' })
@@ -348,6 +417,16 @@ export class RegisterGitLabProjectInput {
   @Type(() => UpdateProjectSonarConfigInput)
   @IsOptional()
   sonar?: UpdateProjectSonarConfigInput;
+
+  @Field(() => DeployBranchOptionsInput, {
+    nullable: true,
+    description:
+      'Git branch overrides for deploy refs and pipeline (uses GitLab default branch when omitted).',
+  })
+  @ValidateNested()
+  @Type(() => DeployBranchOptionsInput)
+  @IsOptional()
+  branchOptions?: DeployBranchOptionsInput;
 }
 
 @InputType({ description: 'Create or update a deployment target on an existing project.' })

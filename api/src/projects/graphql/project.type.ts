@@ -227,6 +227,29 @@ export class ProjectType {
   updatedAt!: Date;
 }
 
+/** Result of reconcileGitLabProjects — legacy backfill from GitLab scan. */
+@ObjectType({
+  description:
+    'Outcome of scanning GitLab for projects not yet in the platform registry.',
+})
+export class ReconcileGitLabProjectsResultType {
+  @Field(() => Int, { description: 'New legacyV1 registry rows created.' })
+  backfilled!: number;
+
+  @Field(() => Int, {
+    description: 'Active registry rows archived (GitLab project pending deletion).',
+  })
+  archivedFromRegistry!: number;
+
+  @Field(() => [String], {
+    description: 'GitLab paths of newly backfilled projects.',
+  })
+  backfilledGitlabPaths!: string[];
+
+  @Field(() => String, { description: 'Human-readable summary.' })
+  message!: string;
+}
+
 /** Result of deleteProject — full removal or archived for operator retry. */
 @ObjectType({ description: 'Outcome of deleteProject mutation.' })
 export class DeleteProjectResultType {

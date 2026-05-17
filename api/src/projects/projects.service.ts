@@ -4,7 +4,6 @@ import {
   Injectable,
   Logger,
   NotFoundException,
-  OnApplicationBootstrap,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
@@ -27,11 +26,17 @@ import {
   assertValidActiveDeployRef,
   assertValidTargetKey,
   buildDefaultAppHost,
+  applyDeployBranchOverrides,
   deriveStandardDeploymentTargets,
   ensureDeploymentTargets,
   inferClusterProfile,
   resolveDefaultDeployRef,
 } from './deploy/deploy-target.util';
+import {
+  resolvePipelineBranchRef,
+  toDeployBranchOverrideOptions,
+  type DeployBranchOptionsInput,
+} from './deploy/deploy-branch-options';
 import {
   buildDeployRefVariable,
   buildDeploymentTargetFromInput,
@@ -39,6 +44,7 @@ import {
   ENV_SCOPED_DEPLOY_VAR_KEYS,
 } from './deploy/deployment-wiring';
 import type { DeleteProjectOptions, DeleteProjectResult } from './delete-project-result';
+import type { ReconcileGitLabProjectsResult } from './reconcile-gitlab-projects-result';
 import {
   type DeletionRemainders,
   formatDeletionRemainders,
@@ -104,14 +110,16 @@ const DEPLOY_ENVS: DeployEnv[] = ['dev', 'stg', 'prod'];
  *  3. Probe whether GitLab, K8s, or Vault resources still exist
  *  4. If none remain → remove MongoDB row; if any remain → archive with error detail
  *
- * Startup reconciliation (4.10):
+ * GitLab detection (manual):
  *  Scans GitLab for projects without a Mongo record → backfills as legacyV1=true.
+ *  Triggered via reconcileGitLabProjects mutation (not on API startup).
  */
 @Injectable()
-export class ProjectsService implements OnApplicationBootstrap {
+export class ProjectsService {
   private readonly logger = new Logger(ProjectsService.name);
   private readonly domain: string;
   private readonly appsDomain: string;
+  private reconcileInFlight: Promise<ReconcileGitLabProjectsResult> | null = null;
 
   constructor(
     @InjectModel(Project.name)
@@ -155,19 +163,42 @@ export class ProjectsService implements OnApplicationBootstrap {
     deployable: boolean,
     inputTargets?: DeploymentTargetInput[],
     appHosts?: { dev?: string; stg?: string; prod?: string },
+    branchOptions?: DeployBranchOptionsInput,
   ): DeploymentTarget[] {
+    let targets: DeploymentTarget[];
     if (inputTargets?.length) {
-      return inputTargets.map((t) =>
+      targets = inputTargets.map((t) =>
         buildDeploymentTargetFromInput(t, effectiveSlug, this.appsDomain, deployable),
       );
+    } else {
+      targets = deriveStandardDeploymentTargets(
+        effectiveSlug,
+        this.appsDomain,
+        deployable,
+        appHosts,
+      );
     }
-    const standard = deriveStandardDeploymentTargets(
-      effectiveSlug,
-      this.appsDomain,
-      deployable,
-      appHosts,
-    );
-    return standard;
+
+    const overrides = toDeployBranchOverrideOptions(branchOptions);
+    if (overrides) {
+      targets = applyDeployBranchOverrides(targets, overrides);
+    }
+
+    return targets;
+  }
+
+  private applyBranchOptionsToTargets(
+    doc: ProjectDocument,
+    branchOptions?: DeployBranchOptionsInput,
+  ): void {
+    const overrides = toDeployBranchOverrideOptions(branchOptions);
+    if (!overrides) {
+      return;
+    }
+
+    const targets = ensureDeploymentTargets(doc, this.appsDomain);
+    doc.deploymentTargets = applyDeployBranchOverrides(targets, overrides);
+    this.syncAppHostsFromTargets(doc);
   }
 
   private hasExtraDeployTargets(targets: DeploymentTarget[]): boolean {
@@ -184,6 +215,17 @@ export class ProjectsService implements OnApplicationBootstrap {
     const targets = ensureDeploymentTargets(doc, this.appsDomain);
     doc.deploymentTargets = targets;
     doc.capabilities.deployable = targets.some((t) => t.enabled);
+  }
+
+  /**
+   * Git branch used for repository file commits (CI files, chart-values, etc.).
+   */
+  private async resolveGitCommitBranch(
+    gitlabProjectId: number,
+    branchOptions?: DeployBranchOptionsInput,
+  ): Promise<string> {
+    const glProject = await this.gitlabService.getProject(gitlabProjectId);
+    return resolvePipelineBranchRef(branchOptions, glProject.default_branch);
   }
 
   /**
@@ -230,18 +272,6 @@ export class ProjectsService implements OnApplicationBootstrap {
    */
   private static slugToDisplayName(slug: string): string {
     return slug.replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
-  }
-
-  /**
-   * Startup hook: reconcile legacy v1 projects from GitLab into MongoDB.
-   * Runs in the background after module initialisation completes.
-   */
-  onApplicationBootstrap(): void {
-    setImmediate(() => {
-      this.reconcileLegacyProjects().catch((err: Error) => {
-        this.logger.error(`Startup reconciliation failed: ${err.message}`, err.stack);
-      });
-    });
   }
 
   // ---------------------------------------------------------------------------
@@ -751,7 +781,10 @@ export class ProjectsService implements OnApplicationBootstrap {
    *
    * @param id - MongoDB document ID
    */
-  async migrateProjectToAutoDevops(id: string): Promise<ProjectDocument> {
+  async migrateProjectToAutoDevops(
+    id: string,
+    branchOptions?: DeployBranchOptionsInput,
+  ): Promise<ProjectDocument> {
     this.logger.log(`migrateProjectToAutoDevops: id=${id}`);
     const doc = await this.findProject({ id });
 
@@ -760,8 +793,13 @@ export class ProjectsService implements OnApplicationBootstrap {
       return doc;
     }
 
-    // Step 1: Write Auto DevOps .gitlab-ci.yml
-    this.logger.log(`Writing .gitlab-ci.yml for project ${doc.gitlabProjectId}`);
+    const glProject = await this.gitlabService.getProject(doc.gitlabProjectId);
+    const pipelineRef = resolvePipelineBranchRef(branchOptions, glProject.default_branch);
+
+    // Step 1: Write Auto DevOps .gitlab-ci.yml (commits use pipelineRef, not hardcoded main)
+    this.logger.log(
+      `Writing Auto DevOps repo files for project ${doc.gitlabProjectId} on branch "${pipelineRef}"`,
+    );
     if (!doc.deploymentTargets?.length) {
       doc.deploymentTargets = deriveStandardDeploymentTargets(
         doc.effectiveSlug,
@@ -772,28 +810,34 @@ export class ProjectsService implements OnApplicationBootstrap {
       );
     }
 
+    this.applyBranchOptionsToTargets(doc, branchOptions);
+
     await this.gitlabService.upsertFile(
       doc.gitlabProjectId,
       'chart-values.yaml',
       ProjectsService.buildChartValues(),
       'chore: add chart-values.yaml for v2 Auto DevOps',
+      pipelineRef,
     );
 
     if (doc.capabilities.deployable || doc.deploymentTargets.some((t) => t.enabled)) {
-      await this.syncAllDeploymentWiring(doc);
+      await this.syncAllDeploymentWiring(doc, pipelineRef);
     } else {
       await this.gitlabService.upsertFile(
         doc.gitlabProjectId,
         '.gitlab-ci.yml',
         this.buildAutoDevopsCi(false),
         'chore: migrate to Auto DevOps pipeline',
+        pipelineRef,
       );
     }
 
-    // Step 3: Trigger pipeline on default branch
+    // Step 3: Trigger pipeline on the resolved default branch
     try {
-      this.logger.log(`Triggering pipeline for project ${doc.gitlabProjectId}`);
-      await this.gitlabService.triggerPipeline(doc.gitlabProjectId);
+      this.logger.log(
+        `Triggering pipeline for project ${doc.gitlabProjectId} on ref="${pipelineRef}"`,
+      );
+      await this.gitlabService.triggerPipeline(doc.gitlabProjectId, pipelineRef);
     } catch (err) {
       this.logger.warn(`Pipeline trigger failed (non-critical): ${(err as Error).message}`);
     }
@@ -807,7 +851,10 @@ export class ProjectsService implements OnApplicationBootstrap {
       projectId: id,
       gitlabPath: doc.gitlabPath,
       effectiveSlug: doc.effectiveSlug,
-      metadata: {},
+      metadata: {
+        pipelineRef,
+        branchOptions: branchOptions ?? {},
+      },
     });
 
     this.logger.log(`Project "${doc.gitlabPath}" migrated to Auto DevOps`);
@@ -1157,7 +1204,13 @@ export class ProjectsService implements OnApplicationBootstrap {
   /**
    * Seeds Vault paths and syncs GitLab CI + generated deploy jobs for all targets.
    */
-  private async syncAllDeploymentWiring(doc: ProjectDocument): Promise<void> {
+  private async syncAllDeploymentWiring(
+    doc: ProjectDocument,
+    commitBranch?: string,
+  ): Promise<void> {
+    const branch =
+      commitBranch ?? (await this.resolveGitCommitBranch(doc.gitlabProjectId));
+
     const targets = ensureDeploymentTargets(doc, this.appsDomain);
     doc.deploymentTargets = targets;
     this.syncAppHostsFromTargets(doc);
@@ -1179,7 +1232,7 @@ export class ProjectsService implements OnApplicationBootstrap {
       await this.gitlabService.setProjectCiVariables(doc.gitlabProjectId, ciVars);
     }
 
-    await this.regenerateDeployCiFiles(doc);
+    await this.regenerateDeployCiFiles(doc, branch);
     this.recomputeDeployable(doc);
     await doc.save();
   }
@@ -1192,7 +1245,13 @@ export class ProjectsService implements OnApplicationBootstrap {
     });
   }
 
-  private async regenerateDeployCiFiles(doc: ProjectDocument): Promise<void> {
+  private async regenerateDeployCiFiles(
+    doc: ProjectDocument,
+    commitBranch?: string,
+  ): Promise<void> {
+    const branch =
+      commitBranch ?? (await this.resolveGitCommitBranch(doc.gitlabProjectId));
+
     const targets = ensureDeploymentTargets(doc, this.appsDomain);
     const extraYaml = generateDeployTargetsCiYaml(targets);
     const hasExtra = this.hasExtraDeployTargets(targets);
@@ -1203,6 +1262,7 @@ export class ProjectsService implements OnApplicationBootstrap {
         DEPLOY_TARGETS_CI_PATH,
         extraYaml,
         'chore: update deployment targets CI (DSOaaS)',
+        branch,
       );
     }
 
@@ -1211,6 +1271,7 @@ export class ProjectsService implements OnApplicationBootstrap {
       '.gitlab-ci.yml',
       this.buildAutoDevopsCi(hasExtra),
       'chore: sync Auto DevOps pipeline include',
+      branch,
     );
   }
 
@@ -1258,6 +1319,7 @@ export class ProjectsService implements OnApplicationBootstrap {
       isDeployable,
       input.deploymentTargets,
       appHosts,
+      input.branchOptions,
     );
 
     const doc = await this.projectModel.create({
@@ -1288,14 +1350,20 @@ export class ProjectsService implements OnApplicationBootstrap {
       });
     }
 
+    const commitBranch = resolvePipelineBranchRef(
+      input.branchOptions,
+      glProject.default_branch,
+    );
+
     if (isDeployable || deploymentTargets.some((t) => t.enabled)) {
       await this.gitlabService.upsertFile(
         doc.gitlabProjectId,
         'chart-values.yaml',
         ProjectsService.buildChartValues(),
         'chore: add chart-values.yaml for DSOaaS',
+        commitBranch,
       );
-      await this.syncAllDeploymentWiring(doc);
+      await this.syncAllDeploymentWiring(doc, commitBranch);
     }
 
     await this.auditLogModel.create({
@@ -1303,7 +1371,11 @@ export class ProjectsService implements OnApplicationBootstrap {
       projectId: String(doc._id),
       gitlabPath,
       effectiveSlug,
-      metadata: { gitlabProjectId: input.gitlabProjectId },
+      metadata: {
+        gitlabProjectId: input.gitlabProjectId,
+        gitlabDefaultBranch: glProject.default_branch,
+        branchOptions: input.branchOptions ?? {},
+      },
     });
 
     if (input.sonar?.allowedBranches?.length) {
@@ -1464,22 +1536,42 @@ export class ProjectsService implements OnApplicationBootstrap {
   // ---------------------------------------------------------------------------
 
   /**
-   * Scans all GitLab projects and backfills those without a MongoDB record as
-   * `legacyV1: true`. Called once at startup in the background.
+   * Scans GitLab for projects missing from MongoDB and backfills them as `legacyV1: true`.
+   * Also archives active registry rows whose GitLab project is pending deletion.
    *
-   * Projects belonging to the template or config groups are excluded.
+   * Idempotent while a run is in flight — concurrent calls share the same promise.
    */
-  async reconcileLegacyProjects(): Promise<void> {
-    this.logger.log('Starting legacy project reconciliation');
+  reconcileGitLabProjects(): Promise<ReconcileGitLabProjectsResult> {
+    if (this.reconcileInFlight) {
+      return this.reconcileInFlight;
+    }
+
+    this.reconcileInFlight = this.runGitLabProjectDetection().finally(() => {
+      this.reconcileInFlight = null;
+    });
+
+    return this.reconcileInFlight;
+  }
+
+  /**
+   * Scans all GitLab projects and backfills those without a MongoDB record as
+   * `legacyV1: true`. Projects belonging to the template or config groups are excluded.
+   */
+  private async runGitLabProjectDetection(): Promise<ReconcileGitLabProjectsResult> {
+    this.logger.log('Starting GitLab project detection (manual)');
 
     let allProjects: Awaited<ReturnType<typeof this.gitlabService.listProjects>>;
     try {
       allProjects = await this.gitlabService.listProjectsForReconciliation();
     } catch (err) {
-      this.logger.warn(
-        `Reconciliation: failed to list GitLab projects — ${(err as Error).message}`,
-      );
-      return;
+      const message = `Failed to list GitLab projects: ${(err as Error).message}`;
+      this.logger.warn(`GitLab detection: ${message}`);
+      return {
+        backfilled: 0,
+        archivedFromRegistry: 0,
+        backfilledGitlabPaths: [],
+        message,
+      };
     }
 
     const templateGroupId = this.configService.get<number>('gitlab.templateGroupId', {
@@ -1488,6 +1580,7 @@ export class ProjectsService implements OnApplicationBootstrap {
     const configGroupId = this.configService.get<number>('gitlab.configGroupId', { infer: true });
 
     let backfilled = 0;
+    const backfilledGitlabPaths: string[] = [];
 
     for (const glProject of allProjects) {
       // Skip platform meta-groups (templates, configs) by stable group ID, not fragile path prefix.
@@ -1563,12 +1656,14 @@ export class ProjectsService implements OnApplicationBootstrap {
         pinnedV1: false,
       });
 
+      backfilledGitlabPaths.push(glProject.path_with_namespace);
+
       await this.auditLogModel.create({
         eventType: 'project.reconciled_legacy',
         projectId: String(doc._id),
         gitlabPath: glProject.path_with_namespace,
         effectiveSlug: finalSlug,
-        metadata: { reason: 'startup reconciliation', gitlabProjectId: glProject.id },
+        metadata: { reason: 'manual GitLab detection', gitlabProjectId: glProject.id },
       });
 
       // Seed per-env Vault paths so any future deployable upgrade for this
@@ -1593,12 +1688,20 @@ export class ProjectsService implements OnApplicationBootstrap {
 
     const archivedFromRegistry = await this.archiveActiveProjectsPendingGitLabDeletion();
 
-    this.logger.log(
+    const message =
       backfilled > 0 || archivedFromRegistry > 0
-        ? `Reconciliation complete: ${backfilled} legacy project(s) backfilled, ` +
-            `${archivedFromRegistry} active registry row(s) archived (GitLab pending deletion)`
-        : 'Reconciliation complete: no new legacy projects found',
-    );
+        ? `Detection complete: ${backfilled} legacy project(s) backfilled, ` +
+          `${archivedFromRegistry} active registry row(s) archived (GitLab pending deletion)`
+        : 'Detection complete: no new unregistered GitLab projects found';
+
+    this.logger.log(message);
+
+    return {
+      backfilled,
+      archivedFromRegistry,
+      backfilledGitlabPaths,
+      message,
+    };
   }
 
   /**

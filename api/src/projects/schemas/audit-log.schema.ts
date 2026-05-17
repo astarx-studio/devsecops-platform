@@ -69,7 +69,7 @@ export class AuditLog {
   /**
    * Freeform metadata specific to the event type.
    * Examples: `{ env: 'dev', hostname: 'foo.dev.apps.example.com' }` for
-   * `project.hostname_override`; `{ reason: 'startup reconciliation' }` for
+   * `project.hostname_override`; `{ reason: 'manual GitLab detection' }` for
    * `project.reconciled_legacy`.
    */
   @Prop({ type: Object, default: {} })

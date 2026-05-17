@@ -126,7 +126,11 @@ Each project has a **`deploymentTargets`** array (not limited to dev/stg/prod). 
 
 **Deploy deactivation:** set `DEPLOY_<KEY>_REF` to **`none`** (only this value). The API uses `none` when a target is disabled.
 
-**`registerGitLabProject`:** adopt an existing GitLab project by numeric `gitlabProjectId` (409 if already registered). Optionally wires Auto DevOps the same as `createProject`.
+**`registerGitLabProject`:** adopt an existing GitLab project by numeric `gitlabProjectId` (409 if already registered). Optionally wires Auto DevOps the same as `createProject`. Use `branchOptions` (`defaultBranch`, per-env `deployRefs`, or `useDefaultBranchForAllDeployTargets`) when the repo does not use `main` / `develop` / `staging`.
+
+**`migrateProjectToAutoDevops`:** optional `input.branchOptions` with the same shape — overrides deploy refs before CI sync and triggers the pipeline on `defaultBranch` (falls back to the GitLab project default branch).
+
+**`reconcileGitLabProjects`:** scan GitLab for projects not in MongoDB and backfill them as `legacyV1: true` with minimal Vault seeding (no deploy wiring). Also archives active registry rows when GitLab marks the project for deletion. **Not run on API startup** — call explicitly from the Management UI or GraphQL when you want detection.
 
 **`deleteProject`:** tears down **all** deployment targets in K8s, deletes Vault, removes the MongoDB record, then attempts GitLab project delete **without** bulk registry/package purge. If GitLab refuses deletion (artifacts in use elsewhere), the API logs a warning and still unregisters the project from the platform.
 

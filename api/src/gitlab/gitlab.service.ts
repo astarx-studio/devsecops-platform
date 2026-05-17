@@ -196,7 +196,7 @@ export class GitLabService {
   }
 
   /**
-   * Lists all projects with fields required for startup reconciliation
+   * Lists all projects with fields required for reconcileGitLabProjects detection
    * (deletion markers, pending-delete projects).
    */
   async listProjectsForReconciliation(): Promise<GitLabProject[]> {
