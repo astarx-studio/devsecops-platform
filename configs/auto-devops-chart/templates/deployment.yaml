@@ -37,11 +37,13 @@ spec:
             - name: http
               containerPort: {{ .Values.service.targetPort }}
               protocol: TCP
-          # All app secrets sourced from the ExternalSecret-backed K8s Secret
+          {{- if .Values.externalSecret.enabled }}
+          # App secrets from ExternalSecret-backed K8s Secret (runtime env profiles)
           envFrom:
             - secretRef:
                 name: {{ include "dsoaas-app.secretName" . }}
                 optional: false
+          {{- end }}
           {{- with .Values.extraEnv }}
           env:
             {{- toYaml . | nindent 12 }}

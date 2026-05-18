@@ -37,6 +37,10 @@ ingress:
   host: ""
   annotations: {}
 
+# -- ExternalSecret (Vault → K8s Secret → envFrom). Disable for static apps with BUILD-only env.
+externalSecret:
+  enabled: true
+
 # -- Project / Vault metadata (used by ExternalSecret)
 project:
   # Full Vault KV path supplied by the pipeline via --set project.path=$VAULT_PROJECT_PATH.
