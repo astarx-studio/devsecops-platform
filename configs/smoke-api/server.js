@@ -9,6 +9,7 @@ const handler = (req, res) => {
         status: 'ok',
         service: 'smoke-api',
         env: process.env.DEPLOY_ENV || 'unknown',
+        runtimeMarker: process.env.SMOKE_RUNTIME_MARKER || null,
       }),
     );
   } else if (req.url === '/') {
@@ -17,6 +18,7 @@ const handler = (req, res) => {
       JSON.stringify({
         message: 'Hello from Smoke API!',
         env: process.env.DEPLOY_ENV || 'unknown',
+        runtimeMarker: process.env.SMOKE_RUNTIME_MARKER || null,
       }),
     );
   } else {

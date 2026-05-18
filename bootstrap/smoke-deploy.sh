@@ -14,6 +14,9 @@
 #   SMOKE_TRIGGER_PIPELINE  default 1
 #   SMOKE_PROVISION         default 1 (create via API if missing)
 #   SMOKE_SYNC_SOURCES      default 1 (push configs/* to develop before pipeline)
+#   SMOKE_SKIP_PREFLIGHT      default 0 (set 1 to skip GitLab/Mongo hard-clear before run)
+#   SMOKE_ENV_PROFILES      default 1 (upload BUILD profile for smoke-web, RUNTIME for smoke-api)
+#   SMOKE_BRANCH            default develop (must match push ref and profile branches)
 #   SMOKE_GITLAB_DELETE_WAIT  seconds to wait for GitLab permanent delete (default 180)
 #   API_LOCAL_PORT            default 13000
 #
@@ -78,7 +81,16 @@ TIMEOUT="${SMOKE_TIMEOUT:-600}"
 SMOKE_TRIGGER_PIPELINE="${SMOKE_TRIGGER_PIPELINE:-1}"
 SMOKE_PROVISION="${SMOKE_PROVISION:-1}"
 SMOKE_SYNC_SOURCES="${SMOKE_SYNC_SOURCES:-1}"
+SMOKE_ENV_PROFILES="${SMOKE_ENV_PROFILES:-1}"
+SMOKE_SKIP_PREFLIGHT="${SMOKE_SKIP_PREFLIGHT:-0}"
+SMOKE_BRANCH="${SMOKE_BRANCH:-develop}"
 GRAPHQL_URL="http://127.0.0.1:${API_LOCAL_PORT}/graphql"
+
+# Fixed markers — must match uploaded profile content and app responses.
+SMOKE_WEB_BUILD_MARKER="${SMOKE_WEB_BUILD_MARKER:-smoke-web-build-dev}"
+SMOKE_API_RUNTIME_MARKER="${SMOKE_API_RUNTIME_MARKER:-smoke-api-runtime-dev}"
+SMOKE_ENV_LABEL_WEB="${SMOKE_ENV_LABEL_WEB:-smoke-web-build}"
+SMOKE_ENV_LABEL_API="${SMOKE_ENV_LABEL_API:-smoke-api-runtime}"
 GITLAB_API="$(gitlab_api_v4_base)"
 
 GROUP_JSON="$(jq -n --arg p "${SMOKE_GROUP_PATH}" '($p | split("/") | map(select(. != "")))')"
@@ -101,10 +113,127 @@ smoke_url_path() {
 
 smoke_body_pattern() {
   case "$1" in
-    smoke-api|demo-api) printf '%s' 'smoke-api' ;;
-    smoke-web|demo-web) printf '%s' 'Smoke Web' ;;
+    smoke-api|demo-api) printf '%s' "${SMOKE_API_RUNTIME_MARKER}" ;;
+    smoke-web|demo-web) printf '%s' "${SMOKE_WEB_BUILD_MARKER}" ;;
     *)                  printf '%s' '' ;;
   esac
+}
+
+smoke_web_build_profile_content() {
+  printf 'SMOKE_BUILD_MARKER=%s\n' "${SMOKE_WEB_BUILD_MARKER}"
+}
+
+smoke_api_runtime_profile_content() {
+  printf 'DEPLOY_ENV=dev\nSMOKE_RUNTIME_MARKER=%s\n' "${SMOKE_API_RUNTIME_MARKER}"
+}
+
+list_env_profile_ids_by_label() {
+  local project_id="$1"
+  local label="$2"
+  local payload resp
+  payload="$(jq -n \
+    --arg id "${project_id}" \
+    '{
+      query: "query($id: ID!) { envProfiles(projectId: $id) { id label } }",
+      variables: { id: $id }
+    }')"
+  resp="$(graphql_post "${payload}")"
+  echo "${resp}" | jq -r --arg l "${label}" \
+    '(.data.envProfiles // [])[] | select(.label == $l) | .id' | tr -d '\r'
+}
+
+delete_env_profiles_by_label() {
+  local project_id="$1"
+  local label="$2"
+  local pid payload resp
+  while IFS= read -r pid; do
+    pid="${pid//$'\r'/}"
+    [[ -n "${pid}" ]] || continue
+    payload="$(jq -n \
+      --arg projectId "${project_id}" \
+      --arg profileId "${pid}" \
+      '{
+        query: "mutation($projectId: ID!, $profileId: String!) { deleteEnvProfile(projectId: $projectId, profileId: $profileId) { id } }",
+        variables: { projectId: $projectId, profileId: $profileId }
+      }')"
+    resp="$(graphql_post "${payload}")"
+    if echo "${resp}" | jq -e '.errors' >/dev/null 2>&1; then
+      if echo "${resp}" | grep -q 'not found'; then
+        log "info: env profile ${label} (${pid}) already absent — continuing"
+        continue
+      fi
+      die "deleteEnvProfile failed for ${label} (${pid}): ${resp}"
+    fi
+    log "info: removed env profile ${label} (${pid})"
+  done < <(list_env_profile_ids_by_label "${project_id}" "${label}")
+}
+
+upload_smoke_env_profile() {
+  local slug="$1"
+  local project_id="$2"
+  local payload resp
+  case "${slug}" in
+    smoke-web|demo-web)
+      delete_env_profiles_by_label "${project_id}" "${SMOKE_ENV_LABEL_WEB}"
+      payload="$(jq -n \
+        --arg projectId "${project_id}" \
+        --arg label "${SMOKE_ENV_LABEL_WEB}" \
+        --arg branch "${SMOKE_BRANCH}" \
+        --arg content "$(smoke_web_build_profile_content)" \
+        '{
+          query: "mutation($projectId: ID!, $input: UploadEnvProfileInput!) { uploadEnvProfile(projectId: $projectId, input: $input) { id label injectionPhase buildDelivery } }",
+          variables: {
+            projectId: $projectId,
+            input: {
+              label: $label,
+              injectionPhase: "BUILD",
+              branches: [$branch],
+              content: $content,
+              workspacePath: ".",
+              filename: "build.env",
+              buildDelivery: "DOTENV_BUILD_ARGS"
+            }
+          }
+        }')"
+      ;;
+    smoke-api|demo-api)
+      delete_env_profiles_by_label "${project_id}" "${SMOKE_ENV_LABEL_API}"
+      payload="$(jq -n \
+        --arg projectId "${project_id}" \
+        --arg label "${SMOKE_ENV_LABEL_API}" \
+        --arg branch "${SMOKE_BRANCH}" \
+        --arg content "$(smoke_api_runtime_profile_content)" \
+        '{
+          query: "mutation($projectId: ID!, $input: UploadEnvProfileInput!) { uploadEnvProfile(projectId: $projectId, input: $input) { id label injectionPhase } }",
+          variables: {
+            projectId: $projectId,
+            input: {
+              label: $label,
+              injectionPhase: "RUNTIME",
+              branches: [$branch],
+              deploymentTargetKeys: ["dev"],
+              content: $content
+            }
+          }
+        }')"
+      ;;
+    *)
+      return 0
+      ;;
+  esac
+  log "info: uploading ${slug} env profile via Management API..."
+  resp="$(graphql_post "${payload}")"
+  if echo "${resp}" | jq -e '.errors' >/dev/null 2>&1; then
+    die "uploadEnvProfile failed for ${slug}: ${resp}"
+  fi
+  log "info: env profile for ${slug}: $(echo "${resp}" | jq -c '.data.uploadEnvProfile')"
+}
+
+sync_smoke_env_profiles() {
+  local slug="$1"
+  local project_id="$2"
+  [[ "${SMOKE_ENV_PROFILES}" == "1" ]] || return 0
+  upload_smoke_env_profile "${slug}" "${project_id}"
 }
 
 validate_project_row() {
@@ -162,7 +291,7 @@ trigger_develop_pipeline() {
   local resp http
   resp="$(gitlab_curl -s -w "\n%{http_code}" \
     "${GITLAB_API_HDR[@]}" -X POST \
-    "${GITLAB_API}/projects/${gitlab_project_id}/pipeline?ref=develop")"
+    "${GITLAB_API}/projects/${gitlab_project_id}/pipeline?ref=${SMOKE_BRANCH}")"
   http="$(echo "${resp}" | tail -1)"
   resp="$(echo "${resp}" | sed '$d')"
   if [[ "${http}" != "201" ]]; then
@@ -202,15 +331,22 @@ wait_for_url() {
   local slug="$1"
   local host="$2"
   local deadline="$3"
-  local path pattern url
+  local path pattern url extra_url=""
   path="$(smoke_url_path "${slug}")"
   pattern="$(smoke_body_pattern "${slug}")"
   url="https://${host}${path}"
-  log "info: waiting for ${url}"
+  case "${slug}" in
+    smoke-web|demo-web) extra_url="https://${host}/smoke-build-env.js" ;;
+  esac
+  log "info: waiting for ${url}${extra_url:+ and ${extra_url}}"
   while true; do
     if [[ -n "${pattern}" ]]; then
       if curl -ksf -m 15 "${url}" | grep -q "${pattern}"; then
         log "PASS: ${url} matched '${pattern}'"
+        return 0
+      fi
+      if [[ -n "${extra_url}" ]] && curl -ksf -m 15 "${extra_url}" | grep -q "${pattern}"; then
+        log "PASS: ${extra_url} matched '${pattern}'"
         return 0
       fi
     elif curl -ksf -m 15 -o /dev/null "${url}"; then
@@ -243,7 +379,11 @@ declare -a CLEANUP_ROWS=()
 
 log "E2E smoke: group=${SMOKE_GROUP_PATH} projects=${SMOKE_PROJECTS}"
 
-smoke_preflight_clear_slots "${SMOKE_GROUP_PATH}" "${PROJECT_SLUGS[@]}"
+if [[ "${SMOKE_SKIP_PREFLIGHT}" != "1" ]]; then
+  smoke_preflight_clear_slots "${SMOKE_GROUP_PATH}" "${PROJECT_SLUGS[@]}"
+else
+  log "info: skipping preflight (SMOKE_SKIP_PREFLIGHT=1)"
+fi
 
 for slug in "${PROJECT_SLUGS[@]}"; do
   row=""
@@ -271,11 +411,13 @@ for slug in "${PROJECT_SLUGS[@]}"; do
   [[ -n "${host}" ]] || die "dev app host missing for ${gitlab_path}"
   [[ -n "${gitlab_id}" && "${gitlab_id}" != "null" ]] || die "gitlabProjectId missing for ${gitlab_path}"
 
+  sync_smoke_env_profiles "${slug}" "${proj_id}"
+
   if [[ "${SMOKE_SYNC_SOURCES}" == "1" ]]; then
     rel="configs/${slug}"
     [[ -d "${rel}" ]] || die "Missing monorepo path ${rel}"
-    log "info: syncing ${rel} → develop"
-    push_git_directory "${SMOKE_GROUP_PATH}" "${slug}" "${rel}" "develop" "${ROOT}"
+    log "info: syncing ${rel} → ${SMOKE_BRANCH}"
+    push_git_directory "${SMOKE_GROUP_PATH}" "${slug}" "${rel}" "${SMOKE_BRANCH}" "${ROOT}"
   fi
 
   deadline=$(( $(date +%s) + TIMEOUT ))

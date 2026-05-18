@@ -12,5 +12,11 @@
 <body>
   <h1>Smoke Web</h1>
   <p>Static front-end served by nginx for platform smoke-deploy.</p>
+  <p id="build-marker">Build env: <span data-smoke-build>loading…</span></p>
+  <script src="/smoke-build-env.js"></script>
+  <script>
+    document.querySelector('[data-smoke-build]').textContent =
+      window.SMOKE_BUILD_MARKER || 'missing';
+  </script>
 </body>
 </html>

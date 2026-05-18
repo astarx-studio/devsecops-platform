@@ -19,23 +19,21 @@ smoke_mongosh() {
   local db="${1:-platform}"
   shift
   local -a auth=()
-  if docker exec mongo test -f /data/db/.auth-enabled 2>/dev/null; then
-    # Platform DB documents use MONGO_APP_*; admin credentials may not have platform write access.
-    if [[ -n "${MONGO_APP_USER:-}" && -n "${MONGO_APP_PASSWORD:-}" ]]; then
-      auth=(
-        --username "${MONGO_APP_USER}"
-        --password "${MONGO_APP_PASSWORD}"
-        --authenticationDatabase "${MONGO_DB_NAME:-platform}"
-      )
-    elif [[ -n "${MONGO_ADMIN_USER:-}" && -n "${MONGO_ADMIN_PASSWORD:-}" ]]; then
-      auth=(
-        --username "${MONGO_ADMIN_USER}"
-        --password "${MONGO_ADMIN_PASSWORD}"
-        --authenticationDatabase admin
-      )
-    else
-      warn "Mongo auth enabled; set MONGO_ADMIN_* or MONGO_APP_* in .env for smoke-cleanup"
-    fi
+  # Prefer admin for smoke purge (deleteMany); app user may lack delete on projects.
+  if [[ -n "${MONGO_ADMIN_USER:-}" && -n "${MONGO_ADMIN_PASSWORD:-}" ]]; then
+    auth=(
+      --username "${MONGO_ADMIN_USER}"
+      --password "${MONGO_ADMIN_PASSWORD}"
+      --authenticationDatabase admin
+    )
+  elif [[ -n "${MONGO_APP_USER:-}" && -n "${MONGO_APP_PASSWORD:-}" ]]; then
+    auth=(
+      --username "${MONGO_APP_USER}"
+      --password "${MONGO_APP_PASSWORD}"
+      --authenticationDatabase "${MONGO_DB_NAME:-platform}"
+    )
+  elif docker exec mongo test -f /data/db/.auth-enabled 2>/dev/null; then
+    warn "Mongo auth required; set MONGO_ADMIN_* or MONGO_APP_* in .env for smoke-cleanup"
   fi
   docker exec mongo mongosh --quiet "${auth[@]}" "${db}" "$@"
 }
@@ -224,6 +222,57 @@ smoke_purge_registry() {
   warn "Registry still present on project ${pid} after ${SMOKE_REGISTRY_DELETE_WAIT}s — will retry project delete"
 }
 
+# Remove orphaned registry blobs when API metadata is gone but disk paths remain (local Docker GitLab).
+smoke_purge_registry_filesystem() {
+  local full_path="$1"
+  local slug="${full_path##*/}"
+  local base="/var/opt/gitlab/gitlab-rails/shared/registry/docker/registry/v2/repositories"
+
+  if ! gitlab_api_uses_docker; then
+    return 0
+  fi
+
+  log "Purging registry filesystem paths for ${full_path}..."
+  MSYS_NO_PATHCONV=1 docker exec "${GITLAB_CONTAINER}" bash -c \
+    "rm -rf '${base}/${full_path}' '${base}/smoke/${slug}' 2>/dev/null || true"
+}
+
+# CI job artifacts block Project#destroy when many pipelines have run.
+smoke_delete_gitlab_project_artifacts() {
+  local pid="$1"
+  local code
+
+  code="$(smoke_gitlab_http_code -X DELETE \
+    "${GITLAB_API}/projects/${pid}/artifacts")"
+  log "GitLab delete artifacts for project ${pid} → HTTP ${code}"
+  if [[ "${code}" == "202" ]]; then
+    sleep 5
+  fi
+}
+
+# Last resort on local Docker GitLab: drop artifacts + destroy project in rails.
+smoke_rails_destroy_gitlab_project() {
+  local pid="$1"
+  local full_path="$2"
+
+  if [[ "${SMOKE_GITLAB_RAILS_DESTROY:-0}" != "1" ]]; then
+    return 1
+  fi
+  if ! gitlab_api_uses_docker; then
+    return 1
+  fi
+
+  log "GitLab rails: destroying project ${full_path} (id ${pid})..."
+  if docker exec "${GITLAB_CONTAINER}" gitlab-rails runner \
+    "p = Project.find_by(id: ${pid}); if p; Ci::JobArtifact.where(project_id: p.id).find_each(batch_size: 100, &:destroy!); p.container_repositories.find_each { |r| r.destroy! rescue nil }; p.destroy!; raise 'still present' if Project.find_by(id: ${pid}); end" \
+    >/dev/null 2>&1; then
+    log "GitLab rails: destroyed project ${full_path} (id ${pid})"
+    return 0
+  fi
+  warn "GitLab rails destroy failed for project ${full_path} (id ${pid})"
+  return 1
+}
+
 smoke_finalize_gitlab_project_deletion() {
   local pid="$1"
   local meta full_path marked
@@ -266,11 +315,15 @@ smoke_hard_delete_gitlab_project() {
   [[ -n "${path}" ]] || path="${full_path}"
 
   smoke_purge_registry "${pid}"
+  smoke_delete_gitlab_project_artifacts "${pid}"
+  smoke_purge_registry_filesystem "${full_path}"
 
   code="$(smoke_gitlab_http_code -X DELETE \
     "${GITLAB_API}/projects/${pid}?permanently_delete=true")"
   if [[ "${code}" != "202" && "${code}" != "204" ]]; then
     smoke_purge_registry "${pid}"
+    smoke_delete_gitlab_project_artifacts "${pid}"
+    smoke_purge_registry_filesystem "${full_path}"
     code="$(smoke_gitlab_http_code -X DELETE \
       "${GITLAB_API}/projects/${pid}?permanently_delete=true")"
   fi
@@ -280,6 +333,11 @@ smoke_hard_delete_gitlab_project() {
   log "GitLab delete ${full_path} (id ${pid}) → HTTP ${code}"
 
   smoke_finalize_gitlab_project_deletion "${pid}"
+
+  meta="$(smoke_gitlab_project_json "${GITLAB_API}/projects/${pid}")"
+  if [[ "$(echo "${meta}" | jq -r '.id // empty')" != "" ]]; then
+    smoke_rails_destroy_gitlab_project "${pid}" "${full_path}" || true
+  fi
 }
 
 # Wait until projects/{group}/{slug} is not an active project (404/403 = free).
@@ -541,8 +599,8 @@ smoke_delete_mongo_via_api() {
     -H "Content-Type: application/json" -H "X-API-Key: ${API_KEY}" \
     -d "$(jq -n --arg id "${mongo_id}" \
       '{
-        query: "mutation($id: ID!, $force: Boolean) { deleteProject(id: $id, forceGitLabDelete: $force) { outcome message } }",
-        variables: { id: $id, force: false }
+        query: "mutation($id: ID!) { deleteProject(id: $id, forceGitLabDelete: false) { outcome message } }",
+        variables: { id: $id }
       }')" \
     2>/dev/null)"; then
     outcome="$(echo "${delresp}" | jq -r '.data.deleteProject.outcome // empty')"
@@ -551,8 +609,9 @@ smoke_delete_mongo_via_api() {
       return 0
     fi
     if [[ "${outcome}" == "ARCHIVED" ]]; then
-      log "deleteProject ARCHIVED for ${path} — ensuring Vault tree is cleared"
+      log "deleteProject ARCHIVED for ${path} — purging Vault and Mongo row"
       [[ -n "${vault_path}" ]] && smoke_delete_vault_tree "${vault_path}"
+      smoke_delete_mongo_by_id "${mongo_id}" "${path}" "${vault_path}" || true
       return 0
     fi
   fi
@@ -594,6 +653,28 @@ smoke_preflight_clear_slots() {
     }')"
   lresp="$(graphql_post "${lookup}")"
 
+  archived_lookup="$(jq -n \
+    --argjson gp "${GROUP_JSON}" \
+    '{
+      query: "query($f: ProjectFilterInput!) { projects(filter: $f, page: 0, perPage: 100) { id projectSlug gitlabPath gitlabProjectId effectiveSlug vaultBasePath } }",
+      variables: { f: { groupPathPrefix: $gp, archived: true } }
+    }')"
+  archived_resp="$(graphql_post "${archived_lookup}")"
+  while IFS= read -r row; do
+    [[ -z "${row}" ]] && continue
+    slug="$(echo "${row}" | jq -r '.projectSlug')"
+    skip=0
+    for s in "${slugs[@]}"; do [[ "${slug}" == "${s}" ]] && skip=1; done
+    (( skip )) || continue
+    mongo_id="$(echo "${row}" | jq -r '.id')"
+    path="$(echo "${row}" | jq -r '.gitlabPath')"
+    release="$(echo "${row}" | jq -r '.effectiveSlug')"
+    vault_path="$(echo "${row}" | jq -r '.vaultBasePath // empty')"
+    log "Preflight: purging archived registry row ${path}"
+    smoke_delete_k8s_release "${release}"
+    smoke_delete_mongo_via_api "${mongo_id}" "${path}" "${vault_path}"
+  done < <(echo "${archived_resp}" | jq -c '(.data.projects // [])[]')
+
   for slug in "${slugs[@]}"; do
     row="$(echo "${lresp}" | jq -c --arg s "${slug}" \
       '(.data.projects // [])[] | select(.projectSlug == $s)' | head -1 || true)"
@@ -633,14 +714,21 @@ smoke_preflight_clear_slots() {
 # When GitLab is already gone, deleteProject may fail — purge Vault trees then Mongo rows.
 smoke_purge_mongo_group() {
   local group_path="$1"
-  local query count total=0
+  local query path_query count total=0
   local legacy_query='{"groupPath.0": "smoke", "groupPath.1": {$exists: false}}'
 
   query="$(smoke_mongo_group_query "${group_path}")"
+  path_query="$(jq -cn --arg p "${group_path}/" '{gitlabPath: {"$regex": ("^" + $p)}}')"
   smoke_purge_vault_for_mongo_query "${query}"
+  smoke_purge_vault_for_mongo_query "${path_query}"
 
   count="$(smoke_mongosh platform --eval \
     "db.projects.deleteMany(${query}).deletedCount" 2>/dev/null || echo "0")"
+  count="${count//$'\r'/}"
+  total=$((total + count))
+
+  count="$(smoke_mongosh platform --eval \
+    "db.projects.deleteMany(${path_query}).deletedCount" 2>/dev/null || echo "0")"
   count="${count//$'\r'/}"
   total=$((total + count))
 
@@ -657,7 +745,7 @@ smoke_purge_mongo_group() {
 
   local remaining
   remaining="$(smoke_mongosh platform --eval \
-    "db.projects.countDocuments(${query})" 2>/dev/null | tr -d '\r\n ' || echo "?")"
+    "db.projects.countDocuments(${path_query})" 2>/dev/null | tr -d '\r\n ' || echo "?")"
   if [[ "${remaining}" =~ ^[0-9]+$ && "${remaining}" != "0" ]]; then
     die "Mongo: ${remaining} project document(s) still present for ${group_path} (including archived) — set MONGO_APP_* in .env or purge manually"
   fi

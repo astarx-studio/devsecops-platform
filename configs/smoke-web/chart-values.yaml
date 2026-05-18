@@ -1,2 +1,4 @@
-# Smoke Web — optional Helm overrides.
+# Smoke Web — static BUILD-time config only (no Vault runtime injection).
 replicaCount: 1
+externalSecret:
+  enabled: false
