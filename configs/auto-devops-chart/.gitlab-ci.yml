@@ -40,9 +40,22 @@ publish:
       CHART_VERSION=${CI_COMMIT_TAG#v}
       sed -i "s/^version:.*/version: ${CHART_VERSION}/" Chart.yaml
       helm package .
-      echo "${CI_REGISTRY_PASSWORD}" | helm registry login "gitlab:5000" \
-        --username "${CI_REGISTRY_USER}" --password-stdin --insecure
-      helm push "dsoaas-app-${CHART_VERSION}.tgz" "oci://gitlab:5000/${CI_PROJECT_PATH}" --plain-http
+      CHART_REGISTRY_HOST="${CHART_REGISTRY_HOST:-gitlab:5000}"
+      if [ -z "${CHART_REGISTRY_PLAIN_HTTP:-}" ] || [ "${CHART_REGISTRY_PLAIN_HTTP}" = "auto" ]; then
+        case "${CHART_REGISTRY_HOST}" in
+          gitlab:5000 | gitlab) CHART_REGISTRY_PLAIN_HTTP=true ;;
+          *) CHART_REGISTRY_PLAIN_HTTP=false ;;
+        esac
+      fi
+      HELM_LOGIN_EXTRA=""
+      HELM_PUSH_EXTRA=""
+      if [ "${CHART_REGISTRY_PLAIN_HTTP}" = "true" ]; then
+        HELM_LOGIN_EXTRA="--insecure"
+        HELM_PUSH_EXTRA="--plain-http"
+      fi
+      echo "${CI_REGISTRY_PASSWORD}" | helm registry login "${CHART_REGISTRY_HOST}" \
+        --username "${CI_REGISTRY_USER}" --password-stdin ${HELM_LOGIN_EXTRA}
+      helm push "dsoaas-app-${CHART_VERSION}.tgz" "oci://${CHART_REGISTRY_HOST}/${CI_PROJECT_PATH}" ${HELM_PUSH_EXTRA}
       echo "Chart dsoaas-app-${CHART_VERSION} published."
   rules:
     - if: '$CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+$/'

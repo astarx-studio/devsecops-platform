@@ -1,0 +1,40 @@
+# =============================================================================
+# GitLab Runner — external (outside devops-network)
+# =============================================================================
+# Copy to your runner host and register, or merge into config.toml.
+#
+# - No network_mode (do not use devops-network unless the runner joins it).
+# - Use public GitLab / registry hostnames (or host-gateway extra_hosts below).
+# - Set CHART_REGISTRY_* via runner environment (overrides pipeline defaults).
+#
+# Instance CI variables (optional, via make update-dso-configs):
+#   CHART_REGISTRY_HOST, CHART_REGISTRY_PLAIN_HTTP, VAULT_ADDR (CI-reachable)
+# =============================================================================
+
+concurrent = 2
+check_interval = 0
+
+[[runners]]
+  name = "external-docker-runner"
+  url = "https://gitlab.devops.yourdomain.com"
+  token = "<glrt-...>"
+  executor = "docker"
+  # Inject job env — overrides pipeline defaults for chart registry + Vault.
+  environment = [
+    "CHART_REGISTRY_HOST=registry.devops.yourdomain.com",
+    "CHART_REGISTRY_PLAIN_HTTP=false",
+  ]
+  [runners.docker]
+    tls_verify = false
+    image = "docker:latest"
+    privileged = true
+    helper_image = "registry.gitlab.com/gitlab-org/gitlab-runner/gitlab-runner-helper:x86_64-v18.10.1"
+    pull_policy = ["always"]
+    disable_entrypoint_overwrite = false
+    volumes = ["/cache", "/certs/client", "/var/run/docker.sock:/var/run/docker.sock"]
+    # Same Docker host as the platform stack: reach Traefik on the host (avoids hairpin/timeouts).
+    extra_hosts = [
+      "gitlab.devops.yourdomain.com:host-gateway",
+      "registry.devops.yourdomain.com:host-gateway",
+      "host.docker.internal:host-gateway",
+    ]

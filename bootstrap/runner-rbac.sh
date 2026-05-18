@@ -56,6 +56,8 @@ kubectl config use-context "k3d-${K3D_CLUSTER_NAME}" >/dev/null \
 # shellcheck source=lib/gitlab-api.sh
 source "${SCRIPT_DIR}/lib/gitlab-api.sh"
 GITLAB_API="$(gitlab_api_v4_base)"
+# Multipart CI variable upserts must not send Content-Type: application/json.
+GITLAB_FORM_HDR=(-H "PRIVATE-TOKEN: ${GITLAB_ROOT_TOKEN}")
 if gitlab_api_uses_docker; then
   log "GitLab API via docker exec ${GITLAB_CONTAINER} (override with GITLAB_API_BASE_URL to use host curl)"
 fi
@@ -64,12 +66,14 @@ mkdir -p "${KUBECONFIG_DIR}"
 info "Kubeconfigs will be written to: ${KUBECONFIG_DIR}"
 
 # -----------------------------------------------------------------------------
-# Retrieve cluster endpoint (as seen from inside devops-network)
-# The k3d server LB container hostname resolves inside devops-network.
+# Cluster API URL for GitLab deploy jobs (KUBECONFIG_B64).
+#
+# In-stack runners on devops-network can use k3d-*-serverlb:6443.
+# External runners (and job containers on the host Docker daemon) must use the
+# k3d-published port on the Docker host (default 16443 via k3d-cluster.sh).
 # -----------------------------------------------------------------------------
-CLUSTER_HOST="k3d-${K3D_CLUSTER_NAME}-serverlb"
-CLUSTER_PORT="6443"
-CLUSTER_ENDPOINT="https://${CLUSTER_HOST}:${CLUSTER_PORT}"
+KUBE_API_CI_URL="${KUBE_API_CI_URL:-https://host.docker.internal:16443}"
+CLUSTER_ENDPOINT="${KUBE_API_CI_URL}"
 
 # Fetch cluster CA from the current kubeconfig
 CLUSTER_CA=$(kubectl config view --raw -o jsonpath="{.clusters[?(@.name==\"k3d-${K3D_CLUSTER_NAME}\")].cluster.certificate-authority-data}")
@@ -236,9 +240,10 @@ EOF
     # Variable exists for this scope — update it in place.
     HTTP_STATUS=$(gitlab_curl -s -o /dev/null -w "%{http_code}" \
       --request PUT \
-      "${GITLAB_API_HDR[@]}" \
+      "${GITLAB_FORM_HDR[@]}" \
       --form "value=${KUBECONFIG_B64}" \
-      --form "masked=true" \
+      --form "masked=false" \
+      --form "protected=true" \
       --form "environment_scope=${GL_SCOPE}" \
       "${GITLAB_API}/groups/${GITLAB_CONFIG_GROUP_ID}/variables/KUBECONFIG_B64?filter%5Benvironment_scope%5D=${GL_SCOPE}" \
       2>/dev/null || echo "000")
@@ -251,10 +256,11 @@ EOF
     # Variable does not exist for this scope — create it.
     HTTP_STATUS=$(gitlab_curl -s -o /dev/null -w "%{http_code}" \
       --request POST \
-      "${GITLAB_API_HDR[@]}" \
+      "${GITLAB_FORM_HDR[@]}" \
       --form "key=KUBECONFIG_B64" \
       --form "value=${KUBECONFIG_B64}" \
-      --form "masked=true" \
+      --form "masked=false" \
+      --form "protected=true" \
       --form "environment_scope=${GL_SCOPE}" \
       "${GITLAB_API}/groups/${GITLAB_CONFIG_GROUP_ID}/variables" \
       2>/dev/null || echo "000")
@@ -269,28 +275,21 @@ EOF
 done
 
 # -----------------------------------------------------------------------------
-# Validate: kubectl test from a throwaway container on devops-network.
-#
-# Host-side validation is unreliable because the kubeconfig server address
-# (k3d-dsoaas-serverlb) is a Docker DNS hostname only resolvable inside the
-# bridge network — not from the host.  A sidecar container joined to the same
-# network can resolve it correctly and serves as the ground truth.
-#
-# MSYS_NO_PATHCONV / MSYS2_ARG_CONV_EXCL suppress Git Bash path mangling on
-# Windows when passing Unix-style volume mounts to docker run.
+# Validate kubeconfigs the same way CI deploy jobs reach the API (host-published
+# k3d port). MSYS_NO_PATHCONV suppresses Git Bash path mangling on Windows.
 # -----------------------------------------------------------------------------
-log "Validating kubeconfigs from devops-network sidecar..."
+log "Validating kubeconfigs (CI API: ${CLUSTER_ENDPOINT})..."
 for ENV in "${ENVS[@]}"; do
   KC="${KUBECONFIG_DIR}/kubeconfig-${ENV}.yaml"
   if MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' \
       docker run --rm \
-        --network "${DOCKER_NETWORK}" \
+        --add-host=host.docker.internal:host-gateway \
         -v "${KC}:/kc:ro" \
         bitnami/kubectl:latest \
         --kubeconfig=/kc get pods -n "${ENV}" >/dev/null 2>&1; then
     info "kubeconfig-${ENV}.yaml: access OK."
   else
-    warn "kubeconfig-${ENV}.yaml: access FAILED. Check SA permissions."
+    warn "kubeconfig-${ENV}.yaml: access FAILED. Check SA permissions and KUBE_API_CI_URL."
   fi
 done
 

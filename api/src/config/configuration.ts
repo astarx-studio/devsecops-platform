@@ -30,7 +30,10 @@ export interface AppConfiguration {
   };
 
   vault: {
+    /** In-cluster Vault URL for the Management API. */
     url: string;
+    /** Vault URL written to GitLab VAULT_ADDR for CI jobs (external runners need a public URL). */
+    ciUrl: string;
     token: string;
   };
 
@@ -119,6 +122,7 @@ const configuration = (): AppConfiguration => {
 
     vault: {
       url: optional('VAULT_URL') ?? 'http://vault:8200',
+      ciUrl: optional('VAULT_CI_URL') ?? optional('VAULT_URL') ?? 'http://vault:8200',
       token: required('VAULT_DEV_ROOT_TOKEN_ID'),
     },
 

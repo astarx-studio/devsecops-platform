@@ -123,7 +123,7 @@ export const VAULT_CI_VAR_KEYS = ['VAULT_ADDR', 'VAULT_TOKEN', 'VAULT_PROJECT_PA
 /**
  * GitLab CI variables so pipelines can read env profiles from Vault (build phase).
  *
- * @param vaultAddr - In-cluster URL (e.g. http://vault:8200)
+ * @param vaultAddr - CI-reachable Vault URL (e.g. https://vault.example.com or http://vault:8200 in-stack)
  * @param vaultToken - Read token (masked in GitLab)
  * @param vaultBasePath - Project KV prefix (same as env-scoped deploy VAULT_PROJECT_PATH)
  */

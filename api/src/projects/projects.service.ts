@@ -66,10 +66,7 @@ import type { ClusterProfile, DeployEnv, DeploymentTarget } from './schemas/proj
 import { SonarQubeService } from '../sonarqube/sonarqube.service';
 import { SlugService } from './slug.service';
 import { buildSonarCiVariables } from './sonar/sonar-ci-sync';
-import {
-  buildSonarProjectKey,
-  buildSonarProjectName,
-} from './sonar/sonar-project-key.util';
+import { buildSonarProjectKey, buildSonarProjectName } from './sonar/sonar-project-key.util';
 import {
   isSonarEnabled,
   resolveSonarGatePolicy,
@@ -121,6 +118,7 @@ export class ProjectsService {
   private readonly domain: string;
   private readonly appsDomain: string;
   private readonly vaultUrl: string;
+  private readonly vaultCiUrl: string;
   private readonly vaultToken: string;
   private reconcileInFlight: Promise<ReconcileGitLabProjectsResult> | null = null;
 
@@ -139,6 +137,7 @@ export class ProjectsService {
     this.domain = this.configService.get<string>('domain', { infer: true })!;
     this.appsDomain = this.configService.get<string>('appsDomain', { infer: true })!;
     this.vaultUrl = this.configService.get<string>('vault.url', { infer: true })!;
+    this.vaultCiUrl = this.configService.get<string>('vault.ciUrl', { infer: true })!;
     this.vaultToken = this.configService.get<string>('vault.token', { infer: true })!;
   }
 
@@ -183,11 +182,7 @@ export class ProjectsService {
       return;
     }
 
-    const vars = buildVaultAccessCiVariables(
-      this.vaultUrl,
-      this.vaultToken,
-      doc.vaultBasePath,
-    );
+    const vars = buildVaultAccessCiVariables(this.vaultCiUrl, this.vaultToken, doc.vaultBasePath);
     await this.gitlabService.setProjectCiVariables(doc.gitlabProjectId, vars);
     this.logger.log(
       `syncVaultAccessCiVariables: set ${vars.length} global VAULT_* CI variable(s) on GitLab project ${doc.gitlabProjectId}`,
@@ -259,9 +254,7 @@ export class ProjectsService {
   }
 
   private hasExtraDeployTargets(targets: DeploymentTarget[]): boolean {
-    return targets.some(
-      (t) => !(STANDARD_DEPLOY_TARGET_KEYS as readonly string[]).includes(t.key),
-    );
+    return targets.some((t) => !(STANDARD_DEPLOY_TARGET_KEYS as readonly string[]).includes(t.key));
   }
 
   private syncAppHostsFromTargets(doc: ProjectDocument): void {
@@ -583,7 +576,7 @@ externalSecret:
         ];
       });
       ciVariables.push(
-        ...buildVaultAccessCiVariables(this.vaultUrl, this.vaultToken, vaultBasePath),
+        ...buildVaultAccessCiVariables(this.vaultCiUrl, this.vaultToken, vaultBasePath),
       );
       await this.gitlabService.setProjectCiVariables(gitlabProjectId, ciVariables);
 
@@ -746,7 +739,11 @@ externalSecret:
       return { outcome: 'deleted', message };
     }
 
-    const message = this.buildDeletionArchiveMessage(gitlabResult.message, cleanupNotes, remainders);
+    const message = this.buildDeletionArchiveMessage(
+      gitlabResult.message,
+      cleanupNotes,
+      remainders,
+    );
     this.logger.warn(
       `Project "${doc.gitlabPath}" not fully removed — archiving registry row: ${message}`,
     );
@@ -943,9 +940,7 @@ externalSecret:
     targetKey: string,
     hostname: string,
   ): Promise<ProjectDocument> {
-    this.logger.log(
-      `setHostnameOverride: id=${id} target=${targetKey} hostname="${hostname}"`,
-    );
+    this.logger.log(`setHostnameOverride: id=${id} target=${targetKey} hostname="${hostname}"`);
     const doc = await this.findProject({ id });
     const targets = ensureDeploymentTargets(doc, this.appsDomain);
     const idx = targets.findIndex((t) => t.key === targetKey);
@@ -1152,9 +1147,7 @@ externalSecret:
       throw new BadRequestException('At least one non-empty branch name is required.');
     }
 
-    this.logger.log(
-      `provisionSonarProjects: id=${id} branches=[${normalizedBranches.join(',')}]`,
-    );
+    this.logger.log(`provisionSonarProjects: id=${id} branches=[${normalizedBranches.join(',')}]`);
     const doc = await this.findProject({ id });
     const publicUrl = this.configService.get<string>('sonarqube.publicUrl', { infer: true })!;
     const projectLabel = doc.displayName ?? doc.projectSlug;
@@ -1203,9 +1196,7 @@ externalSecret:
       },
     });
 
-    this.logger.log(
-      `Provisioned ${results.length} Sonar project(s) for "${doc.gitlabPath}"`,
-    );
+    this.logger.log(`Provisioned ${results.length} Sonar project(s) for "${doc.gitlabPath}"`);
     return results;
   }
 
@@ -1277,8 +1268,7 @@ externalSecret:
     doc: ProjectDocument,
     commitBranch?: string,
   ): Promise<void> {
-    const branch =
-      commitBranch ?? (await this.resolveGitCommitBranch(doc.gitlabProjectId));
+    const branch = commitBranch ?? (await this.resolveGitCommitBranch(doc.gitlabProjectId));
 
     const targets = ensureDeploymentTargets(doc, this.appsDomain);
     doc.deploymentTargets = targets;
@@ -1301,7 +1291,7 @@ externalSecret:
 
     if (ciVars.length > 0) {
       ciVars.push(
-        ...buildVaultAccessCiVariables(this.vaultUrl, this.vaultToken, doc.vaultBasePath),
+        ...buildVaultAccessCiVariables(this.vaultCiUrl, this.vaultToken, doc.vaultBasePath),
       );
       await this.gitlabService.setProjectCiVariables(doc.gitlabProjectId, ciVars);
     } else if (hasEnvProfiles) {
@@ -1325,8 +1315,7 @@ externalSecret:
     doc: ProjectDocument,
     commitBranch?: string,
   ): Promise<void> {
-    const branch =
-      commitBranch ?? (await this.resolveGitCommitBranch(doc.gitlabProjectId));
+    const branch = commitBranch ?? (await this.resolveGitCommitBranch(doc.gitlabProjectId));
 
     const targets = ensureDeploymentTargets(doc, this.appsDomain);
     const extraYaml = generateDeployTargetsCiYaml(targets);
@@ -1428,10 +1417,7 @@ externalSecret:
       });
     }
 
-    const commitBranch = resolvePipelineBranchRef(
-      input.branchOptions,
-      glProject.default_branch,
-    );
+    const commitBranch = resolvePipelineBranchRef(input.branchOptions, glProject.default_branch);
 
     if (isDeployable || deploymentTargets.some((t) => t.enabled)) {
       await this.gitlabService.upsertFile(
@@ -1480,9 +1466,7 @@ externalSecret:
       inferClusterProfile(input.targetKey);
 
     if (!clusterProfile) {
-      throw new BadRequestException(
-        `clusterProfile is required for target "${input.targetKey}"`,
-      );
+      throw new BadRequestException(`clusterProfile is required for target "${input.targetKey}"`);
     }
 
     let deployRef = input.deployRef ?? existing?.deployRef;
@@ -1534,7 +1518,7 @@ externalSecret:
     await this.gitlabService.setProjectCiVariables(doc.gitlabProjectId, [
       ...buildEnvScopedDeployVariables(target, doc.vaultBasePath, kubeconfigB64),
       buildDeployRefVariable(target),
-      ...buildVaultAccessCiVariables(this.vaultUrl, this.vaultToken, doc.vaultBasePath),
+      ...buildVaultAccessCiVariables(this.vaultCiUrl, this.vaultToken, doc.vaultBasePath),
     ]);
 
     await this.regenerateDeployCiFiles(doc);
@@ -1685,7 +1669,10 @@ externalSecret:
       if (isGitLabProjectPendingDeletion(glProject)) {
         const existing = await this.projectModel.findOne({ gitlabProjectId: glProject.id }).exec();
         if (existing) {
-          await this.syncArchivedForGitLabScheduledDeletion(existing, glProject.path_with_namespace);
+          await this.syncArchivedForGitLabScheduledDeletion(
+            existing,
+            glProject.path_with_namespace,
+          );
         } else {
           this.logger.verbose(
             `Reconciliation: skipping GitLab project pending deletion "${glProject.path_with_namespace}"`,
@@ -1788,9 +1775,7 @@ externalSecret:
    * for deletion (including when the path was not renamed to *-deletion_scheduled-*).
    */
   private async archiveActiveProjectsPendingGitLabDeletion(): Promise<number> {
-    const activeDocs = await this.projectModel
-      .find({ archived: { $in: [false, null] } })
-      .exec();
+    const activeDocs = await this.projectModel.find({ archived: { $in: [false, null] } }).exec();
 
     let archived = 0;
 

@@ -354,4 +354,8 @@ else
   warn "GITLAB_TEMPLATE_GROUP_ID unset — skipping template reminder."
 fi
 
+# shellcheck source=lib/gitlab-ci-instance-vars.sh
+source "${SCRIPT_DIR}/lib/gitlab-ci-instance-vars.sh"
+sync_gitlab_external_runner_instance_vars || true
+
 log "Seed step finished."

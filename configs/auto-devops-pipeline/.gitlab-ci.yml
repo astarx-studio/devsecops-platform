@@ -25,6 +25,9 @@
 #   KANIKO_IMAGE_NAME     Optional registry path suffix for monorepos, e.g. "admin"
 #                         → pushes to $CI_REGISTRY_IMAGE/admin:$CI_COMMIT_SHORT_SHA
 #   CHART_VERSION         Pin a chart version  (default: latest stable)
+#   CHART_REGISTRY_HOST   Helm OCI host (default gitlab:5000 in-stack; external: GITLAB_REGISTRY_DOMAIN)
+#   CHART_REGISTRY_PLAIN_HTTP  auto | true | false
+#   CHART_REGISTRY_USER / CHART_REGISTRY_PASSWORD  Deploy token on auto-devops-chart (instance CI)
 #   EXTRA_HELM_ARGS       Pass extra --set flags to helm upgrade
 #   DEPLOY_DEV_REF        Branch that triggers dev deploy (default: develop)
 #   DEPLOY_STG_REF        Branch that triggers stg deploy (default: staging)
@@ -78,11 +81,12 @@ workflow:
 variables:
   # Disable Auto DevOps built-in Kubernetes deploy (we handle it ourselves)
   AUTO_DEVOPS_PLATFORM_TARGET: ""
-  # OCI path to the dsoaas-app Helm chart via the internal Docker registry.
-  # GitLab's registry daemon listens on port 5000 inside the devops-network.
-  # Port 5005 is an internal nginx alias only accessible within the GitLab
-  # container itself; --insecure is required since TLS is not terminated here.
-  CHART_OCI_REF: "oci://gitlab:5000/system/devsecops-platform/configs/auto-devops-chart/dsoaas-app"
+  # Helm OCI chart registry host (override at instance level for external runners).
+  # In-stack default: gitlab:5000 (registry daemon on devops-network).
+  # External runners: set CHART_REGISTRY_HOST to GITLAB_REGISTRY_DOMAIN (HTTPS via Traefik).
+  CHART_REGISTRY_HOST: "gitlab:5000"
+  # auto | true | false — auto uses plain HTTP only for gitlab:5000
+  CHART_REGISTRY_PLAIN_HTTP: "auto"
   CHART_VERSION: "0.2.3"
   # Kaniko cache bucket inside GitLab registry
   DOCKER_DRIVER: overlay2
@@ -281,6 +285,10 @@ sonar:scan:
   extends: .sonar-scan
   allow_failure: false
 
+# Advisory on Free/CE; do not block deploy when the scanner cannot reach the image.
+container_scanning:
+  allow_failure: true
+
 # =============================================================================
 # .deploy-helm — base hidden job for all environment deployments.
 #
@@ -308,17 +316,55 @@ sonar:scan:
     - echo "${KUBECONFIG_B64}" | base64 -d > /tmp/kube/config
     - chmod 600 /tmp/kube/config
     - export KUBECONFIG=/tmp/kube/config
-    # Log in to the GitLab container registry daemon (port 5000, devops-network).
-    # Port 5005 is internal to the GitLab container; only port 5000 is reachable
-    # from runner containers on the same Docker bridge network.
-    # CHART_REGISTRY_USER / CHART_REGISTRY_PASSWORD are instance-level CI variables
-    # backed by a read_registry deploy token on the auto-devops-chart project.
-    # Using the deploy token (not CI_REGISTRY_*) because CI job tokens are scoped
-    # to the running project and cannot pull from cross-project registries.
-    # NOTE: command intentionally on one line — YAML plain-scalar folding turns
-    #       backslash-continuations into a literal "\" argument that breaks Helm's
-    #       CLI parser. Use the | block scalar or single-line commands instead.
-    - echo "${CHART_REGISTRY_PASSWORD}" | helm registry login "gitlab:5000" --username "${CHART_REGISTRY_USER}" --password-stdin --insecure
+    # CHART_REGISTRY_USER / CHART_REGISTRY_PASSWORD: instance CI variables (deploy token on auto-devops-chart).
+    - |
+      set -eu
+      CHART_REGISTRY_HOST="${CHART_REGISTRY_HOST:-gitlab:5000}"
+      if [ -z "${CHART_REGISTRY_PLAIN_HTTP:-}" ] || [ "${CHART_REGISTRY_PLAIN_HTTP}" = "auto" ]; then
+        case "${CHART_REGISTRY_HOST}" in
+          gitlab:5000 | gitlab) CHART_REGISTRY_PLAIN_HTTP=true ;;
+          *) CHART_REGISTRY_PLAIN_HTTP=false ;;
+        esac
+      fi
+      export CHART_OCI_REF="oci://${CHART_REGISTRY_HOST}/system/devsecops-platform/configs/auto-devops-chart/dsoaas-app"
+      HELM_PLAIN_HTTP_FLAG=""
+      HELM_LOGIN_EXTRA=""
+      CHART_REGISTRY_HOST_GATEWAY_MAPPED=0
+      if [ "${CHART_REGISTRY_PLAIN_HTTP}" = "true" ]; then
+        HELM_PLAIN_HTTP_FLAG="--plain-http"
+        HELM_LOGIN_EXTRA="--insecure"
+      fi
+      # External runners on the Docker host cannot hairpin to the public registry URL.
+      # Map the registry hostname to host.docker.internal (same effect as runner extra_hosts).
+      if [ "${CHART_REGISTRY_HOST}" != "gitlab:5000" ] && [ "${CHART_REGISTRY_HOST}" != "gitlab" ]; then
+        if command -v getent >/dev/null 2>&1 && getent ahostsv4 host.docker.internal >/dev/null 2>&1; then
+          _gw="$(getent ahostsv4 host.docker.internal | awk '{print $1; exit}')"
+          echo "${_gw} ${CHART_REGISTRY_HOST}" >> /etc/hosts
+          CHART_REGISTRY_HOST_GATEWAY_MAPPED=1
+          echo "Mapped ${CHART_REGISTRY_HOST} -> host.docker.internal (${_gw})"
+        fi
+      fi
+      if [ "${CHART_REGISTRY_HOST_GATEWAY_MAPPED}" = "1" ] && [ -z "${HELM_LOGIN_EXTRA}" ]; then
+        HELM_LOGIN_EXTRA="--insecure"
+      fi
+      export HELM_PLAIN_HTTP_FLAG HELM_LOGIN_EXTRA CHART_REGISTRY_HOST_GATEWAY_MAPPED
+      HELM_LOGIN_HOST="${CHART_REGISTRY_HOST}"
+      case "${HELM_LOGIN_HOST}" in
+        http://*|https://*) ;;
+        gitlab:5000 | gitlab)
+          HELM_LOGIN_HOST="http://${HELM_LOGIN_HOST}"
+          ;;
+        *)
+          if [ "${CHART_REGISTRY_PLAIN_HTTP}" = "true" ]; then
+            HELM_LOGIN_HOST="http://${HELM_LOGIN_HOST}"
+          else
+            HELM_LOGIN_HOST="https://${HELM_LOGIN_HOST}"
+          fi
+          ;;
+      esac
+      echo "Helm chart registry: ${CHART_REGISTRY_HOST} (login=${HELM_LOGIN_HOST}, oci=${CHART_OCI_REF}, plain_http=${CHART_REGISTRY_PLAIN_HTTP})"
+      echo "${CHART_REGISTRY_PASSWORD}" | helm registry login "${HELM_LOGIN_HOST}" \
+        --username "${CHART_REGISTRY_USER}" --password-stdin ${HELM_LOGIN_EXTRA}
     # Create / refresh a Kubernetes docker-registry pull secret so the cluster can
     # pull the project's image from the private GitLab registry.  The CI job token
     # (CI_REGISTRY_USER / CI_REGISTRY_PASSWORD) is valid for the duration of the
@@ -355,7 +401,7 @@ sonar:scan:
       # Fall back to DEPLOY_ENV if KUBE_NAMESPACE is not env-scoped by the API,
       # so the deploy always lands in the correct namespace.
       helm upgrade --install "${CI_PROJECT_NAME}" "${CHART_OCI_REF}" \
-        --version "${CHART_VERSION}" --plain-http \
+        --version "${CHART_VERSION}" ${HELM_PLAIN_HTTP_FLAG} \
         --namespace "${KUBE_NAMESPACE:-$DEPLOY_ENV}" \
         --set image.repository="${CI_REGISTRY_IMAGE}" \
         --set image.tag="${CI_COMMIT_SHORT_SHA}" \
