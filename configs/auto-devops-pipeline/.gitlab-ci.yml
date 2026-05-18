@@ -40,8 +40,8 @@
 # Optional SonarQube (opt-in per project — set via Management API or GitLab CI variables):
 #   SONAR_ALLOWED_BRANCHES   Comma-separated branch names (empty = skip Sonar)
 #   SONAR_TOKEN              Masked analysis token
-#   SONAR_HOST_URL           Public Sonar URL (dashboard links)
-#   SONAR_HOST_URL_INTERNAL  Scanner URL (default http://sonarqube:9000 on devops-network)
+#   SONAR_HOST_URL           Public Sonar URL (dashboard links; scanner fallback on external runners)
+#   SONAR_HOST_URL_INTERNAL  Scanner URL in-stack (default http://sonarqube:9000 on devops-network)
 #   SONAR_GATE_POLICY_JSON   {"dev":"optional","stg":"required","prod":"required","other":"optional"}
 # =============================================================================
 
@@ -226,7 +226,21 @@ test:
         echo "Sonar skipped: branch ${CI_COMMIT_REF_NAME} not in SONAR_ALLOWED_BRANCHES."
         exit 0
       fi
+      SONAR_PUBLIC_URL="${SONAR_HOST_URL:-}"
       SCAN_URL="${SONAR_HOST_URL_INTERNAL:-http://sonarqube:9000}"
+      # External runners cannot resolve in-cluster sonarqube; use public URL via host gateway.
+      if ! curl -sf --max-time 5 "${SCAN_URL}/api/system/status" >/dev/null 2>&1; then
+        if [ -n "${SONAR_PUBLIC_URL}" ]; then
+          SCAN_URL="${SONAR_PUBLIC_URL}"
+          _sonar_host="$(printf '%s' "${SONAR_PUBLIC_URL}" | sed -e 's#^https://##' -e 's#^http://##' -e 's#/.*##' -e 's#:.*##')"
+          if [ -n "${_sonar_host}" ] && command -v getent >/dev/null 2>&1 \
+              && getent ahostsv4 host.docker.internal >/dev/null 2>&1; then
+            _gw="$(getent ahostsv4 host.docker.internal | awk '{print $1; exit}')"
+            echo "${_gw} ${_sonar_host}" >> /etc/hosts
+            echo "Sonar scanner: mapped ${_sonar_host} -> host.docker.internal (${_gw})"
+          fi
+        fi
+      fi
       PROJECT_KEY="${CI_PROJECT_PATH_SLUG}_${CI_COMMIT_REF_SLUG}"
       # printf avoids echo's trailing newline (was turned into a stray '_' by tr)
       PROJECT_KEY=$(printf '%s' "$PROJECT_KEY" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9._-' '_' | sed 's/^_\+//;s/_\+$//')
@@ -250,7 +264,7 @@ test:
         -Dsonar.projectName="${CI_PROJECT_NAME} (${CI_COMMIT_REF_NAME})" \
         -Dsonar.qualitygate.wait=false \
         ${SCANNER_EXTRA}
-      DASHBOARD="${SONAR_HOST_URL:-$SCAN_URL}/dashboard?id=${PROJECT_KEY}"
+      DASHBOARD="${SONAR_PUBLIC_URL:-$SCAN_URL}/dashboard?id=${PROJECT_KEY}"
       STATUS=success
       DESCRIPTION="Sonar Quality Gate passed (${TIER}, ${GATE_MODE})"
       if [ "$GATE_MODE" = "required" ]; then

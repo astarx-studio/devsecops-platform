@@ -71,7 +71,7 @@
         curl -sfS \
           -H "X-Vault-Token: ${VAULT_TOKEN}" \
           "${VAULT_ADDR}/v1/secret/data/${path}" \
-          | jq -r '.data.data // {}'
+          | jq -c '.data.data // {}'
       }
       normalize_workspace_path() {
         p="$(printf '%s' "$1" | tr '\\' '/' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
@@ -123,14 +123,13 @@
         cp "${src}" "${staged}"
       }
       INDEX_PATH="${VAULT_PROJECT_PATH}/ci/index"
-      INDEX_JSON="$(vault_read_json "${INDEX_PATH}" | jq -r '._index_json // empty')"
-      if [ -z "${INDEX_JSON}" ] || [ "${INDEX_JSON}" = "null" ]; then
+      if ! vault_read_json "${INDEX_PATH}" | jq -e '._index_json' >/dev/null 2>&1; then
         echo "load-vault-env: no ci/index manifest at ${INDEX_PATH} — nothing to load"
         exit 0
       fi
       BRANCH="${CI_COMMIT_REF_NAME:-}"
       JOB_SELECTOR="${KANIKO_IMAGE_NAME:-${ENV_PROFILE_JOB_SELECTOR:-}}"
-      echo "${INDEX_JSON}" | jq -c '.profiles[]?' | while IFS= read -r profile; do
+      vault_read_json "${INDEX_PATH}" | jq -c '._index_json | fromjson | .profiles[]?' | while IFS= read -r profile; do
         phase="$(echo "${profile}" | jq -r '.injectionPhase')"
         if [ "${phase}" != "build" ]; then
           continue
@@ -149,9 +148,8 @@
         workspace_raw="$(echo "${profile}" | jq -r '.workspacePath // ""')"
         workspace="$(normalize_workspace_path "${workspace_raw}")" || continue
         filename="$(echo "${profile}" | jq -r '.filename')"
-        secrets="$(vault_read_json "${vault_path}")"
         if [ "${delivery}" = "raw_file" ]; then
-          content="$(echo "${secrets}" | jq -r '._raw_content // empty')"
+          content="$(vault_read_json "${vault_path}" | jq -r '._raw_content // empty')"
           if [ -z "${content}" ]; then
             echo "load-vault-env: warn — raw_file profile missing _raw_content at ${vault_path}" >&2
             continue
@@ -173,17 +171,17 @@
             args_suffix="-${profile_job}"
           fi
           kaniko_args_file="${DSOAAS_DIR}/kaniko-extra-build-args${args_suffix}"
-          echo "${secrets}" | jq -r 'to_entries[] | select(.key != "_raw_content") | "\(.key)\t\(.value)"' \
+          vault_read_json "${vault_path}" | jq -r 'to_entries[] | select(.key != "_raw_content") | "\(.key)\t\(.value)"' \
             | while IFS="$(printf '\t')" read -r key value; do
               [ -z "${key}" ] && continue
               printf '%s\n' "--build-arg" "${key}=${value}" >> "${kaniko_args_file}"
             done
-          echo "${secrets}" | jq -r 'to_entries[] | select(.key != "_raw_content") | "export \(.key)=\(.value | @sh)"' \
+          vault_read_json "${vault_path}" | jq -r 'to_entries[] | select(.key != "_raw_content") | "export \(.key)=\(.value | @sh)"' \
             >> "${DSOAAS_ENV_EXPORTS_FILE}"
           if [ -n "${filename}" ] && [ "${filename}" != "null" ]; then
             dest="$(workspace_dest_path "${workspace}" "${filename}")"
             mkdir -p "$(dirname "${dest}")"
-            echo "${secrets}" | jq -r 'to_entries[] | select(.key != "_raw_content") | "\(.key)=\(.value)"' > "${dest}"
+            vault_read_json "${vault_path}" | jq -r 'to_entries[] | select(.key != "_raw_content") | "\(.key)=\(.value)"' > "${dest}"
             stage_build_file "${workspace}" "${filename}" "${dest}"
             if [ -z "${workspace}" ]; then
               echo "load-vault-env: wrote dotenv file ${filename} (repo root + staged)"

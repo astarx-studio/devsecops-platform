@@ -9,6 +9,7 @@
 #
 # Instance CI variables (optional, via make update-dso-configs):
 #   CHART_REGISTRY_HOST, CHART_REGISTRY_PLAIN_HTTP, VAULT_ADDR (CI-reachable)
+#   SONAR_HOST_URL on the project supplies the public scanner fallback in the pipeline
 # =============================================================================
 
 concurrent = 2
@@ -36,5 +37,6 @@ check_interval = 0
     extra_hosts = [
       "gitlab.devops.yourdomain.com:host-gateway",
       "registry.devops.yourdomain.com:host-gateway",
+      "sonarqube.devops.yourdomain.com:host-gateway",
       "host.docker.internal:host-gateway",
     ]
