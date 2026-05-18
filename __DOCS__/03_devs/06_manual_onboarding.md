@@ -100,6 +100,13 @@ The pipeline needs four variables per environment. Set them in GitLab project �
 | `VAULT_PROJECT_PATH` | `projects/playground/your-project` | `dev` | no |
 | `KUBECONFIG_B64` | *(see note below)* | `dev` | **yes** |
 
+For BUILD-time env profiles (Management API uploads), the API also sets these **global** (no env scope) variables:
+
+| Key | Purpose |
+|---|---|
+| `VAULT_ADDR` | Vault API URL for CI |
+| `VAULT_TOKEN` | Read token for env profile paths under `VAULT_PROJECT_PATH` |
+
 Repeat for `stg` and `prod` scopes. The prod row's `APP_HOST` drops the env prefix (e.g., `your-project.apps.<DOMAIN>`), while dev and stg use `*.dev.apps.<DOMAIN>` and `*.stg.apps.<DOMAIN>` respectively.
 
 #### About `KUBECONFIG_B64`
@@ -143,7 +150,43 @@ docker exec -e VAULT_TOKEN="$VAULT_ROOT_TOKEN" vault \
 
 Every key you write becomes an environment variable in the running pod — no further wiring needed. The chart's Deployment uses `envFrom: secretRef`, so all keys flow through automatically. Pods automatically restart when Vault values change, thanks to the platform's Reloader install (typically within `refreshInterval`, default 5 minutes).
 
-You can also leave the Vault path empty. The chart's `ExternalSecret` will then fail to materialise a secret, and the pod will fail to start with an `envFrom` error. So either seed at least one key per env, or use `helm upgrade ... --set externalSecret.enabled=false` (not currently exposed — would need a chart change). For now: seed at least a sentinel value like `PROJECT_NAME=your-project`.
+You can also leave the Vault path empty. For **static frontends** that bake config at build time only, disable runtime injection in `chart-values.yaml`:
+
+```yaml
+externalSecret:
+  enabled: false
+```
+
+API-managed projects set this automatically when you have no RUNTIME env profiles.
+
+#### Branch-scoped env profiles (Management API)
+
+If you use the Management API, admins can upload env/config files per branch without committing them to Git:
+
+| Phase | When it applies | Typical use |
+|---|---|---|
+| **BUILD** | Kaniko image build | Dotenv → Docker `ARG`s, or a raw file at `workspacePath/filename` (e.g. `application.properties`) |
+| **RUNTIME** | Running pod | Key/value pairs merged into Vault at `{VAULT_PROJECT_PATH}/{targetKey}` and synced via ExternalSecret |
+
+- **Branches** — exact `CI_COMMIT_REF_NAME` (e.g. `main`, `develop`).
+- **Deployment targets** — RUNTIME profiles select one or more target keys (`dev`, `stg`, `prod`, or custom keys like `prod-alt`). Vault path is always `{VAULT_PROJECT_PATH}/{targetKey}`; the deploy job sets `DEPLOY_ENV` to that key.
+- **Monorepos** — optional `jobSelector` matches `KANIKO_IMAGE_NAME` so each build job loads only its profiles.
+
+BUILD profiles require global CI variables `VAULT_ADDR`, `VAULT_TOKEN`, and `VAULT_PROJECT_PATH` (set by the API at provision time). The pipeline hook `.load-vault-env` runs in **build, test, sonar, and deploy** jobs:
+
+- **`dotenv_build_args`** — keys become **shell environment variables** in that job (and Kaniko `--build-arg` in build jobs).
+- **`raw_file`** — file is written under the repo workspace in that job (each job reloads from Vault).
+
+Override jobs must re-include the hook if you replace `before_script`:
+
+```yaml
+before_script:
+  - !reference [.load-vault-env, before_script]
+```
+
+Monorepo jobs can set `ENV_PROFILE_JOB_SELECTOR` (or `KANIKO_IMAGE_NAME` on build jobs) to match profile `jobSelector`. GitLab security template jobs (SAST, etc.) are separate includes and do not load Vault profiles unless you add the hook there too.
+
+For hand-onboarded repos without the API, seed Vault manually as above, or ask an admin to register the project so uploads go through `uploadEnvProfile`.
 
 ### Step 4 — Push to a trigger branch
 

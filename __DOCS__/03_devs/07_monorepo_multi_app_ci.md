@@ -95,9 +95,11 @@ The default `build` job is disabled (`when: never`) because there is no single r
 
 ### Shared test and Sonar
 
+The `test` job uses **`docker:24` as the CI image** and runs Node/pnpm inside `docker run node:20-bookworm …`. Do not set `image: node:20-bookworm` on the job itself — GitLab Runner 18.10 can fail prepare environment with `gitlab-runner-build: not found` when the job image is Node and the helper is pulled in the same phase (Kaniko build jobs are unaffected).
+
 | Job | What it runs |
 |---|---|
-| `test` | `nx run-many -t test -p admin,satudata` with coverage artifacts |
+| `test` | `nx run-many -t test -p admin,satudata` with coverage artifacts (via nested `node:20-bookworm` container) |
 | `sonar:scan` | Platform Sonar job; runs in parallel with `test` (not skipped on test failure). Lcov from `test` is only present when tests pass in the same pipeline. |
 
 **Container scanning** is turned off for now (`container_scanning: when: never`) because the template expects a single `CS_IMAGE`. Re-enable per image when you add custom scan jobs.
@@ -130,7 +132,27 @@ Production builds run `config:admin` / `config:satudata` before `nx build`. Thos
 - `NX_ENV=production` (selects `environment.prod.ts`)
 - `NX_REGION_CODE`, `NX_API_URL`, `NX_ADMIN_URL`, `NX_SATUDATA_URL`, `NX_OPENDATA_URL`, `NX_SATUPETA_URL`
 
-`admin.Dockerfile` and `satudata.Dockerfile` set **safe CI defaults** via `ARG`/`ENV` so Kaniko builds succeed without a monolithic `ENV` blob. Override real URLs per environment with Kaniko build args when you wire deploy, for example:
+`admin.Dockerfile` and `satudata.Dockerfile` set **safe CI defaults** via `ARG`/`ENV` so Kaniko builds succeed without a monolithic `ENV` blob.
+
+#### Vault env profiles (recommended for per-branch URLs)
+
+Instead of hard-coding build args in `.gitlab-ci.yml`, use **BUILD** env profiles in the Management UI:
+
+1. Upload a dotenv file per app with keys matching Dockerfile `ARG` names (any prefix — the platform does not filter keys).
+2. Set **job selector** to `admin` or `satudata` (same value as `KANIKO_IMAGE_NAME`).
+3. Set **branches** to the refs you build from (e.g. `main`).
+
+The pipeline loads profiles in **every** job that uses `.load-vault-env` (build, test, sonar, deploy). `dotenv_build_args` keys are exported as shell variables in that job and passed to Kaniko as `--build-arg` on build jobs. For a custom `test` job, prepend:
+
+```yaml
+before_script:
+  - !reference [.load-vault-env, before_script]
+  # … your install steps
+```
+
+Alternatively use **raw file** delivery to write a config file under `workspacePath/filename`.
+
+Override real URLs per environment with Kaniko build args when you wire deploy manually, for example:
 
 ```yaml
 build:admin:
