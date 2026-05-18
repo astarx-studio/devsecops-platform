@@ -588,7 +588,8 @@ services:
   # After setting the token in .env:
   #   docker compose up -d gitlab-runner
   gitlab-runner:
-    image: gitlab/gitlab-runner:latest
+    # Keep in sync with helper_image tag (x86_64-v18.10.1) in .vols/gitlab-runner/config/config.toml
+    image: gitlab/gitlab-runner:v18.10.1
     container_name: gitlab-runner
     restart: unless-stopped
     entrypoint: [""]
@@ -608,20 +609,51 @@ services:
             --token "$$GITLAB_RUNNER_TOKEN" \
             --executor "docker" \
             --docker-image "docker:latest" \
+            --docker-helper-image "registry.gitlab.com/gitlab-org/gitlab-runner/gitlab-runner-helper:x86_64-v18.10.1" \
             --docker-privileged \
             --docker-volumes "/cache" \
             --docker-volumes "/certs/client" \
+            --docker-volumes "/var/run/docker.sock:/var/run/docker.sock" \
             --docker-network-mode "$$DOCKER_NETWORK" \
             --name "docker-runner-1" \
             --clone-url "http://gitlab" \
-            --request-concurrency 4
+            --request-concurrency "$$GITLAB_RUNNER_CONCURRENT"
         fi
-        sed -i 's/^concurrent = .*/concurrent = 4/' /etc/gitlab-runner/config.toml
-        grep -q 'request_concurrency' /etc/gitlab-runner/config.toml || \
-          sed -i '/^\[\[runners\]\]/a\  request_concurrency = 4' /etc/gitlab-runner/config.toml
+        sed -i "s/^concurrent = .*/concurrent = $$GITLAB_RUNNER_CONCURRENT/" /etc/gitlab-runner/config.toml
+        if grep -q 'request_concurrency' /etc/gitlab-runner/config.toml; then
+          sed -i "s/^  request_concurrency = .*/  request_concurrency = $$GITLAB_RUNNER_CONCURRENT/" /etc/gitlab-runner/config.toml
+        else
+          sed -i "/^\[\[runners\]\]/a\  request_concurrency = $$GITLAB_RUNNER_CONCURRENT" /etc/gitlab-runner/config.toml
+        fi
+        HELPER_IMAGE="registry.gitlab.com/gitlab-org/gitlab-runner/gitlab-runner-helper:x86_64-v18.10.1"
+        CFG=/etc/gitlab-runner/config.toml
+        # Keys under [runners.docker] need 4 spaces (2 for [[runners]] + 2 for subsection).
+        if grep -q '^[[:space:]]*helper_image = ' "$$CFG"; then
+          sed -i "s|^[[:space:]]*helper_image = .*|    helper_image = \"$$HELPER_IMAGE\"|" "$$CFG"
+        else
+          sed -i "/^[[:space:]]*\\[runners.docker\\]/a\\    helper_image = \"$$HELPER_IMAGE\"" "$$CFG"
+        fi
+        if grep -q '^[[:space:]]*pull_policy' "$$CFG"; then
+          sed -i 's|^[[:space:]]*pull_policy = .*|    pull_policy = ["always"]|' "$$CFG"
+        else
+          sed -i "/^[[:space:]]*helper_image = /a\\    pull_policy = [\"always\"]" "$$CFG"
+        fi
+        sed -i 's|^[[:space:]]*disable_entrypoint_overwrite = .*|    disable_entrypoint_overwrite = false|' "$$CFG"
+        if ! grep -q 'docker.sock' "$$CFG"; then
+          sed -i 's|^\(\s*volumes = \[\)|\1"/var/run/docker.sock:/var/run/docker.sock", |' "$$CFG"
+        fi
+        # Docker Desktop (Windows) breaks external DNS with 127.0.0.11; use network default resolver.
+        sed -i '/^[[:space:]]*dns = /d' "$$CFG"
+        # Repair legacy entrypoint patches that used 2-space indent (runner-level) inside docker block.
+        sed -i '/^[[:space:]]*\[runners.docker\]/,/^[[:space:]]*\[/{
+          s/^  helper_image = /    helper_image = /
+          s/^  pull_policy = /    pull_policy = /
+          s/^  disable_entrypoint_overwrite = /    disable_entrypoint_overwrite = /
+        }' "$$CFG"
         exec /entrypoint run --user=gitlab-runner --working-directory=/home/gitlab-runner
     environment:
       GITLAB_RUNNER_TOKEN: ${GITLAB_RUNNER_TOKEN}
+      GITLAB_RUNNER_CONCURRENT: ${GITLAB_RUNNER_CONCURRENT:-2}
       DOCKER_NETWORK: ${DOCKER_NETWORK}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
