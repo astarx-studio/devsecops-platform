@@ -536,7 +536,23 @@ export class GitLabService {
       this.logger.log(
         `Creating CI variable "${key}" [${environmentScope}] on project ${projectId}`,
       );
-      await firstValueFrom(this.httpService.post(baseUrl, payload, { headers: this.headers }));
+      try {
+        await firstValueFrom(this.httpService.post(baseUrl, payload, { headers: this.headers }));
+      } catch (error: unknown) {
+        const status = (error as { response?: { status?: number } }).response?.status;
+        if (status !== 400) {
+          throw error;
+        }
+        this.logger.debug(
+          `CI variable "${key}" [${environmentScope}] already exists on project ${projectId} — updating`,
+        );
+        await firstValueFrom(
+          this.httpService.put(`${baseUrl}/${key}`, payload, {
+            headers: this.headers,
+            params: { filter: { environment_scope: environmentScope } },
+          }),
+        );
+      }
     }
   }
 

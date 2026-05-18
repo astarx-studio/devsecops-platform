@@ -41,6 +41,7 @@ import {
   buildDeployRefVariable,
   buildDeploymentTargetFromInput,
   buildEnvScopedDeployVariables,
+  buildVaultAccessCiVariables,
   ENV_SCOPED_DEPLOY_VAR_KEYS,
 } from './deploy/deployment-wiring';
 import type { DeleteProjectOptions, DeleteProjectResult } from './delete-project-result';
@@ -119,6 +120,8 @@ export class ProjectsService {
   private readonly logger = new Logger(ProjectsService.name);
   private readonly domain: string;
   private readonly appsDomain: string;
+  private readonly vaultUrl: string;
+  private readonly vaultToken: string;
   private reconcileInFlight: Promise<ReconcileGitLabProjectsResult> | null = null;
 
   constructor(
@@ -135,6 +138,60 @@ export class ProjectsService {
   ) {
     this.domain = this.configService.get<string>('domain', { infer: true })!;
     this.appsDomain = this.configService.get<string>('appsDomain', { infer: true })!;
+    this.vaultUrl = this.configService.get<string>('vault.url', { infer: true })!;
+    this.vaultToken = this.configService.get<string>('vault.token', { infer: true })!;
+  }
+
+  /**
+   * Updates chart-values.yaml on GitLab when runtime env / ExternalSecret toggle changes.
+   */
+  async refreshChartValuesOnGitlab(doc: ProjectDocument, pipelineRef?: string): Promise<void> {
+    if (!doc.capabilities?.deployable && !doc.deploymentTargets?.some((t) => t.enabled)) {
+      return;
+    }
+
+    let ref = pipelineRef;
+    if (!ref) {
+      const gl = await this.gitlabService.getProject(doc.gitlabProjectId);
+      ref = gl.default_branch;
+    }
+
+    await this.gitlabService.upsertFile(
+      doc.gitlabProjectId,
+      'chart-values.yaml',
+      ProjectsService.buildChartValues(doc.runtimeEnvEnabled ?? true),
+      'chore: update chart-values env profile settings',
+      ref,
+    );
+  }
+
+  /**
+   * Ensures global-scope VAULT_ADDR / VAULT_TOKEN / VAULT_PROJECT_PATH on GitLab so
+   * pipeline jobs (build, test, sonar) can run load-vault-env without a deploy environment.
+   */
+  async syncVaultAccessCiVariables(doc: ProjectDocument): Promise<void> {
+    if (!doc.vaultBasePath?.trim()) {
+      this.logger.warn(
+        `syncVaultAccessCiVariables: project gitlabId=${doc.gitlabProjectId} has no vaultBasePath — skipping`,
+      );
+      return;
+    }
+    if (!this.vaultUrl?.trim() || !this.vaultToken?.trim()) {
+      this.logger.warn(
+        'syncVaultAccessCiVariables: platform vault.url or vault.token not configured — skipping',
+      );
+      return;
+    }
+
+    const vars = buildVaultAccessCiVariables(
+      this.vaultUrl,
+      this.vaultToken,
+      doc.vaultBasePath,
+    );
+    await this.gitlabService.setProjectCiVariables(doc.gitlabProjectId, vars);
+    this.logger.log(
+      `syncVaultAccessCiVariables: set ${vars.length} global VAULT_* CI variable(s) on GitLab project ${doc.gitlabProjectId}`,
+    );
   }
 
   // ---------------------------------------------------------------------------
@@ -235,12 +292,19 @@ export class ProjectsService {
    *
    * @returns YAML comment block for chart-values.yaml
    */
-  private static buildChartValues(): string {
+  /**
+   * Generates chart-values.yaml overrides including ExternalSecret toggle.
+   *
+   * @param runtimeEnvEnabled - When false, disables Vault envFrom for static/baked apps
+   */
+  static buildChartValues(runtimeEnvEnabled = true): string {
     return `# Chart value overrides for the dsoaas-app Helm chart.
 # Committed by the platform API during project provisioning.
 # Project metadata (path, env, host) is injected by the pipeline at deploy time
 # via --set flags; do not duplicate it here.
 # Use this file for app-specific overrides: probes, resources, replicaCount, extraEnv.
+externalSecret:
+  enabled: ${runtimeEnvEnabled ? 'true' : 'false'}
 `;
   }
 
@@ -446,7 +510,7 @@ export class ProjectsService {
         await this.gitlabService.upsertFile(
           gitlabProjectId,
           'chart-values.yaml',
-          ProjectsService.buildChartValues(),
+          ProjectsService.buildChartValues(true),
           'chore: add chart-values.yaml for dsoaas-app Helm chart',
         );
       }
@@ -518,6 +582,9 @@ export class ProjectsService {
           buildDeployRefVariable(target),
         ];
       });
+      ciVariables.push(
+        ...buildVaultAccessCiVariables(this.vaultUrl, this.vaultToken, vaultBasePath),
+      );
       await this.gitlabService.setProjectCiVariables(gitlabProjectId, ciVariables);
 
       if (hasExtraTargets) {
@@ -555,6 +622,8 @@ export class ProjectsService {
       },
       legacyV1: false,
       pinnedV1: false,
+      envProfiles: [],
+      runtimeEnvEnabled: true,
     });
 
     // Step 8: Audit log
@@ -815,7 +884,7 @@ export class ProjectsService {
     await this.gitlabService.upsertFile(
       doc.gitlabProjectId,
       'chart-values.yaml',
-      ProjectsService.buildChartValues(),
+      ProjectsService.buildChartValues(doc.runtimeEnvEnabled ?? true),
       'chore: add chart-values.yaml for v2 Auto DevOps',
       pipelineRef,
     );
@@ -1228,8 +1297,15 @@ export class ProjectsService {
       ];
     });
 
+    const hasEnvProfiles = (doc.envProfiles?.length ?? 0) > 0;
+
     if (ciVars.length > 0) {
+      ciVars.push(
+        ...buildVaultAccessCiVariables(this.vaultUrl, this.vaultToken, doc.vaultBasePath),
+      );
       await this.gitlabService.setProjectCiVariables(doc.gitlabProjectId, ciVars);
+    } else if (hasEnvProfiles) {
+      await this.syncVaultAccessCiVariables(doc);
     }
 
     await this.regenerateDeployCiFiles(doc, branch);
@@ -1338,6 +1414,8 @@ export class ProjectsService {
       capabilities: { deployable: isDeployable, publishable: isPublishable },
       legacyV1: false,
       pinnedV1: false,
+      envProfiles: [],
+      runtimeEnvEnabled: true,
     });
 
     if (input.envVars) {
@@ -1359,7 +1437,7 @@ export class ProjectsService {
       await this.gitlabService.upsertFile(
         doc.gitlabProjectId,
         'chart-values.yaml',
-        ProjectsService.buildChartValues(),
+        ProjectsService.buildChartValues(true),
         'chore: add chart-values.yaml for DSOaaS',
         commitBranch,
       );
@@ -1456,6 +1534,7 @@ export class ProjectsService {
     await this.gitlabService.setProjectCiVariables(doc.gitlabProjectId, [
       ...buildEnvScopedDeployVariables(target, doc.vaultBasePath, kubeconfigB64),
       buildDeployRefVariable(target),
+      ...buildVaultAccessCiVariables(this.vaultUrl, this.vaultToken, doc.vaultBasePath),
     ]);
 
     await this.regenerateDeployCiFiles(doc);

@@ -7,6 +7,7 @@ import { AppConfiguration } from '../../config';
 import { CombinedAuthGuard } from '../../common/guards';
 import { ConfigsService } from '../../configs/configs.service';
 import { TemplatesService } from '../../templates/templates.service';
+import { EnvProfileService } from '../env/env-profile.service';
 import { SlugService } from '../slug.service';
 import { ProjectsService } from '../projects.service';
 import { DeleteProjectOutcome, Env } from './enums';
@@ -16,11 +17,13 @@ import {
   MigrateProjectToAutoDevopsInput,
   RegisterGitLabProjectInput,
   UpdateProjectSonarConfigInput,
+  UploadEnvProfileInput,
   UpsertDeploymentTargetInput,
 } from './project.inputs';
 import {
   ConfigType,
   DeleteProjectResultType,
+  EnvProfileType,
   ReconcileGitLabProjectsResultType,
   DeploymentTargetType,
   ProjectSonarType,
@@ -33,7 +36,7 @@ import { ensureDeploymentTargets } from '../deploy/deploy-target.util';
 import { buildSonarProjectKey } from '../sonar/sonar-project-key.util';
 import { isSonarEnabled, resolveSonarGatePolicy } from '../sonar/sonar.types';
 
-import type { ProjectDocument } from '../schemas/project.schema';
+import type { EnvProfile, ProjectDocument } from '../schemas/project.schema';
 
 function mapSonar(doc: ProjectDocument, dashboardBaseUrl?: string): ProjectSonarType | undefined {
   if (!isSonarEnabled(doc.sonar)) {
@@ -57,6 +60,24 @@ function mapSonar(doc: ProjectDocument, dashboardBaseUrl?: string): ProjectSonar
  * Maps a Mongoose ProjectDocument to the GraphQL ProjectType.
  * Handles the `id` ← `_id` conversion and enum coercion.
  */
+function mapEnvProfile(profile: EnvProfile): EnvProfileType {
+  return {
+    id: profile.id,
+    label: profile.label,
+    injectionPhase: profile.injectionPhase as EnvProfileType['injectionPhase'],
+    branches: profile.branches,
+    deploymentTargetKeys: profile.deploymentTargetKeys,
+    jobSelector: profile.jobSelector,
+    workspacePath: profile.workspacePath,
+    filename: profile.filename,
+    buildDelivery: profile.buildDelivery as EnvProfileType['buildDelivery'],
+    vaultPath: profile.vaultPath,
+    contentType: profile.contentType,
+    keyNames: profile.keyNames ?? [],
+    updatedAt: profile.updatedAt,
+  };
+}
+
 function mapDeploymentTargets(
   doc: ProjectDocument,
   appsDomain: string,
@@ -109,6 +130,8 @@ function mapProject(
       publishable: doc.capabilities?.publishable ?? false,
     },
     sonar: mapSonar(doc, sonarPublicUrl),
+    envProfiles: (doc.envProfiles ?? []).map(mapEnvProfile),
+    runtimeEnvEnabled: doc.runtimeEnvEnabled ?? true,
     legacyV1: doc.legacyV1,
     pinnedV1: doc.pinnedV1,
     archived: doc.archived ?? false,
@@ -132,6 +155,7 @@ export class ProjectsResolver {
 
   constructor(
     private readonly projectsService: ProjectsService,
+    private readonly envProfileService: EnvProfileService,
     private readonly slugService: SlugService,
     private readonly templatesService: TemplatesService,
     private readonly configsService: ConfigsService,
@@ -405,6 +429,48 @@ export class ProjectsResolver {
     @Args('hostname') hostname: string,
   ): Promise<ProjectType> {
     const doc = await this.projectsService.setHostnameOverride(id, env, hostname);
+    return this.mapDoc(doc);
+  }
+
+  @Query(() => [EnvProfileType], {
+    description: 'Lists branch-scoped env profiles for a project (metadata only; secrets in Vault).',
+  })
+  async envProfiles(@Args('projectId', { type: () => ID }) projectId: string): Promise<EnvProfileType[]> {
+    const profiles = await this.envProfileService.listProfiles(projectId);
+    return profiles.map(mapEnvProfile);
+  }
+
+  @Mutation(() => EnvProfileType, {
+    description:
+      'Uploads a branch-scoped env profile to Vault (build-time file/args or runtime KV per target).',
+  })
+  async uploadEnvProfile(
+    @Args('projectId', { type: () => ID }) projectId: string,
+    @Args('input') input: UploadEnvProfileInput,
+  ): Promise<EnvProfileType> {
+    const profile = await this.envProfileService.uploadProfile(projectId, {
+      label: input.label,
+      injectionPhase: input.injectionPhase,
+      branches: input.branches,
+      content: input.content,
+      deploymentTargetKeys: input.deploymentTargetKeys,
+      jobSelector: input.jobSelector,
+      workspacePath: input.workspacePath,
+      filename: input.filename,
+      buildDelivery: input.buildDelivery,
+      contentType: input.contentType,
+    });
+    return mapEnvProfile(profile);
+  }
+
+  @Mutation(() => ProjectType, {
+    description: 'Deletes an env profile from Mongo and Vault; updates chart-values when needed.',
+  })
+  async deleteEnvProfile(
+    @Args('projectId', { type: () => ID }) projectId: string,
+    @Args('profileId') profileId: string,
+  ): Promise<ProjectType> {
+    const doc = await this.envProfileService.deleteProfile(projectId, profileId);
     return this.mapDoc(doc);
   }
 }

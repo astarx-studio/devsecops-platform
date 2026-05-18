@@ -116,3 +116,25 @@ export const ENV_SCOPED_DEPLOY_VAR_KEYS = [
   'KUBECONFIG_B64',
   'DEPLOY_ENV',
 ] as const;
+
+/** Global CI variables for Vault access during build jobs. */
+export const VAULT_CI_VAR_KEYS = ['VAULT_ADDR', 'VAULT_TOKEN', 'VAULT_PROJECT_PATH'] as const;
+
+/**
+ * GitLab CI variables so pipelines can read env profiles from Vault (build phase).
+ *
+ * @param vaultAddr - In-cluster URL (e.g. http://vault:8200)
+ * @param vaultToken - Read token (masked in GitLab)
+ * @param vaultBasePath - Project KV prefix (same as env-scoped deploy VAULT_PROJECT_PATH)
+ */
+export function buildVaultAccessCiVariables(
+  vaultAddr: string,
+  vaultToken: string,
+  vaultBasePath: string,
+): DeployCiVariable[] {
+  return [
+    { key: 'VAULT_ADDR', value: vaultAddr, environmentScope: '*', masked: false },
+    { key: 'VAULT_TOKEN', value: vaultToken, environmentScope: '*', masked: true },
+    { key: 'VAULT_PROJECT_PATH', value: vaultBasePath, environmentScope: '*', masked: false },
+  ];
+}

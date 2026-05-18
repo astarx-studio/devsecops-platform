@@ -18,7 +18,13 @@ import {
   ValidateNested,
 } from 'class-validator';
 
-import { ClusterProfile, Provisioning, SonarGateMode } from './enums';
+import {
+  ClusterProfile,
+  EnvProfileBuildDelivery,
+  EnvProfileInjectionPhase,
+  Provisioning,
+  SonarGateMode,
+} from './enums';
 
 /** Slug validation pattern: lowercase alphanumeric with internal hyphens. */
 const SLUG_PATTERN = /^[a-z0-9][a-z0-9-]*[a-z0-9]$|^[a-z0-9]$/;
@@ -505,4 +511,73 @@ export class ProjectFilterInput {
   @IsBoolean()
   @IsOptional()
   archived?: boolean;
+}
+
+@InputType({ description: 'Upload or replace a branch-scoped env profile (Vault-only).' })
+export class UploadEnvProfileInput {
+  @Field(() => String)
+  @IsString()
+  @IsNotEmpty()
+  label!: string;
+
+  @Field(() => EnvProfileInjectionPhase)
+  @IsEnum(EnvProfileInjectionPhase)
+  injectionPhase!: EnvProfileInjectionPhase;
+
+  @Field(() => [String], { description: 'Git branches (CI_COMMIT_REF_NAME) this profile applies to.' })
+  @IsArray()
+  @IsString({ each: true })
+  @IsNotEmpty()
+  branches!: string[];
+
+  @Field(() => String, {
+    description: 'Raw file body (UTF-8). Dotenv for runtime; any text for BUILD raw_file.',
+  })
+  @IsString()
+  @IsNotEmpty()
+  content!: string;
+
+  @Field(() => [String], {
+    nullable: true,
+    description: 'RUNTIME only: deployment target keys (dev, stg, prod, prod-alt, …).',
+  })
+  @IsArray()
+  @IsString({ each: true })
+  @IsOptional()
+  deploymentTargetKeys?: string[];
+
+  @Field(() => String, {
+    nullable: true,
+    description: 'Optional CI job selector (e.g. Kaniko image name suffix for monorepos).',
+  })
+  @IsString()
+  @IsOptional()
+  jobSelector?: string;
+
+  @Field(() => String, {
+    nullable: true,
+    description:
+      'BUILD only: repo-relative directory. Root: empty, ".", or "./". Nested: path/to/dir or ./path/to/dir/. No leading /.',
+  })
+  @IsString()
+  @IsOptional()
+  workspacePath?: string;
+
+  @Field(() => String, {
+    nullable: true,
+    description: 'BUILD only: filename within workspacePath.',
+  })
+  @IsString()
+  @IsOptional()
+  filename?: string;
+
+  @Field(() => EnvProfileBuildDelivery, { nullable: true })
+  @IsEnum(EnvProfileBuildDelivery)
+  @IsOptional()
+  buildDelivery?: EnvProfileBuildDelivery;
+
+  @Field(() => String, { nullable: true, description: 'Optional hint for operators (not enforced).' })
+  @IsString()
+  @IsOptional()
+  contentType?: string;
 }

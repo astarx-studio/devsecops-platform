@@ -2,6 +2,10 @@ import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 
 import type { HydratedDocument } from 'mongoose';
 
+import type {
+  EnvProfileBuildDelivery,
+  EnvProfileInjectionPhase,
+} from '../env/env-profile.constants';
 import type { ProjectSonarConfig } from '../sonar/sonar.types';
 
 /** Deployment environment identifiers (standard k3d namespaces). */
@@ -61,6 +65,50 @@ export class AppHosts {
 export class Capabilities {
   deployable!: boolean;
   publishable!: boolean;
+}
+
+/**
+ * Branch-scoped env/config upload metadata (secrets live in Vault only).
+ */
+export class EnvProfile {
+  @Prop({ required: true })
+  id!: string;
+
+  @Prop({ required: true })
+  label!: string;
+
+  @Prop({ required: true, enum: ['build', 'runtime'] })
+  injectionPhase!: EnvProfileInjectionPhase;
+
+  @Prop({ type: [String], required: true, default: [] })
+  branches!: string[];
+
+  @Prop({ type: [String], default: [] })
+  deploymentTargetKeys?: string[];
+
+  @Prop()
+  jobSelector?: string;
+
+  @Prop()
+  workspacePath?: string;
+
+  @Prop()
+  filename?: string;
+
+  @Prop({ enum: ['raw_file', 'dotenv_build_args'] })
+  buildDelivery?: EnvProfileBuildDelivery;
+
+  @Prop({ required: true })
+  vaultPath!: string;
+
+  @Prop()
+  contentType?: string;
+
+  @Prop({ type: [String], default: [] })
+  keyNames!: string[];
+
+  @Prop()
+  updatedAt?: Date;
 }
 
 /**
@@ -161,6 +209,16 @@ export class Project {
    */
   @Prop({ type: [Object], default: [] })
   deploymentTargets!: DeploymentTarget[];
+
+  /** Branch-scoped env profiles (Vault-backed; see envProfiles[].vaultPath). */
+  @Prop({ type: [Object], default: [] })
+  envProfiles!: EnvProfile[];
+
+  /**
+   * When false, Helm chart disables ExternalSecret / pod envFrom (static baked builds).
+   */
+  @Prop({ default: true })
+  runtimeEnvEnabled!: boolean;
 
   /**
    * Optional SonarQube opt-in: branch allowlist and per-tier quality gate policy.

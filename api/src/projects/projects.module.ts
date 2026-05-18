@@ -7,6 +7,7 @@ import { K8sModule } from '../k8s/k8s.module';
 import { SonarQubeModule } from '../sonarqube/sonarqube.module';
 import { TemplatesModule } from '../templates/templates.module';
 import { VaultModule } from '../vault/vault.module';
+import { EnvProfileService } from './env/env-profile.service';
 import { ProjectsResolver } from './graphql/projects.resolver';
 import { ProjectsController } from './projects.controller';
 import { ProjectsService } from './projects.service';
@@ -28,7 +29,7 @@ import { SlugService } from './slug.service';
     ConfigsModule,
   ],
   controllers: [ProjectsController],
-  providers: [ProjectsService, SlugService, ProjectsResolver],
-  exports: [ProjectsService],
+  providers: [ProjectsService, SlugService, EnvProfileService, ProjectsResolver],
+  exports: [ProjectsService, EnvProfileService],
 })
 export class ProjectsModule {}

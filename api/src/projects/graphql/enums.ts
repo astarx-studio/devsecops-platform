@@ -74,3 +74,26 @@ registerEnumType(DeleteProjectOutcome, {
   name: 'DeleteProjectOutcome',
   description: 'Whether deleteProject fully removed the project or archived it for retry.',
 });
+
+/** When env profile secrets are applied in the delivery pipeline. */
+export enum EnvProfileInjectionPhase {
+  BUILD = 'build',
+  RUNTIME = 'runtime',
+}
+
+registerEnumType(EnvProfileInjectionPhase, {
+  name: 'EnvProfileInjectionPhase',
+  description: 'BUILD bakes into the image at CI; RUNTIME injects KV into pods via Vault/ESO.',
+});
+
+/** How BUILD-phase profile content is delivered in CI. */
+export enum EnvProfileBuildDelivery {
+  RAW_FILE = 'raw_file',
+  DOTENV_BUILD_ARGS = 'dotenv_build_args',
+}
+
+registerEnumType(EnvProfileBuildDelivery, {
+  name: 'EnvProfileBuildDelivery',
+  description:
+    'raw_file writes verbatim to workspacePath/filename; dotenv_build_args passes Docker build-args.',
+});

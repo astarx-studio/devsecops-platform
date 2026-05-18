@@ -1,6 +1,13 @@
 import { Field, ID, Int, ObjectType } from '@nestjs/graphql';
 
-import { ClusterProfile, DeleteProjectOutcome, Provisioning, SonarGateMode } from './enums';
+import {
+  ClusterProfile,
+  DeleteProjectOutcome,
+  EnvProfileBuildDelivery,
+  EnvProfileInjectionPhase,
+  Provisioning,
+  SonarGateMode,
+} from './enums';
 
 /**
  * GraphQL ObjectType: per-environment hostname map.
@@ -48,6 +55,48 @@ export class DeploymentTargetType {
 /**
  * GraphQL ObjectType: project capability flags.
  */
+@ObjectType({ description: 'Branch-scoped env profile metadata (secrets in Vault).' })
+export class EnvProfileType {
+  @Field(() => String)
+  id!: string;
+
+  @Field(() => String)
+  label!: string;
+
+  @Field(() => EnvProfileInjectionPhase)
+  injectionPhase!: EnvProfileInjectionPhase;
+
+  @Field(() => [String])
+  branches!: string[];
+
+  @Field(() => [String], { nullable: true })
+  deploymentTargetKeys?: string[];
+
+  @Field(() => String, { nullable: true })
+  jobSelector?: string;
+
+  @Field(() => String, { nullable: true })
+  workspacePath?: string;
+
+  @Field(() => String, { nullable: true })
+  filename?: string;
+
+  @Field(() => EnvProfileBuildDelivery, { nullable: true })
+  buildDelivery?: EnvProfileBuildDelivery;
+
+  @Field(() => String)
+  vaultPath!: string;
+
+  @Field(() => String, { nullable: true })
+  contentType?: string;
+
+  @Field(() => [String])
+  keyNames!: string[];
+
+  @Field(() => Date, { nullable: true })
+  updatedAt?: Date;
+}
+
 @ObjectType({ description: 'Capability flags set at project provisioning time.' })
 export class CapabilitiesType {
   @Field(() => Boolean, {
@@ -179,6 +228,16 @@ export class ProjectType {
 
   @Field(() => CapabilitiesType, { description: 'Capability flags.' })
   capabilities!: CapabilitiesType;
+
+  @Field(() => [EnvProfileType], {
+    description: 'Branch-scoped env profiles (uploaded via management API).',
+  })
+  envProfiles!: EnvProfileType[];
+
+  @Field(() => Boolean, {
+    description: 'When false, Helm disables ExternalSecret / runtime envFrom (static builds).',
+  })
+  runtimeEnvEnabled!: boolean;
 
   @Field(() => ProjectSonarType, {
     nullable: true,
