@@ -93,6 +93,7 @@ services:
           - ${GITLAB_REGISTRY_DOMAIN}
           - ${MINIO_CONSOLE_DOMAIN}
           - ${SONARQUBE_DOMAIN}
+          - ${CONSOLE_DOMAIN}
 
   # ========================================================================
   # MONGODB — Platform Registry (v2)
@@ -735,6 +736,44 @@ services:
       traefik.http.routers.api.tls.certresolver: "letsencrypt"
       # API authenticates callers via OIDC JWT (Bearer tokens); no ForwardAuth here.
       traefik.http.services.api.loadbalancer.server.port: "3000"
+    networks:
+      - devops-network
+
+  # ========================================================================
+  # OPERATOR CONSOLE — Next.js UI (GraphQL BFF + oauth2-proxy ForwardAuth)
+  # ========================================================================
+  # Public URL: https://${CONSOLE_DOMAIN} (admins group via oauth2-proxy).
+  # Server-side routes proxy to Management API with API_KEY (never exposed to browser).
+  console:
+    build:
+      context: ./console
+      dockerfile: Dockerfile
+    container_name: console
+    restart: unless-stopped
+    ports:
+      - "13001:3001"
+    environment:
+      NODE_ENV: ${NODE_ENV}
+      PORT: ${CONSOLE_PORT:-3001}
+      HOSTNAME: ${CONSOLE_HOST:-0.0.0.0}
+      MANAGEMENT_API_GRAPHQL_URL: http://api:3000/graphql
+      API_KEY: ${API_KEY}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3001/api/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    depends_on:
+      api:
+        condition: service_healthy
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.console.rule: "Host(`${CONSOLE_DOMAIN}`)"
+      traefik.http.routers.console.entrypoints: "websecure"
+      traefik.http.routers.console.tls.certresolver: "letsencrypt"
+      traefik.http.routers.console.middlewares: "oidc-auth@file"
+      traefik.http.services.console.loadbalancer.server.port: "3001"
     networks:
       - devops-network
 

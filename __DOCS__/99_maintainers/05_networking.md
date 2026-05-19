@@ -48,6 +48,7 @@ graph LR
 | `18200` | vault | API |
 | `12222` | gitlab | SSH |
 | `13000` | api | Management API |
+| `13001` | console | Operator console (Next.js) |
 
 ---
 
@@ -63,6 +64,7 @@ All service domains follow the pattern `<service>.devops.<DOMAIN>`. Deployed app
   ├── gitlab.devops.<DOMAIN>         → GitLab
   ├── registry.devops.<DOMAIN>       → GitLab container registry
   ├── api.devops.<DOMAIN>            → Management API
+  ├── console.devops.<DOMAIN>        → Operator console (oauth2-proxy)
   └── oauth.devops.<DOMAIN>          → oauth2-proxy (callback / auth)
 
 *.dev.apps.<DOMAIN>                  → k3d / dev Ingress (via Traefik passthrough)
@@ -370,16 +372,16 @@ sudo nft list table ip vpnedge
 
 Inbound traffic from a Google **External passthrough Network Load Balancer** still hits the edge VM’s **primary NIC** (same path as direct access). **WireGuard `AllowedIPs` on the edge client does not block** those inbound connections — that knob only affects **what you route through the tunnel outbound**.
 
-**1. VPC firewall — health check probers (required)**  
+**1. VPC firewall — health check probers (required)**
 Google’s probes use **`35.191.0.0/16`** and **`130.211.0.0/22`**. Without **ingress allow** rules to your backend **tag** (and **ports** used by the health check), backends stay **unhealthy** and the LB sends no traffic. See [Health check concepts — probe IP ranges](https://cloud.google.com/load-balancing/docs/health-check-concepts#ip-ranges) and [Firewall rules for health checks](https://cloud.google.com/load-balancing/docs/health-checks#fw-rule). Restrict to the **exact probe ports** your health check uses.
 
-**2. HTTP(S) health checks vs redirects**  
+**2. HTTP(S) health checks vs redirects**
 For **HTTP**, **HTTPS**, or **HTTP/2** health checks, Google treats **any response other than `200 OK` as unhealthy**, including **`301`/`302` redirects**. Traefik and many apps redirect `/` — so the LB marks the backend **unhealthy** even when the app “works.” Prefer a **TCP** or **SSL** health check on **`443`** (or the serving port) if you only need connectivity, or point an **HTTP** health check at a path that returns **200** (e.g. a small static endpoint).
 
-**3. `apply-nat.sh` / `WAN_IFACE`**  
+**3. `apply-nat.sh` / `WAN_IFACE`**
 Rules match **`iifname $WAN`**. If the LB or a **second NIC** changes which interface receives traffic, re-detect the default route interface and set **`WAN_IFACE`** in **`forward-ports.env`**, then re-run **`apply-nat.sh apply`**.
 
-**4. Home WireGuard server — narrow `[Peer] AllowedIPs` for the edge**  
+**4. Home WireGuard server — narrow `[Peer] AllowedIPs` for the edge**
 On the **home** `wireguard` container, the **`[Peer]`** entry for the edge should **not** use **`0.0.0.0/0`** unless you intentionally want the **server** to treat the entire internet as reachable **via that peer** (it breaks normal routing). Use the edge’s tunnel address only (e.g. **`10.8.0.2/32`**) plus any **LAN CIDRs** you route over the tunnel (see linuxserver **`SERVER_ALLOWEDIPS_PEER_*`** / templates). Regenerate or edit **`wg0.conf`** and restart the **`wireguard`** service after changes.
 
 **Home PC:** Docker Compose services use **`restart: unless-stopped`**; after reboot, start **Docker Desktop** (and WSL2 if you use it), then confirm **`docker compose --profile vpnedge ps`** shows **`wireguard`** running. Your **router** UDP **51820** forward is unchanged.

@@ -2,7 +2,7 @@
 
 ← [Back to Milestone designs](index.md)
 
-> **Status**: Deferred (separate repository; not scheduled in this monorepo)
+> **Status**: Shipped in-monorepo as [`console/`](../../console/) (Next.js BFF + oauth2-proxy). This milestone doc retains original design notes.
 > **Audience**: Product owners, platform maintainers
 > **Cross-references**: [Management API (maintainer)](../99_maintainers/03_management_api.md), [Deployments](../03_devs/05_deployments.md), [MIGRATION_PLAN_v2.md](../../MIGRATION_PLAN_v2.md) Phase 7 sketch
 

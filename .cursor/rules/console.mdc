@@ -1,0 +1,44 @@
+---
+description: Keep the operator console (console/) in sync when GraphQL or project lifecycle changes
+globs:
+  - console/**
+  - api/src/projects/graphql/**
+  - api/src/projects/projects.service.ts
+  - api/src/projects/deploy/**
+alwaysApply: false
+---
+
+# Operator console maintainer
+
+The directory `console/` is the **stack-shipped** Next.js operator UI for the DSOaaS Management API.
+
+## When to update
+
+After any change to:
+
+- GraphQL schema under `api/src/projects/graphql/` (queries, mutations, inputs, enums, `ProjectType`, deployment targets, Sonar provisioning)
+- Project lifecycle in `api/src/projects/projects.service.ts` or `api/src/projects/deploy/`
+- BFF env (`MANAGEMENT_API_GRAPHQL_URL`, `API_KEY`) or public hostname (`CONSOLE_DOMAIN`)
+
+update `console/` in the same work session:
+
+1. **`src/lib/graphql.ts`** — `PROJECT_FIELDS`, `QUERIES`, `MUTATIONS` must match the NestJS code-first schema.
+2. **`src/lib/types.ts`** — TypeScript shapes for responses.
+3. **Components** — Adjust forms/tables under `src/components/` so public mutations remain usable.
+4. **`sample.env`** — `CONSOLE_DOMAIN`, `CONSOLE_PORT` if defaults change.
+
+## Conventions
+
+- App Router, MUI 6, pnpm, port **3001** (compose host map `13001:3001`).
+- Browser calls `/api/graphql` and `/api/health` only; API key stays server-side.
+- Prefer `useCallback` / `useMemo` for handlers passed to children.
+
+## Verify locally
+
+```bash
+docker compose up -d api
+cd console && pnpm install && pnpm dev
+# Set API_KEY in console env or root .env for BFF (pnpm dev loads from shell)
+```
+
+Production URL: `https://console.devops.<DOMAIN>` (requires oauth2-proxy + `admins` group).

@@ -11,7 +11,7 @@ Reproducible platform definition shared by all environments:
 
 - `docker-compose.yml`, `sample.env` (template only — never commit real `.env`)
 - `keycloak/realm-export.json` (applied on **first** Keycloak import only)
-- `postgres/init/`, `sonarqube/`, `bootstrap/`, `api/`, `configs/`, tracked `__DOCS__/`
+- `postgres/init/`, `sonarqube/`, `bootstrap/`, `api/`, `console/`, `configs/`, tracked `__DOCS__/`
 - One-shot compose services: `*-init`, `sonarqube-config-init`, `sonarqube-init`
 - Optional **maintainer** scripts (not required for normal `docker compose up`): e.g. `bootstrap/reset-sonarqube.sh`, `bootstrap/reset.sh`
 
@@ -27,14 +27,16 @@ Per-developer or runtime state — **exclude from stack PRs**:
 |------|---------|
 | `.env` | Secrets, domains (`SONARQUBE_DOMAIN`, passwords, tokens) |
 | `.vols/` | Postgres, GitLab, Sonar data, generated `sonar.properties`, bootstrap markers |
-| `_local/` | Gitignored tools (e.g. `_local/management-ui/`) — see `local-management-ui.mdc` |
+| `_local/` | Gitignored scratch tools (legacy Vite UI may remain under `_local/management-ui/`) |
 | Ad-hoc Keycloak Admin UI clicks | Live realm DB; document procedure, do not assume export re-import |
 
 Troubleshooting (reset Sonar, patch SAML client, rotate creds) belongs in **local ops** or optional bootstrap scripts, not in the default install path unless promoted intentionally to stack docs.
 
-## Management UI
+## Operator console
 
-`_local/management-ui/` mirrors GraphQL in `api/` but is **not** part of the shipped stack. After API schema changes, update the local UI in the same session; do not add it to compose/CI unless explicitly requested.
+Shipped as `console/` (Next.js at `https://console.devops.<DOMAIN>`, oauth2-proxy `admins` group). GraphQL calls go through server-side BFF routes with `API_KEY` — never expose the key in the browser.
+
+After API schema changes under `api/src/projects/graphql/`, update `console/src/lib/graphql.ts`, `console/src/lib/types.ts`, and affected components in the same session. See `.cursor/rules/console.mdc`.
 
 ## Commits
 

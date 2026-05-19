@@ -17,6 +17,7 @@ All services share the `devops-network` Docker bridge network. The network name 
 | Phase 3 — after keycloak healthy | `oauth2-proxy` |
 | Phase 4 — after vault + keycloak healthy | `vault-oidc-init` |
 | Phase 5 — after mongo + vault healthy | `api` |
+| Phase 5b — after api healthy | `console` |
 | Phase 6 — long-running stack | `gitlab`, `minio`, `minio-init` (see `depends_on` in `docker-compose.yml`) |
 | Phase 7 — after gitlab healthy | `gitlab-runner` |
 | Profile-gated (manual) | `cloudflared` (`--profile cftunnel`), `wireguard` (`--profile vpnedge`) |
@@ -331,6 +332,36 @@ The entrypoint script checks if `GITLAB_RUNNER_TOKEN` equals `FILL_AFTER_STARTUP
 **Health check:** `node -e "require('http').get('http://127.0.0.1:3000/health', r => process.exit(r.statusCode === 200 ? 0 : 1))"`. Interval 15s, timeout 5s, 3 retries, 15s start period.
 
 **Build:** Multi-stage Dockerfile. Final image is Node 20 Alpine with a non-root `appuser`. See `api/Dockerfile`.
+
+---
+
+## console (Operator UI)
+
+| Field | Value |
+|---|---|
+| Image | Built from `./console/Dockerfile` |
+| Host ports | `13001→3001` |
+| Volumes | — |
+| Depends on | `api` (healthy) |
+
+**Public URL:** `https://${CONSOLE_DOMAIN}` (e.g. `console.devops.yourdomain.com`).
+
+**Auth:** Traefik `oidc-auth@file` → oauth2-proxy → Keycloak; `OAUTH2_PROXY_ALLOWED_GROUPS` (default `admins`). The browser never receives `API_KEY`.
+
+**Key environment variables:**
+
+| Variable | Purpose |
+|---|---|
+| `CONSOLE_DOMAIN` | Traefik router hostname |
+| `CONSOLE_PORT` | Listen port inside container (default `3001`) |
+| `CONSOLE_HOST` | Bind address (default `0.0.0.0`) |
+| `MANAGEMENT_API_GRAPHQL_URL` | Internal GraphQL URL (`http://api:3000/graphql` in compose) |
+| `API_KEY` | Server-side only; forwarded as `X-API-Key` to the Management API |
+| `NODE_ENV` | `production` in production |
+
+**Health check:** `wget -qO- http://127.0.0.1:3001/api/health`. Interval 15s, timeout 5s, 3 retries, 20s start period.
+
+**Build:** Next.js standalone output. See `console/Dockerfile`.
 
 ---
 
