@@ -209,6 +209,8 @@ test:
 # =============================================================================
 .sonar-scan:
   stage: test
+  # Sonar does not consume test job artifacts; skip them (avoids minio direct URL on external runners).
+  dependencies: []
   image:
     name: ${SONAR_SCANNER_IMAGE}
     entrypoint: [""]
@@ -228,18 +230,17 @@ test:
       fi
       SONAR_PUBLIC_URL="${SONAR_HOST_URL:-}"
       SCAN_URL="${SONAR_HOST_URL_INTERNAL:-http://sonarqube:9000}"
-      # External runners cannot resolve in-cluster sonarqube; use public URL via host gateway.
+      # External runners: in-cluster sonarqube is unreachable. Use public URL; map the hostname
+      # on the runner via extra_hosts (host-gateway), not inside this non-root scanner image.
       if ! curl -sf --max-time 5 "${SCAN_URL}/api/system/status" >/dev/null 2>&1; then
         if [ -n "${SONAR_PUBLIC_URL}" ]; then
           SCAN_URL="${SONAR_PUBLIC_URL}"
-          _sonar_host="$(printf '%s' "${SONAR_PUBLIC_URL}" | sed -e 's#^https://##' -e 's#^http://##' -e 's#/.*##' -e 's#:.*##')"
-          if [ -n "${_sonar_host}" ] && command -v getent >/dev/null 2>&1 \
-              && getent ahostsv4 host.docker.internal >/dev/null 2>&1; then
-            _gw="$(getent ahostsv4 host.docker.internal | awk '{print $1; exit}')"
-            echo "${_gw} ${_sonar_host}" >> /etc/hosts
-            echo "Sonar scanner: mapped ${_sonar_host} -> host.docker.internal (${_gw})"
-          fi
+          echo "Sonar scanner: using public URL ${SCAN_URL} (in-cluster endpoint unreachable)"
         fi
+      fi
+      if ! curl -sf --max-time 15 "${SCAN_URL}/api/system/status" >/dev/null 2>&1; then
+        echo "Sonar scanner: cannot reach ${SCAN_URL}. On external runners, add the Sonar hostname to runner extra_hosts (host-gateway). See gitlab-runner/config.external-runner.toml.example" >&2
+        exit 1
       fi
       PROJECT_KEY="${CI_PROJECT_PATH_SLUG}_${CI_COMMIT_REF_SLUG}"
       # printf avoids echo's trailing newline (was turned into a stray '_' by tr)
