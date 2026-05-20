@@ -39,6 +39,9 @@ log "Starting Docker Compose stack..."
 # shellcheck disable=SC2086
 docker compose ${COMPOSE_EXTRA_ARGS:-} up -d
 
+log "Configuring OpenBao OIDC auth (vault-oidc-init, idempotent)..."
+docker compose ${COMPOSE_EXTRA_ARGS:-} run --rm vault-oidc-init
+
 log "Waiting for SonarQube (init chain + verify) in background..."
 "${SCRIPT_DIR}/checks/wait-sonarqube.sh" &
 SONAR_WAIT_PID=$!
