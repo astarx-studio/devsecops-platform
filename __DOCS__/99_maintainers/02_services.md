@@ -463,6 +463,32 @@ Users authenticating via OIDC who belong to the Keycloak `admins` group automati
 
 **CI integration:** Shared pipeline job `sonar:scan` in `configs/auto-devops-pipeline`. Runners use `SONAR_HOST_URL_INTERNAL`; humans use `SONARQUBE_EXTERNAL_URL`. See [CI/CD internals](06_ci_cd.md#sonarqube) and [Manual onboarding Sonar](../03_devs/06_manual_onboarding.md#sonarqube-opt-in).
 
+### sonarqube-mcp (optional profile `sonarmcp`)
+
+| Field | Value |
+|---|---|
+| Image | `mcp/sonarqube:latest` |
+| Host ports | `${SONARQUBE_MCP_PORT:-19080}` → container `8080` (HTTP, bind `0.0.0.0`) |
+| Ingress | None (LAN only; not on Traefik) |
+| Depends on | `sonarqube` (healthy) |
+
+Start: `docker compose --profile sonarmcp up -d sonarqube-mcp`. MCP endpoint: `http://<host-lan-ip>:19080/mcp`. Each IDE client must send `Authorization: Bearer <SonarQube user token>` (create token in Sonar UI). Cursor example:
+
+```json
+{
+  "mcpServers": {
+    "sonarqube-shared": {
+      "url": "http://192.168.x.x:19080/mcp",
+      "headers": {
+        "Authorization": "Bearer <your-sonar-user-token>"
+      }
+    }
+  }
+}
+```
+
+Uses `SONARQUBE_INTERNAL_URL` (`http://sonarqube:9000`) from inside the stack. Restrict LAN access with host firewall rules if needed.
+
 **GitLab commit status:** After analysis, CI posts `sonarqube/quality-gate` via `POST /projects/:id/statuses/:sha` with `JOB-TOKEN` (same contract as `GitLabService.postCommitStatus` in the Management API).
 
 **Management API:** `mutation updateProjectSonarConfig` stores `allowedBranches` + `gatePolicy`, writes token to `secret/data/projects/.../sonar`, mirrors GitLab CI variables. Default gate policy: dev **optional**, stg/prod **required**, other **optional**.

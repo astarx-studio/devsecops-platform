@@ -5,7 +5,7 @@
 #             cloudflared, wireguard, gitlab, gitlab-runner, api, sonarqube,
 #             postgres-keycloak-init, postgres-sonar-init, postgres-gitlab-init,
 #             postgres-registry-init, mongo-init,
-#             sonarqube-config-init, sonarqube-init,
+#             sonarqube-config-init, sonarqube-init, sonarqube-mcp (profile sonarmcp),
 #             minio, minio-init
 # Network:    devops-network (bridge)
 # ==========================================================================
@@ -1041,6 +1041,30 @@ services:
     volumes:
       - ./sonarqube/init-bootstrap.sh:/scripts/init-bootstrap.sh:ro
       - ./.vols/sonarqube:/work
+    depends_on:
+      sonarqube:
+        condition: service_healthy
+    networks:
+      - devops-network
+
+  # ========================================================================
+  # SONARQUBE MCP — Shared LAN MCP (profile: sonarmcp only)
+  # ========================================================================
+  # Official SonarSource MCP (mcp/sonarqube) in HTTP mode for team LAN clients.
+  # Not routed via Traefik or Cloudflare. Each client sends Authorization: Bearer
+  # with a SonarQube user token. Start: docker compose --profile sonarmcp up -d
+  sonarqube-mcp:
+    image: mcp/sonarqube:latest
+    container_name: sonarqube-mcp
+    restart: unless-stopped
+    profiles: ["sonarmcp"]
+    environment:
+      SONARQUBE_TRANSPORT: http
+      SONARQUBE_HTTP_HOST: ${SONARQUBE_MCP_BIND:-0.0.0.0}
+      SONARQUBE_HTTP_PORT: "8080"
+      SONARQUBE_URL: ${SONARQUBE_INTERNAL_URL:-http://sonarqube:9000}
+    ports:
+      - "${SONARQUBE_MCP_PORT:-19080}:8080"
     depends_on:
       sonarqube:
         condition: service_healthy
