@@ -8,11 +8,11 @@ This document covers OpenBao's configuration, the KV v2 secret path structure, t
 
 ## OpenBao overview
 
-OpenBao runs in **dev mode** (`server -dev`), which means it is automatically initialized and unsealed on every start. Data is persisted at `.vols/vault` via the Docker volume mount. A production-ready `vault/config.hcl` is included for future migration to server mode:
+OpenBao runs in **production server mode** with **PostgreSQL storage** on the shared `postgres` service and a **Shamir seal** (5 keys, threshold 3). Cluster configuration, OIDC auth, and KV secrets persist across container restarts.
 
 ```hcl
-storage "file" {
-  path = "/vault/data"
+storage "postgresql" {
+  # BAO_PG_CONNECTION_URL from compose (VAULT_DB_* in .env)
 }
 
 listener "tcp" {
@@ -21,27 +21,46 @@ listener "tcp" {
 }
 
 ui = true
-
-default_lease_ttl = "168h"   # 7 days
-max_lease_ttl     = "720h"   # 30 days
 ```
 
-TLS is **not** terminated by Vault itself. All traffic arrives via Traefik (which handles TLS) or directly from internal services (plain HTTP on `devops-network`).
+TLS is **not** terminated by OpenBao itself. Browser traffic uses Traefik; internal services use plain HTTP on `devops-network`.
+
+**Bootstrap layout (gitignored):** `./.vols/vault/` holds `init.txt`, `unseal-keys`, and `root-token` after first `vault-prod-bootstrap`. Restrict filesystem access; back up `unseal-keys` separately from the host.
 
 ---
 
-## First boot: dev mode behavior
+## Production mode: PostgreSQL + scripted unseal
 
-In dev mode, OpenBao is **automatically initialized and unsealed** on every start using `VAULT_DEV_ROOT_TOKEN_ID` as the root token. No manual initialization or unsealing is needed.
+On first boot (or `make bootstrap`):
+
+1. `postgres-vault-init` creates `${VAULT_DB_NAME}` / `${VAULT_DB_USER}`.
+2. `vault` starts sealed against PostgreSQL.
+3. `vault-prod-bootstrap` runs `operator init`, writes unseal keys to `.vols/vault/unseal-keys`, unseals, enables KV v2 at `secret/`.
+4. Copy `.vols/vault/root-token` → `VAULT_ROOT_TOKEN` in `.env`, restart `api` if it already started with a placeholder token.
+5. `vault-oidc-init` configures Keycloak OIDC (idempotent).
 
 ```sh
-# Verify OpenBao is running and unsealed
 docker exec vault bao status
+# Expect: Sealed false, Storage Type postgresql
 ```
 
-The `VAULT_DEV_ROOT_TOKEN_ID` in `.env` serves as both the dev mode root token and the token used by the Management API.
+**After PC reboot or `docker compose restart vault`:** Vault starts sealed. Run:
 
-**Note:** If you switch to production mode (changing the docker-compose command to `server -config=/vault/prod-config/config.hcl`), OpenBao will start in an **uninitialized, sealed** state and require manual initialization and unsealing. See the "Switching to production mode" section below.
+```sh
+make vault-bootstrap
+# or: docker compose run --rm vault-prod-bootstrap
+```
+
+OIDC and KV data remain in PostgreSQL; you do **not** need to re-run `vault-oidc-init` unless auth config was lost.
+
+**Migrate from old dev mode (`server -dev`, inmem):** Dev secrets are not migrated.
+
+1. Export any needed KV paths from the old instance (if still running).
+2. Set `VAULT_DB_*` and `VAULT_ROOT_TOKEN` in `.env` (remove `VAULT_DEV_ROOT_TOKEN_ID`).
+3. `docker compose up -d postgres vault` then `make vault-bootstrap`.
+4. Update `VAULT_ROOT_TOKEN` from `.vols/vault/root-token`.
+5. `docker compose up -d api` and re-run `./bootstrap/vault-k8s-auth.sh` if using k3d/ESO.
+6. Re-seed project secrets via Management API or `bao kv put`.
 
 ---
 
@@ -214,7 +233,7 @@ bao login -method=oidc -address=https://${VAULT_DOMAIN}
 
 ### Token auth (Management API)
 
-The Management API uses a static `VAULT_DEV_ROOT_TOKEN_ID` (passed as `X-Vault-Token` header). This bypasses OIDC entirely. This is appropriate for server-to-server automation but should be hardened in production (see below).
+The Management API uses a static `VAULT_ROOT_TOKEN` (passed as `X-Vault-Token` header). This bypasses OIDC entirely. This is appropriate for server-to-server automation but should be hardened with scoped policies/AppRoles in a later milestone.
 
 ---
 
@@ -240,40 +259,17 @@ bao token create \
   -no-default-policy
 ```
 
-Set `VAULT_DEV_ROOT_TOKEN_ID` in `.env` to the new token's value. Restart the `api` container.
+Set `VAULT_ROOT_TOKEN` in `.env` to the new token's value. Restart the `api` container.
 
 ---
 
-## Switching to production mode
+## Auto-unseal (optional hardening)
 
-In dev mode, OpenBao auto-unseals on every start — no manual intervention is needed. If you want to switch to production mode for better security:
-
-1. Change the docker-compose command from `server -dev` to `server -config=/vault/prod-config/config.hcl`.
-2. Remove the `VAULT_DEV_*` environment variables.
-3. On first start, initialize OpenBao manually:
-
-```sh
-docker exec -it vault bao operator init -key-shares=5 -key-threshold=3
-```
-
-4. Unseal with 3 of the 5 keys:
-
-```sh
-docker exec -it vault bao operator unseal <key1>
-docker exec -it vault bao operator unseal <key2>
-docker exec -it vault bao operator unseal <key3>
-```
-
-5. Store the unseal keys securely (e.g. a password manager, separate from this machine). You will need them after every OpenBao restart.
-
-**Automatic unseal** options for reducing manual intervention:
-
-1. **OpenBao Auto Unseal** — Use a cloud KMS (AWS KMS, GCP KMS, Azure Key Vault) via `seal "awskms" {}` or equivalent in `config.hcl`.
-2. **Shamir with encrypted key storage** — Store the unseal keys in a secure location accessible via a startup script.
+The default stack uses **scripted Shamir unseal** (`vault-prod-bootstrap` + `.vols/vault/unseal-keys`). For stricter security, configure a `seal` stanza in `vault/config.hcl` (cloud KMS, Transit unsealer, or HSM) so OpenBao unseals without local key files. See OpenBao [seal configuration](https://openbao.org/docs/configuration/seal/).
 
 ---
 
-## Rotating the `VAULT_DEV_ROOT_TOKEN_ID`
+## Rotating the `VAULT_ROOT_TOKEN`
 
 If the token is compromised or expires:
 
@@ -296,7 +292,7 @@ docker compose up -d api
 ## OpenBao operational runbook
 
 ```sh
-# Check status (should show Sealed: false in dev mode)
+# Check status (Sealed: false, Storage Type: postgresql when healthy)
 docker exec vault bao status
 
 # Check token validity

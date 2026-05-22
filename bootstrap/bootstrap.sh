@@ -39,6 +39,17 @@ log "Starting Docker Compose stack..."
 # shellcheck disable=SC2086
 docker compose ${COMPOSE_EXTRA_ARGS:-} up -d
 
+log "OpenBao production bootstrap (init, unseal, KV — vault-prod-bootstrap)..."
+docker compose ${COMPOSE_EXTRA_ARGS:-} run --rm vault-prod-bootstrap
+
+if [[ -f .vols/vault/root-token ]]; then
+  _bao_root="$(tr -d '\r\n' < .vols/vault/root-token)"
+  if [[ -z "${VAULT_ROOT_TOKEN:-}" ]] || [[ "${VAULT_ROOT_TOKEN}" == change-me-* ]]; then
+    warn "Copy root token into .env: VAULT_ROOT_TOKEN=${_bao_root}"
+    export VAULT_ROOT_TOKEN="${_bao_root}"
+  fi
+fi
+
 log "Configuring OpenBao OIDC auth (vault-oidc-init, idempotent)..."
 docker compose ${COMPOSE_EXTRA_ARGS:-} run --rm vault-oidc-init
 

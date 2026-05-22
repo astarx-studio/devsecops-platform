@@ -1,20 +1,16 @@
 # ==========================================================================
-# HashiCorp Vault — Server Configuration (Production Mode)
+# OpenBao — Production server configuration
 # ==========================================================================
-# Used when running Vault in production mode:
-#   command: server -config=/vault/config/config.hcl
+# Used with: command: server -config=/vault/prod-config/config.hcl
 #
-# In dev mode (default), this file is mounted but not actively used.
-# To switch to production mode:
-#   1. Change docker-compose command to: server -config=/vault/prod-config/config.hcl
-#   2. Remove VAULT_DEV_ROOT_TOKEN_ID from environment
-#   3. Initialize and unseal Vault manually:
-#        vault operator init
-#        vault operator unseal <key>
+# PostgreSQL connection URL is supplied via BAO_PG_CONNECTION_URL in compose
+# (see sample.env VAULT_DB_*). TLS for the listener is terminated by Traefik.
+#
+# First boot: run vault-prod-bootstrap (init, unseal, KV) then vault-oidc-init.
 # ==========================================================================
 
-storage "file" {
-  path = "/vault/data"
+storage "postgresql" {
+  # connection_url empty: use PGHOST/PGUSER/PGPASSWORD/PGDATABASE/PGSSLMODE from compose.
 }
 
 listener "tcp" {

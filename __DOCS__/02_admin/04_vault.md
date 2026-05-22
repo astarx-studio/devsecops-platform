@@ -10,9 +10,9 @@ OpenBao is the secrets store for the platform. Instead of storing database passw
 
 Go to `https://vault.devops.yourdomain.com`. You'll see a login screen with a "Token" method selected by default.
 
-To log in with the root token, enter the value of `VAULT_DEV_ROOT_TOKEN_ID` from your `.env` file.
+To log in with the root token, use the value of `VAULT_ROOT_TOKEN` from your `.env` file (after first bootstrap, copy from `.vols/vault/root-token` on the host).
 
-Alternatively, if SSO is set up and working, you can log in using **OIDC** by selecting it from the method dropdown and clicking **Sign in with OIDC**. This redirects you to Keycloak for authentication.
+Alternatively, if SSO is set up and working, you can log in using **OIDC** by selecting it from the method dropdown and clicking **Sign in with OIDC**. This redirects you to Keycloak for authentication. Leave **Role** blank or enter `default`.
 
 ---
 
@@ -32,13 +32,14 @@ If you're not in the `admins` group, you'll be issued a token with the `default`
 
 ---
 
-## Understanding dev mode
+## Production mode (PostgreSQL)
 
-In v1, OpenBao runs in **development mode**. This is the simplest way to get OpenBao running — it auto-unseals itself on startup using the root token you specified in `.env`, stores everything in memory (with file-backed persistence in `.vols/vault/`), and doesn't require manual initialization or unsealing.
+OpenBao runs as a **production server** with data stored in the platform's shared **PostgreSQL** database (`VAULT_DB_*` in `.env`). It is **not** auto-unsealed like old dev mode.
 
-The important thing to know: **dev mode is not a production secrets management setup.** The root token has unrestricted access to everything in OpenBao. If this server is accessed by untrusted parties, dev mode provides minimal protection.
+- **First install:** `make bootstrap` or `make vault-bootstrap` initializes the cluster, writes unseal keys under `.vols/vault/`, and configures OIDC.
+- **After reboot:** run `make vault-bootstrap` (or `docker compose run --rm vault-prod-bootstrap`) so OpenBao unseals from `.vols/vault/unseal-keys`. You do not re-enter keys in the UI unless that file is missing.
 
-For a team-internal DevOps platform running on a private server, dev mode is an acceptable starting point. Moving to a hardened OpenBao setup would involve switching to a non-dev server configuration, setting up auto-unseal (using a cloud KMS or HSM), and creating scoped policies for each service. That's outside the scope of v1.
+The Management API uses `VAULT_ROOT_TOKEN` from `.env` for server-to-server access. Keep that token secret; prefer OIDC for human UI access.
 
 ---
 
@@ -76,19 +77,17 @@ You can also create new secrets and paths manually through the UI for things the
 
 ## Adding secrets via the CLI
 
-If you prefer using the command line, you can run OpenBao commands directly inside the container:
+If you prefer using the command line, authenticate with the root token, then run:
 
 ```bash
-docker compose exec vault bao kv put secret/projects/acme/website key=value other_key=other_value
+docker compose exec -e VAULT_TOKEN=<root-token> vault bao kv put secret/projects/acme/website key=value other_key=other_value
 ```
 
 To read a secret:
 
 ```bash
-docker compose exec vault bao kv get secret/projects/acme/website
+docker compose exec -e VAULT_TOKEN=<root-token> vault bao kv get secret/projects/acme/website
 ```
-
-The `VAULT_ADDR` and `VAULT_TOKEN` environment variables are already set inside the container, so no additional authentication is needed.
 
 ---
 

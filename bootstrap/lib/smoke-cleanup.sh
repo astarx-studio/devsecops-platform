@@ -8,7 +8,7 @@
 #
 # Expects: log, warn, die, GRAPHQL_URL, API_KEY, gitlab-api.sh sourced by caller.
 # Optional: SMOKE_GITLAB_DELETE_WAIT (default 180 seconds)
-# Vault: VAULT_ROOT_TOKEN or VAULT_DEV_ROOT_TOKEN_ID, VAULT_CONTAINER (default vault)
+# Vault: VAULT_ROOT_TOKEN, VAULT_CONTAINER (default vault)
 # =============================================================================
 
 SMOKE_GITLAB_DELETE_WAIT="${SMOKE_GITLAB_DELETE_WAIT:-180}"
@@ -47,7 +47,7 @@ smoke_vault_cli() {
 }
 
 smoke_vault_exec() {
-  local token="${VAULT_ROOT_TOKEN:-${VAULT_DEV_ROOT_TOKEN_ID:-}}"
+  local token="${VAULT_ROOT_TOKEN:-}"
   [[ -n "${token}" ]] || return 1
   docker exec \
     -e "VAULT_TOKEN=${token}" \
@@ -92,7 +92,7 @@ smoke_delete_vault_tree() {
   local p deleted=0
 
   [[ -n "${root}" ]] || return 0
-  if [[ -z "${VAULT_ROOT_TOKEN:-${VAULT_DEV_ROOT_TOKEN_ID:-}}" ]]; then
+  if [[ -z "${VAULT_ROOT_TOKEN:-}" ]]; then
     warn "VAULT_ROOT_TOKEN unset — cannot delete Vault tree ${root}"
     return 1
   fi

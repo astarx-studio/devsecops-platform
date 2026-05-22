@@ -89,12 +89,17 @@ The `KC_HOSTNAME` variable is pre-filled to match your `KEYCLOAK_DOMAIN`. Leave 
 ## OpenBao (secrets storage)
 
 ```
-VAULT_DEV_ROOT_TOKEN_ID=change-me-vault-dev-token
+VAULT_DB_NAME=openbao
+VAULT_DB_USER=openbao
+VAULT_DB_PASSWORD=change-me-openbao-db-password
+VAULT_ROOT_TOKEN=change-me-after-vault-prod-bootstrap
 ```
 
-`VAULT_DEV_ROOT_TOKEN_ID` — This is the token you'll use to log in to OpenBao and the token the Management API uses for OpenBao access. Think of it like a master password for the secrets store. Set it to something you'll remember (or store in a password manager), but keep it **alphanumeric and hyphens only** — OpenBao rejects tokens that contain dots or other special characters.
+`VAULT_DB_*` — Dedicated PostgreSQL database on the shared `postgres` service for OpenBao cluster storage.
 
-In v1, OpenBao runs in "dev mode," which means it auto-unseals on startup using this token. This is convenient but not suitable for production use with real sensitive data. See [the OpenBao admin page](../02_admin/04_vault.md) for what that means.
+`VAULT_ROOT_TOKEN` — Root token from `operator init`. After first `make vault-bootstrap`, copy the value from `.vols/vault/root-token` into `.env`. The Management API uses this token for server-to-server access.
+
+OpenBao runs in **production mode** (PostgreSQL + Shamir seal). After a host reboot, run `make vault-bootstrap` to unseal from `.vols/vault/unseal-keys`. See [the OpenBao admin page](../02_admin/04_vault.md) and [Secrets (maintainers)](../99_maintainers/07_secrets.md).
 
 ---
 

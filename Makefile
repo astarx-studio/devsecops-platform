@@ -12,11 +12,12 @@
 SHELL := /usr/bin/bash
 ROOT := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 
-.PHONY: help bootstrap update-dso-configs smoke smoke-deploy smoke-cleanup reset backup restore migrate-v1 verify-sonar reset-sonarqube
+.PHONY: help bootstrap vault-bootstrap update-dso-configs smoke smoke-deploy smoke-cleanup reset backup restore migrate-v1 verify-sonar reset-sonarqube
 
 help:
 	@echo "Targets:"
 	@echo "  make bootstrap          - ./bootstrap/bootstrap.sh (compose + Sonar init → k3d → vault auth → RBAC → seed → smoke)"
+	@echo "  make vault-bootstrap    - vault-prod-bootstrap + vault-oidc-init only (after compose up)"
 	@echo "  make update-dso-configs - ./bootstrap/seed-platform-projects.sh (push configs/* to GitLab; no full bootstrap)"
 	@echo "  make verify-sonar  - scripts/verify-sonar-setup.sh (Sonar .env, properties, containers)"
 	@echo "  make reset-sonarqube - ./bootstrap/reset-sonarqube.sh (wipe Sonar DB/data, re-bootstrap)"
@@ -30,6 +31,9 @@ help:
 
 bootstrap:
 	@cd "$(ROOT)" && bash ./bootstrap/bootstrap.sh
+
+vault-bootstrap:
+	@cd "$(ROOT)" && docker compose run --rm vault-prod-bootstrap && docker compose run --rm vault-oidc-init
 
 update-dso-configs:
 	@cd "$(ROOT)" && bash ./bootstrap/seed-platform-projects.sh

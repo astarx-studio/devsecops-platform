@@ -118,7 +118,7 @@ Work through this list to confirm the stack is functional before testing public 
 - [ ] `https://auth.devops.yourdomain.com` loads the Keycloak welcome screen
 - [ ] You can log in to the Keycloak admin console using `KEYCLOAK_ADMIN` / `KEYCLOAK_ADMIN_PASSWORD`
 - [ ] `https://vault.devops.yourdomain.com` shows the Vault login screen
-- [ ] You can log in to Vault using the `VAULT_DEV_ROOT_TOKEN_ID` value from `.env`
+- [ ] You can log in to Vault using `VAULT_ROOT_TOKEN` from `.env` (or OIDC)
 - [ ] `https://api.devops.yourdomain.com/health` returns `{"status":"ok"}`
 - [ ] GitLab SSO login (via Keycloak) works: on the GitLab login page, click "Sign in with Keycloak" and complete the flow
 - [ ] GitLab can send a test email: Admin Area → Settings → Email → **Send test email**

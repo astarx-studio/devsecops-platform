@@ -19,6 +19,14 @@
 
 set -e
 
+# Use bootstrap root token file when .env VAULT_ROOT_TOKEN is not set yet (first prod init).
+if [ -z "${VAULT_TOKEN:-}" ] && [ -r /work/root-token ]; then
+  VAULT_TOKEN=$(cat /work/root-token)
+  export VAULT_TOKEN
+  echo "[INFO] Using root token from /work/root-token"
+fi
+: "${VAULT_TOKEN:?VAULT_TOKEN or /work/root-token required}"
+
 echo "[INFO] Waiting for OpenBao to be ready..."
 until wget --spider --quiet "${VAULT_ADDR}/v1/sys/health" 2>/dev/null; do
   echo "[DEBUG] OpenBao not ready, retrying in 2s..."
@@ -26,8 +34,12 @@ until wget --spider --quiet "${VAULT_ADDR}/v1/sys/health" 2>/dev/null; do
 done
 echo "[INFO] OpenBao is ready."
 
-echo "[INFO] Enabling OIDC auth method..."
-bao auth enable oidc 2>/dev/null || echo "[WARN] OIDC auth method already enabled (skipping)."
+if bao auth list -format=json 2>/dev/null | grep -q '"oidc/"'; then
+  echo "[INFO] OIDC auth method already enabled (skipping enable)."
+else
+  echo "[INFO] Enabling OIDC auth method..."
+  bao auth enable oidc
+fi
 
 echo "[INFO] Configuring OIDC auth method with Keycloak issuer..."
 echo "[DEBUG] Discovery URL: ${KEYCLOAK_ISSUER_URL}"

@@ -12,11 +12,11 @@ All services share the `devops-network` Docker bridge network. The network name 
 
 | Boot phase | Services |
 |---|---|
-| Phase 1 — immediate | `traefik`, `mongo`, `postgres`, `vault` |
-| Phase 2 — after postgres healthy | `postgres-keycloak-init`, `postgres-sonar-init`, `postgres-gitlab-init`, `postgres-registry-init`, `keycloak`, `sonarqube-config-init`, `sonarqube` (first boot may take several minutes), then `sonarqube-init` (must exit 0) |
+| Phase 1 — immediate | `traefik`, `mongo`, `postgres` |
+| Phase 2 — after postgres healthy | `postgres-keycloak-init`, `postgres-sonar-init`, `postgres-vault-init`, `postgres-gitlab-init`, `postgres-registry-init`, `vault`, `keycloak`, `sonarqube-config-init`, `sonarqube` (first boot may take several minutes), then `sonarqube-init` (must exit 0) |
 | Phase 3 — after keycloak healthy | `oauth2-proxy` |
-| Phase 4 — after vault + keycloak healthy | `vault-oidc-init` |
-| Phase 5 — after mongo + vault healthy | `api` |
+| Phase 4 — after vault started | `vault-prod-bootstrap` (init, unseal, KV), then `vault-oidc-init` (after vault healthy + keycloak healthy) |
+| Phase 5 — after mongo + vault bootstrap + OIDC init | `api` |
 | Phase 5b — after api healthy | `console` |
 | Phase 6 — long-running stack | `gitlab`, `minio`, `minio-init` (see `depends_on` in `docker-compose.yml`) |
 | Phase 7 — after gitlab healthy | `gitlab-runner` |
@@ -147,35 +147,28 @@ Shared PostgreSQL for **Keycloak** (`KC_DB_*`), **SonarQube** (`SONAR_DB_*`), **
 |---|---|
 | Image | `openbao/openbao:2` |
 | Host ports | `18200→8200` |
-| Volumes | `./vault/config.hcl` → `/vault/prod-config/config.hcl` (read-only, for future prod mode), `./.vols/vault` → `/vault/data` |
-| Depends on | — |
+| Volumes | `./vault/config.hcl` → `/vault/prod-config/config.hcl` (read-only) |
+| Depends on | `postgres` (healthy), `postgres-vault-init` (completed) |
 
 **Key environment variables:**
 
 | `.env` variable | Compose mapping | Purpose |
 |---|---|---|
-| `VAULT_DEV_ROOT_TOKEN_ID` | `BAO_DEV_ROOT_TOKEN_ID` | Dev-mode root token, also used by Management API for OpenBao access |
-| *(hardcoded)* | `BAO_DEV_LISTEN_ADDRESS` | `0.0.0.0:8200` (required for Docker networking) |
+| `VAULT_DB_*` | `BAO_PG_CONNECTION_URL` | PostgreSQL storage on shared `postgres` |
+| `VAULT_ROOT_TOKEN` | API + bootstrap scripts | Root token from `operator init` (see `vault-prod-bootstrap`) |
 | `VAULT_ADDR` | `VAULT_ADDR` | Internal URL `http://vault:8200` |
 
-> **Note:** OpenBao's Docker image reads `BAO_DEV_*` env vars for dev server configuration, not `VAULT_DEV_*`. The compose file maps the `.env` names to the correct `BAO_` names internally.
+**Command:** `server -config=/vault/prod-config/config.hcl` (production mode, PostgreSQL storage, Shamir seal).
 
-**Command:** `server -dev` (development mode — auto-initialized, auto-unsealed, in-memory storage supplemented by the file volume)
+**Health check:** `GET /v1/sys/seal-status` until `"sealed":false`. Vault stays unhealthy while sealed until `vault-prod-bootstrap` runs.
 
-**Health check:** `wget --spider http://127.0.0.1:8200/v1/sys/health`. Interval 15s, timeout 5s, 3 retries, 10s start period.
+**Storage:** `storage "postgresql"` in [`vault/config.hcl`](../../vault/config.hcl); connection via `BAO_PG_CONNECTION_URL`. Cluster state and secrets survive container restarts.
 
-**Production config (`vault/config.hcl`):** Provided for future production migration:
-- `storage "file"` at `/vault/data`
-- `listener "tcp"` on `0.0.0.0:8200`, TLS disabled (TLS terminated by Traefik)
-- UI enabled
-- Default lease 168h, max 720h
+**Bootstrap secrets (gitignored under `.vols/vault/`):** `init.txt`, `unseal-keys`, `root-token` — written by `vault-prod-bootstrap` on first init. Copy `root-token` into `.env` as `VAULT_ROOT_TOKEN`.
 
-To switch to production mode: change the docker-compose command to `server -config=/vault/prod-config/config.hcl`, remove `VAULT_DEV_*` env vars, and handle manual init/unseal.
+**After PC reboot:** run `make vault-bootstrap` or `docker compose run --rm vault-prod-bootstrap` (reads `unseal-keys`; no manual UI unseal if keys file is present).
 
-**Operational notes:**
-- In dev mode, OpenBao is automatically initialized and unsealed on every start. No manual unsealing is needed.
-- The `VAULT_DEV_ROOT_TOKEN_ID` must be alphanumeric + hyphens only (OpenBao rejects dots and special characters).
-- Dev mode is a deliberate v1 trade-off. Secrets persist in `.vols/vault/` across restarts, but the auto-unseal behavior is not production-grade.
+**Migration from dev mode:** see [Secrets — production mode](07_secrets.md#production-mode-postgresql--scripted-unseal).
 
 ---
 
@@ -321,7 +314,7 @@ The entrypoint script checks if `GITLAB_RUNNER_TOKEN` equals `FILL_AFTER_STARTUP
 | `MONGO_DB_NAME` | MongoDB database name |
 | `KUBECONFIG_DIR` | Host path mounted for per-env kubeconfigs |
 | `VAULT_URL` | Internal Vault URL (`http://vault:8200`) |
-| `VAULT_DEV_ROOT_TOKEN_ID` | Vault token |
+| `VAULT_ROOT_TOKEN` | Vault root token (Management API) |
 | `OIDC_ISSUER_URL` | External Keycloak issuer URL |
 | `OIDC_JWKS_URL` | Internal Keycloak JWKS endpoint |
 | `OIDC_AUDIENCE` | Expected `aud` claim in JWT (e.g. `management-api`) |
@@ -365,14 +358,40 @@ The entrypoint script checks if `GITLAB_RUNNER_TOKEN` equals `FILL_AFTER_STARTUP
 
 ---
 
+## postgres-vault-init
+
+| Field | Value |
+|---|---|
+| Image | `postgres:17-alpine` |
+| Host ports | — |
+| Volumes | `./postgres/init-ensure-vault-db.sh` |
+| Depends on | `postgres` (healthy) |
+
+One-shot. Creates `${VAULT_DB_USER}` / `${VAULT_DB_NAME}` on shared PostgreSQL (idempotent). First empty cluster also runs `postgres/init/05-vault-database.sh`.
+
+---
+
+## vault-prod-bootstrap
+
+| Field | Value |
+|---|---|
+| Image | `openbao/openbao:2` |
+| Host ports | — |
+| Volumes | `./vault/init-prod-bootstrap.sh`, `./.vols/vault` → `/work` |
+| Depends on | `vault` (started), `postgres-vault-init` (completed) |
+
+One-shot. Runs [`vault/init-prod-bootstrap.sh`](../../vault/init-prod-bootstrap.sh): `operator init` (first boot), unseal from `/work/unseal-keys`, enable KV v2 at `secret/`. Invoked by `make bootstrap`, `make vault-bootstrap`, or `docker compose run --rm vault-prod-bootstrap`.
+
+---
+
 ## vault-oidc-init
 
 | Field | Value |
 |---|---|
 | Image | `openbao/openbao:2` |
 | Host ports | — |
-| Volumes | `./vault/init-oidc.sh` → `/scripts/init-oidc.sh` |
-| Depends on | `vault` (healthy), `keycloak` (healthy) |
+| Volumes | `./vault/init-oidc.sh`, `./.vols/vault` → `/work` (read-only, for `root-token`) |
+| Depends on | `vault-prod-bootstrap` (completed), `vault` (healthy), `keycloak` (healthy) |
 
 One-shot service. Runs `/init-oidc.sh`:
 

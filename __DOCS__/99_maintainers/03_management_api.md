@@ -148,7 +148,7 @@ interface AppConfiguration {
   };
   vault: {
     url: string;               // VAULT_URL (default: http://vault:8200) — OpenBao instance
-    token: string;             // VAULT_DEV_ROOT_TOKEN_ID (required)
+    token: string;             // VAULT_ROOT_TOKEN (required)
   };
   kube: {
     apiUrl?: string;           // KUBE_API_INTERNAL_URL (optional)
@@ -166,7 +166,7 @@ interface AppConfiguration {
 }
 ```
 
-**Required variables** (will throw on startup if missing): `DOMAIN`, `GITLAB_ROOT_TOKEN`, `GITLAB_TEMPLATE_GROUP_ID`, `GITLAB_CONFIG_GROUP_ID`, `VAULT_DEV_ROOT_TOKEN_ID`.
+**Required variables** (will throw on startup if missing): `DOMAIN`, `GITLAB_ROOT_TOKEN`, `GITLAB_TEMPLATE_GROUP_ID`, `GITLAB_CONFIG_GROUP_ID`, `VAULT_ROOT_TOKEN`.
 
 ---
 

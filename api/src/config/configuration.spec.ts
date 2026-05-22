@@ -6,7 +6,7 @@ describe('configuration', () => {
     GITLAB_ROOT_TOKEN: 'glpat-test',
     GITLAB_TEMPLATE_GROUP_ID: '10',
     GITLAB_CONFIG_GROUP_ID: '20',
-    VAULT_DEV_ROOT_TOKEN_ID: 'vault-test',
+    VAULT_ROOT_TOKEN: 'vault-test',
   };
 
   let originalEnv: NodeJS.ProcessEnv;
@@ -89,12 +89,12 @@ describe('configuration', () => {
     );
   });
 
-  it('should throw on missing VAULT_DEV_ROOT_TOKEN_ID', () => {
+  it('should throw on missing VAULT_ROOT_TOKEN', () => {
     setRequiredEnv();
-    delete process.env.VAULT_DEV_ROOT_TOKEN_ID;
+    delete process.env.VAULT_ROOT_TOKEN;
 
     expect(() => configuration()).toThrow(
-      'Missing required environment variable: VAULT_DEV_ROOT_TOKEN_ID',
+      'Missing required environment variable: VAULT_ROOT_TOKEN',
     );
   });
 

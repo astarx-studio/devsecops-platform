@@ -3,8 +3,9 @@
 # ==========================================================================
 # Containers: traefik, mongo, postgres, keycloak, vault (OpenBao),
 #             cloudflared, wireguard, gitlab, gitlab-runner, api, sonarqube,
-#             postgres-keycloak-init, postgres-sonar-init, postgres-gitlab-init,
-#             postgres-registry-init, mongo-init,
+#             postgres-keycloak-init, postgres-sonar-init, postgres-vault-init,
+#             postgres-gitlab-init, postgres-registry-init, mongo-init,
+#             vault-prod-bootstrap, vault-oidc-init,
 #             sonarqube-config-init, sonarqube-init, sonarqube-mcp (profile sonarmcp),
 #             minio, minio-init
 # Network:    devops-network (bridge)
@@ -185,6 +186,9 @@ services:
       REGISTRY_DB_NAME: ${REGISTRY_DB_NAME:-registry}
       REGISTRY_DB_USER: ${REGISTRY_DB_USER:-registry}
       REGISTRY_DB_PASSWORD: ${REGISTRY_DB_PASSWORD:?set REGISTRY_DB_PASSWORD in .env}
+      VAULT_DB_NAME: ${VAULT_DB_NAME:-openbao}
+      VAULT_DB_USER: ${VAULT_DB_USER:-openbao}
+      VAULT_DB_PASSWORD: ${VAULT_DB_PASSWORD:?set VAULT_DB_PASSWORD in .env}
     volumes:
       - ./.vols/keycloak-db:/var/lib/postgresql/data
       - ./postgres/init:/docker-entrypoint-initdb.d:ro
@@ -292,30 +296,39 @@ services:
   # ========================================================================
   # OPENBAO — Secrets Management (Vault-compatible, MPL 2.0)
   # ========================================================================
-  # Default: dev mode (auto-unsealed). For production, change command to
-  # "server -config=/vault/prod-config/config.hcl" and remove VAULT_DEV_* vars.
+  # Production server: PostgreSQL storage + Shamir seal. Unseal via
+  # vault-prod-bootstrap (reads ./.vols/vault/unseal-keys). OIDC: vault-oidc-init.
   vault:
     image: openbao/openbao:2
     container_name: vault
-    command: server -dev
+    command: server -config=/vault/prod-config/config.hcl
     restart: unless-stopped
     ports:
       - "18200:8200"
     environment:
-      BAO_DEV_ROOT_TOKEN_ID: ${VAULT_DEV_ROOT_TOKEN_ID}
-      BAO_DEV_LISTEN_ADDRESS: "0.0.0.0:8200"
       VAULT_ADDR: ${VAULT_ADDR}
+      # libpq env vars avoid URL-encoding issues when VAULT_DB_PASSWORD contains @ or !
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGUSER: ${VAULT_DB_USER:-openbao}
+      PGPASSWORD: ${VAULT_DB_PASSWORD:?set VAULT_DB_PASSWORD in .env}
+      PGDATABASE: ${VAULT_DB_NAME:-openbao}
+      PGSSLMODE: disable
     cap_add:
       - IPC_LOCK
     volumes:
       - ./vault/config.hcl:/vault/prod-config/config.hcl:ro
-      - ./.vols/vault:/vault/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      postgres-vault-init:
+        condition: service_completed_successfully
     healthcheck:
-      test: ["CMD-SHELL", "wget --spider --quiet http://127.0.0.1:8200/v1/sys/health || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8200/v1/sys/seal-status 2>/dev/null | grep -q '\"sealed\":false' || exit 1"]
       interval: 15s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
+      timeout: 10s
+      retries: 8
+      start_period: 30s
     labels:
       traefik.enable: "true"
       traefik.http.routers.vault.rule: "Host(`${VAULT_DOMAIN}`)"
@@ -696,7 +709,7 @@ services:
       GITLAB_TEMPLATE_GROUP_ID: ${GITLAB_TEMPLATE_GROUP_ID}
       GITLAB_CONFIG_GROUP_ID: ${GITLAB_CONFIG_GROUP_ID}
       VAULT_URL: http://vault:8200
-      VAULT_DEV_ROOT_TOKEN_ID: ${VAULT_DEV_ROOT_TOKEN_ID}
+      VAULT_ROOT_TOKEN: ${VAULT_ROOT_TOKEN:?set VAULT_ROOT_TOKEN in .env}
       MONGO_URL: ${MONGO_URL:?set MONGO_URL in .env (include credentials after mongo-init)}
       MONGO_DB_NAME: ${MONGO_DB_NAME:-platform}
       KUBE_API_INTERNAL_URL: ${KUBE_API_INTERNAL_URL}
@@ -726,6 +739,10 @@ services:
       mongo:
         condition: service_healthy
       mongo-init:
+        condition: service_completed_successfully
+      vault-prod-bootstrap:
+        condition: service_completed_successfully
+      vault-oidc-init:
         condition: service_completed_successfully
       vault:
         condition: service_healthy
@@ -778,24 +795,50 @@ services:
       - devops-network
 
   # ========================================================================
+  # OPENBAO PROD BOOTSTRAP — Init, unseal, enable KV v2 (one-shot, idempotent)
+  # ========================================================================
+  vault-prod-bootstrap:
+    image: openbao/openbao:2
+    container_name: vault-prod-bootstrap
+    restart: "no"
+    entrypoint: ["/bin/sh", "/scripts/init-prod-bootstrap.sh"]
+    environment:
+      VAULT_ADDR: http://vault:8200
+      VAULT_TOKEN: ${VAULT_ROOT_TOKEN:-}
+      VAULT_BOOTSTRAP_DIR: /work
+    volumes:
+      - ./vault/init-prod-bootstrap.sh:/scripts/init-prod-bootstrap.sh:ro
+      - ./.vols/vault:/work
+    depends_on:
+      vault:
+        condition: service_started
+      postgres-vault-init:
+        condition: service_completed_successfully
+    networks:
+      - devops-network
+
+  # ========================================================================
   # OPENBAO OIDC INIT — One-shot initializer for OpenBao OIDC auth method
   # ========================================================================
   vault-oidc-init:
     image: openbao/openbao:2
     container_name: vault-oidc-init
     restart: "no"
-    entrypoint: /bin/sh
+    entrypoint: ["/bin/sh"]
     command: ["/scripts/init-oidc.sh"]
     environment:
       VAULT_ADDR: http://vault:8200
-      VAULT_TOKEN: ${VAULT_DEV_ROOT_TOKEN_ID}
+      VAULT_TOKEN: ${VAULT_ROOT_TOKEN:-}
       KC_CLIENT_SECRET_VAULT: ${KC_CLIENT_SECRET_VAULT}
       KC_REALM: ${KC_REALM}
       KEYCLOAK_ISSUER_URL: ${OIDC_ISSUER_URL}
       VAULT_EXTERNAL_URL: https://${VAULT_DOMAIN}
     volumes:
       - ./vault/init-oidc.sh:/scripts/init-oidc.sh:ro
+      - ./.vols/vault:/work:ro
     depends_on:
+      vault-prod-bootstrap:
+        condition: service_completed_successfully
       vault:
         condition: service_healthy
       keycloak:
@@ -900,6 +943,30 @@ services:
       SONAR_DB_PASSWORD: ${SONAR_DB_PASSWORD:?set SONAR_DB_PASSWORD in .env}
     volumes:
       - ./postgres/init-ensure-sonar-db.sh:/scripts/init-ensure-sonar-db.sh:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - devops-network
+
+  # ========================================================================
+  # POSTGRES VAULT INIT — OpenBao DB/user on shared PostgreSQL
+  # ========================================================================
+  postgres-vault-init:
+    image: postgres:17-alpine
+    container_name: postgres-vault-init
+    restart: "no"
+    entrypoint: ["/bin/sh", "/scripts/init-ensure-vault-db.sh"]
+    environment:
+      PGHOST: postgres
+      PGUSER: ${POSTGRES_ADMIN_USER:?set POSTGRES_ADMIN_USER in .env}
+      PGPASSWORD: ${POSTGRES_ADMIN_PASSWORD:?set POSTGRES_ADMIN_PASSWORD in .env}
+      PGDATABASE: postgres
+      VAULT_DB_NAME: ${VAULT_DB_NAME:-openbao}
+      VAULT_DB_USER: ${VAULT_DB_USER:-openbao}
+      VAULT_DB_PASSWORD: ${VAULT_DB_PASSWORD:?set VAULT_DB_PASSWORD in .env}
+    volumes:
+      - ./postgres/init-ensure-vault-db.sh:/scripts/init-ensure-vault-db.sh:ro
     depends_on:
       postgres:
         condition: service_healthy
