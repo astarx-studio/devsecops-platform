@@ -45,5 +45,5 @@ coverage
 
 # Local-only tooling (not part of platform deliverables)
 # Untracked operator-specific files (not part of the published stack)
-/_local/
+/__LOCAL__/
 .cursor/rules/local-management-ui.mdc

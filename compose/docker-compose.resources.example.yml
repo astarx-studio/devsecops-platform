@@ -1,0 +1,164 @@
+# =============================================================================
+# Optional per-service CPU/RAM caps (machine-specific — not enabled by default)
+# =============================================================================
+# Tuned for a single-host dev workstation (~12 CPUs, ~40 GiB RAM). Adjust limits
+# to match your engine (WSL2, Docker Desktop, Linux).
+#
+# Enable locally (never commit the active merge file):
+#   mkdir -p __LOCAL__
+#   cp compose/docker-compose.resources.example.yml __LOCAL__/docker-compose.resources.yml
+#   # In .env (gitignored), uncomment one line for your OS:
+#   # Windows:  COMPOSE_FILE=docker-compose.yml;__LOCAL__/docker-compose.resources.yml
+#   # Unix:     COMPOSE_FILE=docker-compose.yml:__LOCAL__/docker-compose.resources.yml
+#
+# Then recreate affected services, e.g.:
+#   docker compose up -d
+#
+# CI job containers are separate from these service limits. For Node test OOM (137),
+# also consider GITLAB_RUNNER_CONCURRENT=1 and runner [runners.docker] memory in
+# .vols/gitlab-runner/config/config.toml (see compose/gitlab-runner-job-resources.snippet).
+#
+# Init/one-shot services (*-init) are intentionally omitted.
+# =============================================================================
+
+services:
+  gitlab:
+    deploy:
+      resources:
+        limits:
+          cpus: "5"
+          memory: 8G
+        reservations:
+          cpus: "2"
+          memory: 4G
+
+  postgres:
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 3G
+        reservations:
+          cpus: "0.5"
+          memory: 1G
+
+  sonarqube:
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 3G
+        reservations:
+          cpus: "0.5"
+          memory: 1G
+
+  keycloak:
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 1536M
+        reservations:
+          cpus: "0.25"
+          memory: 512M
+
+  mongo:
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 1536M
+        reservations:
+          cpus: "0.25"
+          memory: 512M
+
+  gitlab-runner:
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 1G
+        reservations:
+          cpus: "0.25"
+          memory: 256M
+
+  api:
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 1G
+        reservations:
+          cpus: "0.1"
+          memory: 256M
+
+  console:
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 768M
+        reservations:
+          cpus: "0.1"
+          memory: 256M
+
+  minio:
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 1G
+        reservations:
+          cpus: "0.1"
+          memory: 256M
+
+  vault:
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 768M
+        reservations:
+          cpus: "0.1"
+          memory: 256M
+
+  traefik:
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512M
+        reservations:
+          cpus: "0.1"
+          memory: 128M
+
+  oauth2-proxy:
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 256M
+
+  # Profile: sonarmcp
+  sonarqube-mcp:
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512M
+
+  # Profile: cftunnel
+  cloudflared:
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 256M
+
+  # Profile: vpnedge
+  wireguard:
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 256M

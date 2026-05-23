@@ -1,5 +1,5 @@
 ---
-description: Separate git-tracked stack config from local-only env fixes (.env, .vols, _local)
+description: Separate git-tracked stack config from local-only env fixes (.env, .vols, __LOCAL__)
 alwaysApply: true
 ---
 
@@ -27,7 +27,7 @@ Per-developer or runtime state — **exclude from stack PRs**:
 |------|---------|
 | `.env` | Secrets, domains (`SONARQUBE_DOMAIN`, passwords, tokens) |
 | `.vols/` | Postgres, GitLab, Sonar data, generated `sonar.properties`, bootstrap markers |
-| `_local/` | Gitignored scratch tools (legacy Vite UI may remain under `_local/management-ui/`) |
+| `__LOCAL__/` | Gitignored local workspace; optional `docker-compose.resources.yml` merge (see `compose/docker-compose.resources.example.yml`) |
 | Ad-hoc Keycloak Admin UI clicks | Live realm DB; document procedure, do not assume export re-import |
 
 Troubleshooting (reset Sonar, patch SAML client, rotate creds) belongs in **local ops** or optional bootstrap scripts, not in the default install path unless promoted intentionally to stack docs.
@@ -41,4 +41,4 @@ After API schema changes under `api/src/projects/graphql/`, update `console/src/
 ## Commits
 
 - One PR/commit theme per stack concern (API, Sonar ops, infra), not mixed with local recovery notes.
-- Do not stage `.env`, `.vols/`, or `_local/`.
+- Do not stage `.env`, `.vols/`, or `__LOCAL__/`.

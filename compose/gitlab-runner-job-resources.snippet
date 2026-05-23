@@ -1,0 +1,12 @@
+# Optional CI job memory/CPU caps (local operator edit — not applied automatically)
+#
+# Edit .vols/gitlab-runner/config/config.toml under [[runners]] → [runners.docker]:
+#
+#   memory = "4g"
+#   cpus = "2"
+#
+# Then restart: docker compose up -d gitlab-runner
+#
+# Pair with GITLAB_RUNNER_CONCURRENT=1 in .env when Node tests exit 137 (OOM).
+# Job limits apply to CI containers, not the gitlab-runner service itself
+# (service caps: __LOCAL__/docker-compose.resources.yml).
