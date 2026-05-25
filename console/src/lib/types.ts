@@ -1,5 +1,6 @@
 export type Provisioning = 'AUTO_DEVOPS' | 'TEMPLATE';
-export type ClusterProfile = 'dev' | 'stg' | 'prod';
+/** GraphQL ClusterProfile enum (mutation/query wire format). */
+export type ClusterProfile = 'DEV' | 'STG' | 'PROD';
 export type Env = 'dev' | 'stg' | 'prod';
 export type SonarGateMode = 'optional' | 'required';
 

@@ -26,6 +26,11 @@ import {
 import { useCallback, useState } from 'react';
 
 import { graphqlRequest } from '@/lib/client';
+import {
+  CLUSTER_PROFILE_OPTIONS,
+  clusterProfileLabel,
+  normalizeClusterProfile,
+} from "@/lib/graphql-enums";
 import { MUTATIONS } from '@/lib/graphql';
 import type { ClusterProfile, DeploymentTarget, Project } from '@/lib/types';
 
@@ -40,12 +45,12 @@ export function DeploymentTargetPanel({ project, onUpdated }: Props) {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingKey, setEditingKey] = useState<string | null>(null);
   const [form, setForm] = useState({
-    targetKey: '',
+    targetKey: "",
     enabled: true,
-    deployRef: '',
-    appHost: '',
-    kubeNamespace: '',
-    clusterProfile: 'prod' as ClusterProfile,
+    deployRef: "",
+    appHost: "",
+    kubeNamespace: "",
+    clusterProfile: "PROD" as ClusterProfile,
     teardownK8sOnDisable: true,
   });
 
@@ -71,21 +76,21 @@ export function DeploymentTargetPanel({ project, onUpdated }: Props) {
       setForm({
         targetKey: target.key,
         enabled: target.enabled,
-        deployRef: target.deployRef === 'none' ? '' : target.deployRef,
+        deployRef: target.deployRef === "none" ? "" : target.deployRef,
         appHost: target.appHost,
         kubeNamespace: target.kubeNamespace,
-        clusterProfile: target.clusterProfile,
+        clusterProfile: normalizeClusterProfile(target.clusterProfile),
         teardownK8sOnDisable: true,
       });
     } else {
       setEditingKey(null);
       setForm({
-        targetKey: '',
+        targetKey: "",
         enabled: true,
-        deployRef: '',
-        appHost: '',
-        kubeNamespace: '',
-        clusterProfile: 'prod',
+        deployRef: "",
+        appHost: "",
+        kubeNamespace: "",
+        clusterProfile: "PROD",
         teardownK8sOnDisable: true,
       });
     }
@@ -133,7 +138,12 @@ export function DeploymentTargetPanel({ project, onUpdated }: Props) {
         <Typography variant="subtitle1" fontWeight={600}>
           Deployment targets
         </Typography>
-        <Button size="small" variant="contained" onClick={() => openUpsert()} disabled={busy}>
+        <Button
+          size="small"
+          variant="contained"
+          onClick={() => openUpsert()}
+          disabled={busy}
+        >
           Add target
         </Button>
       </Stack>
@@ -153,29 +163,39 @@ export function DeploymentTargetPanel({ project, onUpdated }: Props) {
           {project.deploymentTargets.map((t) => (
             <TableRow key={t.key}>
               <TableCell>{t.key}</TableCell>
-              <TableCell sx={{ maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              <TableCell
+                sx={{
+                  maxWidth: 200,
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                }}
+              >
                 {t.appHost}
               </TableCell>
               <TableCell>
                 <Chip
                   size="small"
                   label={t.deployRef}
-                  color={t.deployRef === 'none' ? 'default' : 'primary'}
+                  color={t.deployRef === "none" ? "default" : "primary"}
                   variant="outlined"
                 />
               </TableCell>
               <TableCell>
-                {t.kubeNamespace} / {t.clusterProfile}
+                {t.kubeNamespace} / {clusterProfileLabel(t.clusterProfile)}
               </TableCell>
               <TableCell>
                 <Chip
                   size="small"
-                  label={t.enabled ? 'enabled' : 'disabled'}
-                  color={t.enabled ? 'success' : 'default'}
+                  label={t.enabled ? "enabled" : "disabled"}
+                  color={t.enabled ? "success" : "default"}
                 />
               </TableCell>
               <TableCell align="right">
-                <Button size="small" onClick={() => openUpsert(t)} disabled={busy}>
+                <Button
+                  size="small"
+                  onClick={() => openUpsert(t)}
+                  disabled={busy}
+                >
                   Edit
                 </Button>
                 <Button
@@ -193,14 +213,25 @@ export function DeploymentTargetPanel({ project, onUpdated }: Props) {
         </TableBody>
       </Table>
 
-      <Dialog open={dialogOpen} onClose={() => setDialogOpen(false)} maxWidth="sm" fullWidth>
-        <DialogTitle>{form.targetKey ? `Target: ${form.targetKey}` : 'New deployment target'}</DialogTitle>
+      <Dialog
+        open={dialogOpen}
+        onClose={() => setDialogOpen(false)}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle>
+          {form.targetKey
+            ? `Target: ${form.targetKey}`
+            : "New deployment target"}
+        </DialogTitle>
         <DialogContent>
           <Stack spacing={2} sx={{ mt: 1 }}>
             <TextField
               label="Target key"
               value={form.targetKey}
-              onChange={(e) => setForm((f) => ({ ...f, targetKey: e.target.value }))}
+              onChange={(e) =>
+                setForm((f) => ({ ...f, targetKey: e.target.value }))
+              }
               disabled={editingKey !== null}
               helperText="e.g. dev, prod-alt (lowercase, hyphens)"
               fullWidth
@@ -209,7 +240,9 @@ export function DeploymentTargetPanel({ project, onUpdated }: Props) {
               control={
                 <Switch
                   checked={form.enabled}
-                  onChange={(e) => setForm((f) => ({ ...f, enabled: e.target.checked }))}
+                  onChange={(e) =>
+                    setForm((f) => ({ ...f, enabled: e.target.checked }))
+                  }
                 />
               }
               label="Enabled"
@@ -217,20 +250,26 @@ export function DeploymentTargetPanel({ project, onUpdated }: Props) {
             <TextField
               label="Deploy ref (branch)"
               value={form.deployRef}
-              onChange={(e) => setForm((f) => ({ ...f, deployRef: e.target.value }))}
+              onChange={(e) =>
+                setForm((f) => ({ ...f, deployRef: e.target.value }))
+              }
               helperText='Use API "none" via disabling target — do not enable with ref "none"'
               fullWidth
             />
             <TextField
               label="App host"
               value={form.appHost}
-              onChange={(e) => setForm((f) => ({ ...f, appHost: e.target.value }))}
+              onChange={(e) =>
+                setForm((f) => ({ ...f, appHost: e.target.value }))
+              }
               fullWidth
             />
             <TextField
               label="Kube namespace"
               value={form.kubeNamespace}
-              onChange={(e) => setForm((f) => ({ ...f, kubeNamespace: e.target.value }))}
+              onChange={(e) =>
+                setForm((f) => ({ ...f, kubeNamespace: e.target.value }))
+              }
               fullWidth
             />
             <FormControl fullWidth>
@@ -239,12 +278,17 @@ export function DeploymentTargetPanel({ project, onUpdated }: Props) {
                 label="Cluster profile"
                 value={form.clusterProfile}
                 onChange={(e) =>
-                  setForm((f) => ({ ...f, clusterProfile: e.target.value as ClusterProfile }))
+                  setForm((f) => ({
+                    ...f,
+                    clusterProfile: e.target.value as ClusterProfile,
+                  }))
                 }
               >
-                <MenuItem value="dev">dev</MenuItem>
-                <MenuItem value="stg">stg</MenuItem>
-                <MenuItem value="prod">prod</MenuItem>
+                {CLUSTER_PROFILE_OPTIONS.map((profile) => (
+                  <MenuItem key={profile} value={profile}>
+                    {clusterProfileLabel(profile)}
+                  </MenuItem>
+                ))}
               </Select>
             </FormControl>
             <FormControlLabel
@@ -252,7 +296,10 @@ export function DeploymentTargetPanel({ project, onUpdated }: Props) {
                 <Switch
                   checked={form.teardownK8sOnDisable}
                   onChange={(e) =>
-                    setForm((f) => ({ ...f, teardownK8sOnDisable: e.target.checked }))
+                    setForm((f) => ({
+                      ...f,
+                      teardownK8sOnDisable: e.target.checked,
+                    }))
                   }
                 />
               }
@@ -262,7 +309,11 @@ export function DeploymentTargetPanel({ project, onUpdated }: Props) {
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setDialogOpen(false)}>Cancel</Button>
-          <Button variant="contained" onClick={submitUpsert} disabled={busy || !form.targetKey.trim()}>
+          <Button
+            variant="contained"
+            onClick={submitUpsert}
+            disabled={busy || !form.targetKey.trim()}
+          >
             Save
           </Button>
         </DialogActions>
