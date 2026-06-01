@@ -5,13 +5,14 @@
 # Hard-delete smoke E2E assets only (no provision, no pipelines).
 # Clears GitLab smoke/* projects (permanent delete + wait), Vault secret trees,
 # Mongo via Management API (or direct purge), Helm/K8s releases for smoke slugs.
+# Runs smoke_verify_cleanup at the end to confirm no operational trace remains.
 #
 # Requires: API_KEY, GITLAB_ROOT_TOKEN, GITLAB_DOMAIN (Management API up for Mongo).
 #
 # Environment (same as smoke-deploy):
 #   SMOKE_GROUP_PATH          default system/devsecops-platform/smoke
 #   SMOKE_GITLAB_RAILS_DESTROY  default 1 when GitLab API uses docker exec (top-level group purge)
-#   SMOKE_PROJECTS            default smoke-api,smoke-web
+#   SMOKE_PROJECTS            default smoke-api,smoke-web,smoke-mono,smoke-sonar
 #   SMOKE_GITLAB_DELETE_WAIT  default 180
 #   API_LOCAL_PORT              default 13000
 #
@@ -47,7 +48,7 @@ source "${SCRIPT_DIR}/lib/smoke-cleanup.sh"
 
 API_LOCAL_PORT="${API_LOCAL_PORT:-13000}"
 SMOKE_GROUP_PATH="${SMOKE_GROUP_PATH:-system/devsecops-platform/smoke}"
-SMOKE_PROJECTS="${SMOKE_PROJECTS:-smoke-api,smoke-web}"
+SMOKE_PROJECTS="${SMOKE_PROJECTS:-smoke-api,smoke-web,smoke-mono,smoke-sonar}"
 GRAPHQL_URL="http://127.0.0.1:${API_LOCAL_PORT}/graphql"
 GITLAB_API="$(gitlab_api_v4_base)"
 
@@ -75,13 +76,18 @@ SLUGS=("${trimmed[@]}")
 
 log "Cleaning smoke group ${SMOKE_GROUP_PATH} (projects: ${SMOKE_PROJECTS})"
 
-# Legacy throwaway releases from older smoke-deploy iterations
+# Legacy throwaway releases and monorepo per-app patterns.
 for rel in smoke-hello "${SLUGS[@]}"; do
+  smoke_delete_k8s_release "${rel}"
+done
+# Monorepo per-app releases: smoke-mono-{smoke-mono-web,smoke-mono-app}.
+for rel in smoke-mono-smoke-mono-web smoke-mono-smoke-mono-app; do
   smoke_delete_k8s_release "${rel}"
 done
 
 smoke_preflight_clear_slots "${SMOKE_GROUP_PATH}" "${SLUGS[@]}"
 smoke_purge_mongo_group "${SMOKE_GROUP_PATH}"
 smoke_hard_delete_gitlab_group "${SMOKE_GROUP_PATH}"
+smoke_verify_cleanup "${SMOKE_GROUP_PATH}" "${SLUGS[@]}"
 
-log "Smoke cleanup finished — GitLab paths should be free for ${SMOKE_PROJECTS[*]}."
+log "Smoke cleanup finished — no operational trace remaining."

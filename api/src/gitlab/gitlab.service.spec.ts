@@ -242,6 +242,33 @@ describe('GitLabService', () => {
     });
   });
 
+  describe('commitRepositoryActions', () => {
+    it('should post a single multi-action commit when several files change', async () => {
+      postFn.mockReturnValueOnce(of(axiosResponse({ id: 'abc123' })));
+
+      await service.commitRepositoryActions(42, 'development', 'chore: sync deployment CI', [
+        { action: 'update', file_path: '.dsoaas/build-jobs.gitlab-ci.yml', content: 'build: {}' },
+        { action: 'update', file_path: '.gitlab-ci.yml', content: 'include: []' },
+      ]);
+
+      expect(postFn).toHaveBeenCalledWith(
+        expect.stringContaining('/api/v4/projects/42/repository/commits'),
+        expect.objectContaining({
+          branch: 'development',
+          commit_message: 'chore: sync deployment CI',
+          actions: expect.arrayContaining([
+            expect.objectContaining({
+              action: 'update',
+              file_path: '.dsoaas/build-jobs.gitlab-ci.yml',
+            }),
+          ]),
+        }),
+        expect.any(Object),
+      );
+      expect(putFn).not.toHaveBeenCalled();
+    });
+  });
+
   describe('upsertFile', () => {
     it('should create file when it does not exist', async () => {
       getFn.mockReturnValueOnce(throwError(() => ({ response: { status: 404 } })));

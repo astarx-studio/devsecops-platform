@@ -147,11 +147,8 @@ vault_read_json "${INDEX_PATH}" | jq -c '._index_json | fromjson | .profiles[]?'
       args_suffix="-${profile_job}"
     fi
     kaniko_args_file="${DSOAAS_DIR}/kaniko-extra-build-args${args_suffix}"
-    vault_read_json "${vault_path}" | jq -r 'to_entries[] | select(.key != "_raw_content") | "\(.key)\t\(.value)"' \
-      | while IFS="$(printf '\t')" read -r key value; do
-        [ -z "${key}" ] && continue
-        printf '%s\n' "--build-arg" "${key}=${value}" >> "${kaniko_args_file}"
-      done
+    vault_read_json "${vault_path}" | jq -r 'to_entries[] | select(.key != "_raw_content") | "--build-arg=\(.key)=\(.value)"' \
+      >> "${kaniko_args_file}"
     vault_read_json "${vault_path}" | jq -r 'to_entries[] | select(.key != "_raw_content") | "export \(.key)=\(.value | @sh)"' \
       >> "${DSOAAS_ENV_EXPORTS_FILE}"
 

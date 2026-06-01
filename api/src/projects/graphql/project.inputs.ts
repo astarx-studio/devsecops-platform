@@ -319,6 +319,34 @@ export class MigrateProjectToAutoDevopsInput {
   branchOptions?: DeployBranchOptionsInput;
 }
 
+@InputType({ description: 'Per-app build/deploy definition within a deployment target.' })
+export class TargetAppInput {
+  @Field(() => String, { description: 'App name (DNS label).' })
+  @IsString()
+  @IsNotEmpty()
+  @Matches(SLUG_PATTERN, { message: `name ${SLUG_MESSAGE}` })
+  name!: string;
+
+  @Field(() => String, { description: 'Registry image path suffix.' })
+  @IsString()
+  @IsNotEmpty()
+  @Matches(SLUG_PATTERN, { message: `image ${SLUG_MESSAGE}` })
+  image!: string;
+
+  @Field(() => String, { nullable: true, description: 'Dockerfile path (default Dockerfile).' })
+  @IsString()
+  @IsOptional()
+  dockerfile?: string;
+
+  @Field(() => String, {
+    nullable: true,
+    description: 'Ingress host override; derived when omitted.',
+  })
+  @IsString()
+  @IsOptional()
+  host?: string;
+}
+
 @InputType({ description: 'Deployment target definition for create/register.' })
 export class DeploymentTargetInput {
   @Field(() => String, { description: 'Target key (e.g. dev, prod-alt).' })
@@ -345,7 +373,10 @@ export class DeploymentTargetInput {
   @IsOptional()
   appHost?: string;
 
-  @Field(() => String, { nullable: true, description: 'Branch ref (standard defaults for dev/stg/prod).' })
+  @Field(() => String, {
+    nullable: true,
+    description: 'Branch ref (standard defaults for dev/stg/prod).',
+  })
   @IsString()
   @IsOptional()
   deployRef?: string;
@@ -354,6 +385,16 @@ export class DeploymentTargetInput {
   @IsBoolean()
   @IsOptional()
   enabled?: boolean;
+
+  @Field(() => [TargetAppInput], {
+    nullable: true,
+    description: 'Per-app build/deploy rows; defaults to one app from slug when omitted.',
+  })
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => TargetAppInput)
+  @IsOptional()
+  apps?: TargetAppInput[];
 }
 
 @InputType({ description: 'Adopt an existing GitLab project into the platform registry.' })
@@ -471,6 +512,15 @@ export class UpsertDeploymentTargetInput {
   @IsBoolean()
   @IsOptional()
   teardownK8sOnDisable?: boolean;
+
+  @Field(() => [TargetAppInput], {
+    description: 'Per-app build/deploy configuration (at least one required).',
+  })
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => TargetAppInput)
+  @IsNotEmpty()
+  apps!: TargetAppInput[];
 }
 
 /**

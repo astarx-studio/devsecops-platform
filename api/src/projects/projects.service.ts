@@ -11,15 +11,20 @@ import { InjectModel } from '@nestjs/mongoose';
 import type { QueryFilter, Model } from 'mongoose';
 
 import { AppConfiguration } from '../config';
-import { GitLabService } from '../gitlab/gitlab.service';
+import { GitLabService, type GitLabRepositoryCommitAction } from '../gitlab/gitlab.service';
 import { isGitLabProjectPendingDeletion } from '../gitlab/gitlab-project.util';
 import { K8sService } from '../k8s/k8s.service';
 import { VaultService } from '../vault/vault.service';
 import {
-  buildGitlabCiWithIncludes,
-  generateDeployTargetsCiYaml,
+  BUILD_JOBS_CI_PATH,
+  buildManagedIncludes,
   DEPLOY_TARGETS_CI_PATH,
+  generateBuildJobsCiYaml,
+  generateDeployTargetsCiYaml,
+  projectNeedsBuildJobsFragment,
+  projectNeedsDeployTargetsFragment,
 } from './deploy/deploy-ci-generator';
+import { mergeProjectGitlabCi } from './deploy/merge-project-gitlab-ci';
 import { DEPLOY_REF_DISABLED, STANDARD_DEPLOY_TARGET_KEYS } from './deploy/deploy.constants';
 import {
   appHostsFromTargets,
@@ -28,6 +33,7 @@ import {
   buildDefaultAppHost,
   applyDeployBranchOverrides,
   deriveStandardDeploymentTargets,
+  deployRefVariableName,
   ensureDeploymentTargets,
   inferClusterProfile,
   resolveDefaultDeployRef,
@@ -40,10 +46,16 @@ import {
 import {
   buildDeployRefVariable,
   buildDeploymentTargetFromInput,
-  buildEnvScopedDeployVariables,
+  buildDeployVariablesForTarget,
   buildVaultAccessCiVariables,
   ENV_SCOPED_DEPLOY_VAR_KEYS,
+  listAppEnvironmentScopes,
 } from './deploy/deployment-wiring';
+import {
+  appEnvironmentScope,
+  normalizeTargetApps,
+  resolveHelmReleaseName,
+} from './deploy/target-app.util';
 import type { DeleteProjectOptions, DeleteProjectResult } from './delete-project-result';
 import type { ReconcileGitLabProjectsResult } from './reconcile-gitlab-projects-result';
 import {
@@ -62,7 +74,12 @@ import {
 import { Provisioning } from './graphql/enums';
 import { AuditLog } from './schemas/audit-log.schema';
 import { Project, ProjectDocument } from './schemas/project.schema';
-import type { ClusterProfile, DeployEnv, DeploymentTarget } from './schemas/project.schema';
+import type {
+  ClusterProfile,
+  DeployEnv,
+  DeploymentTarget,
+  TargetApp,
+} from './schemas/project.schema';
 import { SonarQubeService } from '../sonarqube/sonarqube.service';
 import { SlugService } from './slug.service';
 import { buildSonarCiVariables } from './sonar/sonar-ci-sync';
@@ -200,11 +217,37 @@ export class ProjectsService {
    *
    * @returns YAML string for the `.gitlab-ci.yml` include block
    */
-  private buildAutoDevopsCi(hasExtraTargets = false): string {
+  private buildManagedRootGitlabCi(
+    targets: DeploymentTarget[],
+    existingContent: string | null,
+  ): { content: string; skipRootWrite: boolean; warnings: string[] } {
     const project = this.configService.get<string>('autoDevops.pipelineProject', { infer: true })!;
     const file = this.configService.get<string>('autoDevops.pipelineFile', { infer: true })!;
-    this.logger.verbose(`buildAutoDevopsCi: project="${project}" file="${file}"`);
-    return buildGitlabCiWithIncludes(project, file, hasExtraTargets);
+    const includes = buildManagedIncludes(project, file, targets);
+    const merged = mergeProjectGitlabCi(existingContent, includes);
+    const warnings: string[] = [];
+
+    if (merged.parseWarning) {
+      this.logger.warn(`mergeProjectGitlabCi: ${merged.parseWarning}`);
+    }
+    if (merged.preservedUserKeys.length > 0) {
+      this.logger.log(
+        `mergeProjectGitlabCi: preserved user keys: ${merged.preservedUserKeys.join(', ')}`,
+      );
+    }
+    if (merged.skipRootWrite) {
+      warnings.push(
+        'Root .gitlab-ci.yml was not updated: the existing file could not be parsed or merged safely. ' +
+          'Restore custom jobs from Git history, fix YAML syntax, then save the deployment target again.',
+      );
+    } else if (merged.usedIncludeFallback) {
+      warnings.push(
+        'Root .gitlab-ci.yml include block was updated using a line-based merge (full-file parse failed). ' +
+          'Verify custom jobs and !reference tags still work as expected.',
+      );
+    }
+
+    return { content: merged.content, skipRootWrite: merged.skipRootWrite, warnings };
   }
 
   /**
@@ -459,8 +502,6 @@ externalSecret:
       input.deploymentTargets,
       appHosts,
     );
-    const hasExtraTargets = this.hasExtraDeployTargets(deploymentTargets);
-
     // Step 2: Create GitLab group hierarchy
     this.logger.log(`Step 2: Ensuring GitLab group hierarchy: ${groupPath.join('/')}`);
     const groupId = await this.gitlabService.createGroupHierarchy(groupPath);
@@ -491,10 +532,11 @@ externalSecret:
 
       // Write .gitlab-ci.yml (Auto DevOps include) and chart-values.yaml
       this.logger.log('Step 3a: Writing .gitlab-ci.yml with Auto DevOps include');
+      const { content: rootCi } = this.buildManagedRootGitlabCi(deploymentTargets, null);
       await this.gitlabService.upsertFile(
         gitlabProjectId,
         '.gitlab-ci.yml',
-        this.buildAutoDevopsCi(hasExtraTargets),
+        rootCi,
         'chore: add Auto DevOps pipeline include',
       );
 
@@ -571,7 +613,13 @@ externalSecret:
           );
         }
         return [
-          ...buildEnvScopedDeployVariables(target, vaultBasePath, kubeconfigB64),
+          ...buildDeployVariablesForTarget(
+            target,
+            effectiveSlug,
+            this.appsDomain,
+            vaultBasePath,
+            kubeconfigB64,
+          ),
           buildDeployRefVariable(target),
         ];
       });
@@ -579,17 +627,47 @@ externalSecret:
         ...buildVaultAccessCiVariables(this.vaultCiUrl, this.vaultToken, vaultBasePath),
       );
       await this.gitlabService.setProjectCiVariables(gitlabProjectId, ciVariables);
+    } else {
+      // Non-deployable (CI-only) projects: set all standard deploy-ref variables to "none"
+      // so the pipeline template's deploy jobs (which default to branch-triggered) never run.
+      this.logger.log(
+        'Step 6: Non-deployable project — setting deploy ref variables to "none" to suppress deploy jobs',
+      );
+      const disabledRefVars = STANDARD_DEPLOY_TARGET_KEYS.map((key) => ({
+        key: deployRefVariableName(key),
+        value: DEPLOY_REF_DISABLED,
+        environmentScope: '*' as const,
+        masked: false,
+      }));
+      await this.gitlabService.setProjectCiVariables(gitlabProjectId, disabledRefVars);
+    }
 
-      if (hasExtraTargets) {
-        const extraYaml = generateDeployTargetsCiYaml(deploymentTargets);
-        if (extraYaml) {
-          await this.gitlabService.upsertFile(
-            gitlabProjectId,
-            DEPLOY_TARGETS_CI_PATH,
-            extraYaml,
-            'chore: add deployment targets CI (DSOaaS)',
-          );
-        }
+    if (isDeployable || deploymentTargets.some((t) => t.enabled)) {
+      const deployYaml = generateDeployTargetsCiYaml(deploymentTargets);
+      const buildYaml = generateBuildJobsCiYaml(deploymentTargets);
+      const fragmentActions: GitLabRepositoryCommitAction[] = [];
+      if (deployYaml) {
+        fragmentActions.push({
+          action: 'create',
+          file_path: DEPLOY_TARGETS_CI_PATH,
+          content: deployYaml,
+        });
+      }
+      if (buildYaml) {
+        fragmentActions.push({
+          action: 'create',
+          file_path: BUILD_JOBS_CI_PATH,
+          content: buildYaml,
+        });
+      }
+      if (fragmentActions.length > 0) {
+        const glProject = await this.gitlabService.getProject(gitlabProjectId);
+        await this.gitlabService.commitRepositoryActions(
+          gitlabProjectId,
+          glProject.default_branch,
+          'chore: add deployment CI fragments (DSOaaS)',
+          fragmentActions,
+        );
       }
     }
 
@@ -670,7 +748,7 @@ externalSecret:
     if (!skipPlatform) {
       try {
         this.logger.log(`Tearing down K8s releases for "${doc.helmReleaseName}"`);
-        await this.k8sService.teardownProjectTargets(doc.helmReleaseName, targets);
+        await this.k8sService.teardownProjectTargets(doc.effectiveSlug, targets);
       } catch (err) {
         const note = `Kubernetes teardown: ${(err as Error).message}`;
         cleanupNotes.push(note);
@@ -782,7 +860,7 @@ externalSecret:
     let kubernetes = false;
     if (doc.capabilities?.deployable) {
       try {
-        kubernetes = await this.k8sService.hasReleaseInTargets(doc.helmReleaseName, targets);
+        kubernetes = await this.k8sService.hasReleaseInTargets(doc.effectiveSlug, targets);
       } catch (err) {
         this.logger.warn(
           `Could not verify K8s resources for "${doc.helmReleaseName}": ${(err as Error).message}`,
@@ -889,13 +967,26 @@ externalSecret:
     if (doc.capabilities.deployable || doc.deploymentTargets.some((t) => t.enabled)) {
       await this.syncAllDeploymentWiring(doc, pipelineRef);
     } else {
-      await this.gitlabService.upsertFile(
+      const targets = ensureDeploymentTargets(doc, this.appsDomain);
+      const existingRoot = await this.gitlabService.getFileContent(
         doc.gitlabProjectId,
         '.gitlab-ci.yml',
-        this.buildAutoDevopsCi(false),
-        'chore: migrate to Auto DevOps pipeline',
         pipelineRef,
       );
+      const { content, skipRootWrite } = this.buildManagedRootGitlabCi(targets, existingRoot);
+      if (!skipRootWrite) {
+        await this.gitlabService.upsertFile(
+          doc.gitlabProjectId,
+          '.gitlab-ci.yml',
+          content,
+          'chore: migrate to Auto DevOps pipeline',
+          pipelineRef,
+        );
+      } else {
+        this.logger.warn(
+          `migrateProjectToAutoDevops: skipped root .gitlab-ci.yml for project ${doc.gitlabProjectId}`,
+        );
+      }
     }
 
     // Step 3: Trigger pipeline on the resolved default branch
@@ -1261,13 +1352,54 @@ externalSecret:
   // Deployment target wiring
   // ---------------------------------------------------------------------------
 
+  /** Removes Helm releases for every app on a deployment target. */
+  private async teardownTargetReleases(
+    effectiveSlug: string,
+    target: DeploymentTarget,
+  ): Promise<void> {
+    const apps = target.apps ?? [];
+    if (apps.length === 0) {
+      await this.k8sService.teardownRelease(
+        target.clusterProfile,
+        target.kubeNamespace,
+        resolveHelmReleaseName(effectiveSlug, effectiveSlug),
+      );
+      return;
+    }
+    for (const app of apps) {
+      const release = resolveHelmReleaseName(effectiveSlug, app.image);
+      await this.k8sService.teardownRelease(target.clusterProfile, target.kubeNamespace, release);
+    }
+  }
+
+  /**
+   * Deletes GitLab CI variables for app scopes removed during upsert.
+   */
+  private async deleteStaleAppCiScopes(
+    doc: ProjectDocument,
+    targetKey: string,
+    previousApps: TargetApp[],
+    currentApps: TargetApp[],
+  ): Promise<void> {
+    const currentScopes = new Set(currentApps.map((a) => appEnvironmentScope(targetKey, a.name)));
+    for (const prev of previousApps) {
+      const scope = appEnvironmentScope(targetKey, prev.name);
+      if (currentScopes.has(scope)) {
+        continue;
+      }
+      for (const key of ENV_SCOPED_DEPLOY_VAR_KEYS) {
+        await this.gitlabService.deleteProjectCiVariable(doc.gitlabProjectId, key, scope);
+      }
+    }
+  }
+
   /**
    * Seeds Vault paths and syncs GitLab CI + generated deploy jobs for all targets.
    */
   private async syncAllDeploymentWiring(
     doc: ProjectDocument,
     commitBranch?: string,
-  ): Promise<void> {
+  ): Promise<string[]> {
     const branch = commitBranch ?? (await this.resolveGitCommitBranch(doc.gitlabProjectId));
 
     const targets = ensureDeploymentTargets(doc, this.appsDomain);
@@ -1282,7 +1414,13 @@ externalSecret:
     const ciVars = targets.flatMap((target) => {
       const kubeconfigB64 = this.k8sService.getKubeconfigB64(target.clusterProfile);
       return [
-        ...buildEnvScopedDeployVariables(target, doc.vaultBasePath, kubeconfigB64),
+        ...buildDeployVariablesForTarget(
+          target,
+          doc.effectiveSlug,
+          this.appsDomain,
+          doc.vaultBasePath,
+          kubeconfigB64,
+        ),
         buildDeployRefVariable(target),
       ];
     });
@@ -1298,9 +1436,10 @@ externalSecret:
       await this.syncVaultAccessCiVariables(doc);
     }
 
-    await this.regenerateDeployCiFiles(doc, branch);
+    const ciSyncWarnings = await this.regenerateDeployCiFiles(doc, branch);
     this.recomputeDeployable(doc);
     await doc.save();
+    return ciSyncWarnings;
   }
 
   private async seedVaultForTarget(doc: ProjectDocument, target: DeploymentTarget): Promise<void> {
@@ -1311,33 +1450,94 @@ externalSecret:
     });
   }
 
-  private async regenerateDeployCiFiles(
-    doc: ProjectDocument,
-    commitBranch?: string,
-  ): Promise<void> {
-    const branch = commitBranch ?? (await this.resolveGitCommitBranch(doc.gitlabProjectId));
+  /**
+   * Builds GitLab commit actions for deployment CI fragments and root include merge.
+   * Caller should pass actions to {@link GitLabService.commitRepositoryActions} in one commit.
+   */
+  private async buildDeploymentCiCommitActions(
+    projectId: number,
+    branch: string,
+    targets: DeploymentTarget[],
+  ): Promise<{ actions: GitLabRepositoryCommitAction[]; warnings: string[] }> {
+    const deployYaml = generateDeployTargetsCiYaml(targets);
+    const buildYaml = generateBuildJobsCiYaml(targets);
 
-    const targets = ensureDeploymentTargets(doc, this.appsDomain);
-    const extraYaml = generateDeployTargetsCiYaml(targets);
-    const hasExtra = this.hasExtraDeployTargets(targets);
+    const [deployFragmentExists, buildFragmentExists, existingRoot] = await Promise.all([
+      this.gitlabService
+        .getFileContent(projectId, DEPLOY_TARGETS_CI_PATH, branch)
+        .then((c) => c !== null),
+      this.gitlabService
+        .getFileContent(projectId, BUILD_JOBS_CI_PATH, branch)
+        .then((c) => c !== null),
+      this.gitlabService.getFileContent(projectId, '.gitlab-ci.yml', branch),
+    ]);
 
-    if (hasExtra && extraYaml) {
-      await this.gitlabService.upsertFile(
-        doc.gitlabProjectId,
-        DEPLOY_TARGETS_CI_PATH,
-        extraYaml,
-        'chore: update deployment targets CI (DSOaaS)',
-        branch,
+    const actions: GitLabRepositoryCommitAction[] = [];
+
+    if (projectNeedsDeployTargetsFragment(targets) && deployYaml) {
+      actions.push({
+        action: deployFragmentExists ? 'update' : 'create',
+        file_path: DEPLOY_TARGETS_CI_PATH,
+        content: deployYaml,
+      });
+    } else if (deployFragmentExists) {
+      actions.push({ action: 'delete', file_path: DEPLOY_TARGETS_CI_PATH });
+    }
+
+    if (projectNeedsBuildJobsFragment(targets) && buildYaml) {
+      actions.push({
+        action: buildFragmentExists ? 'update' : 'create',
+        file_path: BUILD_JOBS_CI_PATH,
+        content: buildYaml,
+      });
+    } else if (buildFragmentExists) {
+      actions.push({ action: 'delete', file_path: BUILD_JOBS_CI_PATH });
+    }
+
+    const { content, skipRootWrite, warnings } = this.buildManagedRootGitlabCi(
+      targets,
+      existingRoot,
+    );
+    if (!skipRootWrite) {
+      actions.push({
+        action: existingRoot !== null ? 'update' : 'create',
+        file_path: '.gitlab-ci.yml',
+        content,
+      });
+    } else {
+      this.logger.warn(
+        `buildDeploymentCiCommitActions: skipped root .gitlab-ci.yml for project ${projectId}`,
       );
     }
 
-    await this.gitlabService.upsertFile(
+    return { actions, warnings };
+  }
+
+  private async regenerateDeployCiFiles(
+    doc: ProjectDocument,
+    commitBranch?: string,
+  ): Promise<string[]> {
+    const branch = commitBranch ?? (await this.resolveGitCommitBranch(doc.gitlabProjectId));
+    const targets = ensureDeploymentTargets(doc, this.appsDomain);
+    const { actions, warnings } = await this.buildDeploymentCiCommitActions(
       doc.gitlabProjectId,
-      '.gitlab-ci.yml',
-      this.buildAutoDevopsCi(hasExtra),
-      'chore: sync Auto DevOps pipeline include',
       branch,
+      targets,
     );
+
+    if (actions.length > 0) {
+      await this.gitlabService.commitRepositoryActions(
+        doc.gitlabProjectId,
+        branch,
+        'chore: sync deployment CI (DSOaaS)',
+        actions,
+      );
+      this.logger.log(
+        `regenerateDeployCiFiles: committed ${actions.length} file change(s) on branch "${branch}"`,
+      );
+    }
+
+    return warnings;
   }
 
   /**
@@ -1452,7 +1652,7 @@ externalSecret:
   async upsertDeploymentTarget(
     id: string,
     input: UpsertDeploymentTargetInput,
-  ): Promise<ProjectDocument> {
+  ): Promise<{ doc: ProjectDocument; ciSyncWarnings: string[] }> {
     const doc = await this.findProject({ id });
     assertValidTargetKey(input.targetKey);
 
@@ -1483,18 +1683,29 @@ externalSecret:
 
     assertValidActiveDeployRef(deployRef, input.enabled);
 
+    const apps = normalizeTargetApps(
+      input.apps.map((a) => ({
+        name: a.name,
+        image: a.image,
+        dockerfile: a.dockerfile,
+        host: a.host,
+      })),
+      input.targetKey,
+      this.appsDomain,
+    );
+
     const target: DeploymentTarget = {
       key: input.targetKey,
       kubeNamespace: input.kubeNamespace ?? existing?.kubeNamespace ?? input.targetKey,
       clusterProfile,
-      appHost:
-        input.appHost ??
-        existing?.appHost ??
-        buildDefaultAppHost(input.targetKey, doc.effectiveSlug, this.appsDomain),
+      appHost: apps[0].host,
+      apps,
       deployRef,
       enabled: input.enabled,
       gitlabEnvironment: existing?.gitlabEnvironment ?? input.targetKey,
     };
+
+    const previousApps = existing?.apps ?? [];
 
     if (idx >= 0) {
       targets[idx] = target;
@@ -1503,25 +1714,15 @@ externalSecret:
     }
 
     if (!input.enabled && (input.teardownK8sOnDisable ?? true)) {
-      await this.k8sService.teardownRelease(
-        target.clusterProfile,
-        target.kubeNamespace,
-        doc.helmReleaseName,
-      );
+      await this.teardownTargetReleases(doc.effectiveSlug, target);
     }
 
     doc.deploymentTargets = targets;
     await this.seedVaultForTarget(doc, target);
     await this.k8sService.ensureNamespace(target.clusterProfile, target.kubeNamespace);
 
-    const kubeconfigB64 = this.k8sService.getKubeconfigB64(target.clusterProfile);
-    await this.gitlabService.setProjectCiVariables(doc.gitlabProjectId, [
-      ...buildEnvScopedDeployVariables(target, doc.vaultBasePath, kubeconfigB64),
-      buildDeployRefVariable(target),
-      ...buildVaultAccessCiVariables(this.vaultCiUrl, this.vaultToken, doc.vaultBasePath),
-    ]);
-
-    await this.regenerateDeployCiFiles(doc);
+    await this.deleteStaleAppCiScopes(doc, target.key, previousApps, target.apps ?? []);
+    const ciSyncWarnings = await this.syncAllDeploymentWiring(doc);
     this.recomputeDeployable(doc);
     await doc.save();
 
@@ -1530,10 +1731,15 @@ externalSecret:
       projectId: id,
       gitlabPath: doc.gitlabPath,
       effectiveSlug: doc.effectiveSlug,
-      metadata: { targetKey: input.targetKey, enabled: input.enabled, deployRef },
+      metadata: {
+        targetKey: input.targetKey,
+        enabled: input.enabled,
+        deployRef,
+        ciSyncWarnings: ciSyncWarnings.length > 0 ? ciSyncWarnings : undefined,
+      },
     });
 
-    return doc;
+    return { doc, ciSyncWarnings };
   }
 
   async removeDeploymentTarget(
@@ -1551,16 +1757,13 @@ externalSecret:
     }
 
     if (teardownK8s) {
-      await this.k8sService.teardownRelease(
-        target.clusterProfile,
-        target.kubeNamespace,
-        doc.helmReleaseName,
-      );
+      await this.teardownTargetReleases(doc.effectiveSlug, target);
     }
 
-    const scope = target.gitlabEnvironment ?? target.key;
-    for (const key of ENV_SCOPED_DEPLOY_VAR_KEYS) {
-      await this.gitlabService.deleteProjectCiVariable(doc.gitlabProjectId, key, scope);
+    for (const scope of listAppEnvironmentScopes(target)) {
+      for (const key of ENV_SCOPED_DEPLOY_VAR_KEYS) {
+        await this.gitlabService.deleteProjectCiVariable(doc.gitlabProjectId, key, scope);
+      }
     }
     await this.gitlabService.setProjectCiVariable(
       doc.gitlabProjectId,

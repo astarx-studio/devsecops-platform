@@ -28,6 +28,7 @@ import {
   DeploymentTargetType,
   ProjectSonarType,
   ProjectType,
+  UpsertDeploymentTargetPayload,
   SonarBranchProvisionType,
   SonarGatePolicyType,
   TemplateType,
@@ -96,6 +97,12 @@ function mapDeploymentTargets(
     kubeNamespace: t.kubeNamespace,
     clusterProfile: t.clusterProfile as DeploymentTargetType['clusterProfile'],
     appHost: t.appHost,
+    apps: (t.apps ?? []).map((app) => ({
+      name: app.name,
+      image: app.image,
+      dockerfile: app.dockerfile,
+      host: app.host,
+    })),
     deployRef: t.deployRef,
     enabled: t.enabled,
     gitlabEnvironment: t.gitlabEnvironment,
@@ -119,6 +126,7 @@ function mapProject(
     templateSlug: doc.templateSlug,
     vaultBasePath: doc.vaultBasePath,
     helmReleaseName: doc.helmReleaseName,
+    appsDomain: appsDomain ?? '',
     appHosts: {
       dev: doc.appHosts?.dev,
       stg: doc.appHosts?.stg,
@@ -284,11 +292,7 @@ export class ProjectsResolver {
     })
     addToAllowedBranches?: boolean,
   ): Promise<SonarBranchProvisionType[]> {
-    return this.projectsService.provisionSonarProjects(
-      id,
-      branches,
-      addToAllowedBranches ?? true,
-    );
+    return this.projectsService.provisionSonarProjects(id, branches, addToAllowedBranches ?? true);
   }
 
   @Mutation(() => Boolean, {
@@ -324,15 +328,18 @@ export class ProjectsResolver {
     return this.mapDoc(doc);
   }
 
-  @Mutation(() => ProjectType, {
+  @Mutation(() => UpsertDeploymentTargetPayload, {
     description: 'Creates or updates a named deployment target (dev, prod-alt, etc.).',
   })
   async upsertDeploymentTarget(
     @Args('id', { type: () => ID }) id: string,
     @Args('input') input: UpsertDeploymentTargetInput,
-  ): Promise<ProjectType> {
-    const doc = await this.projectsService.upsertDeploymentTarget(id, input);
-    return this.mapDoc(doc);
+  ): Promise<UpsertDeploymentTargetPayload> {
+    const { doc, ciSyncWarnings } = await this.projectsService.upsertDeploymentTarget(id, input);
+    return {
+      project: this.mapDoc(doc),
+      ciSyncWarnings,
+    };
   }
 
   @Mutation(() => ProjectType, {
@@ -381,9 +388,7 @@ export class ProjectsResolver {
 
     return {
       outcome:
-        result.outcome === 'deleted'
-          ? DeleteProjectOutcome.DELETED
-          : DeleteProjectOutcome.ARCHIVED,
+        result.outcome === 'deleted' ? DeleteProjectOutcome.DELETED : DeleteProjectOutcome.ARCHIVED,
       message: result.message,
       project: result.project ? this.mapDoc(result.project) : undefined,
     };
@@ -399,10 +404,7 @@ export class ProjectsResolver {
     @Args('id', { type: () => ID }) id: string,
     @Args('input', { nullable: true }) input?: MigrateProjectToAutoDevopsInput,
   ): Promise<ProjectType> {
-    const doc = await this.projectsService.migrateProjectToAutoDevops(
-      id,
-      input?.branchOptions,
-    );
+    const doc = await this.projectsService.migrateProjectToAutoDevops(id, input?.branchOptions);
     return this.mapDoc(doc);
   }
 
@@ -433,9 +435,12 @@ export class ProjectsResolver {
   }
 
   @Query(() => [EnvProfileType], {
-    description: 'Lists branch-scoped env profiles for a project (metadata only; secrets in Vault).',
+    description:
+      'Lists branch-scoped env profiles for a project (metadata only; secrets in Vault).',
   })
-  async envProfiles(@Args('projectId', { type: () => ID }) projectId: string): Promise<EnvProfileType[]> {
+  async envProfiles(
+    @Args('projectId', { type: () => ID }) projectId: string,
+  ): Promise<EnvProfileType[]> {
     const profiles = await this.envProfileService.listProfiles(projectId);
     return profiles.map(mapEnvProfile);
   }

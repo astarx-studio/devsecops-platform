@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Smoke Mono — Web — DSOaaS E2E</title>
+    <style>
+      body {
+        font-family: system-ui, sans-serif;
+        max-width: 40rem;
+        margin: 3rem auto;
+        padding: 0 1rem;
+      }
+      h1 {
+        color: #0d47a1;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Smoke Mono — Web</h1>
+    <p>nginx frontend for DSOaaS monorepo smoke-deploy (smoke-mono-web).</p>
+    <p id="build-marker">Build env: <span data-smoke-build>loading…</span></p>
+    <script src="/smoke-build-env.js"></script>
+    <script>
+      document.querySelector("[data-smoke-build]").textContent =
+        window.SMOKE_BUILD_MARKER || "missing";
+    </script>
+  </body>
+</html>

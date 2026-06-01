@@ -1,5 +1,6 @@
 import {
   deployRefVariableName,
+  ensureDeploymentTargets,
   isDeployRefDisabled,
   assertValidActiveDeployRef,
   assertValidTargetKey,
@@ -39,5 +40,18 @@ describe('deploy-target.util', () => {
   it('provides default refs for standard keys only', () => {
     expect(resolveDefaultDeployRef('dev')).toBe('develop');
     expect(resolveDefaultDeployRef('prod-alt')).toBeUndefined();
+  });
+
+  it('keeps explicit empty deploymentTargets (does not re-derive dev/stg/prod)', () => {
+    const targets = ensureDeploymentTargets(
+      {
+        deploymentTargets: [],
+        effectiveSlug: 'my-app',
+        capabilities: { deployable: true },
+        appHosts: { dev: 'my-app.dev.apps.example.com' },
+      },
+      'apps.example.com',
+    );
+    expect(targets).toEqual([]);
   });
 });

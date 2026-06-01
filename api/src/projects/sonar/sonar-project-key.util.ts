@@ -42,7 +42,7 @@ export function slugifyGitRef(ref: string): string {
  * CI uses: `printf '%s' "${CI_PROJECT_PATH_SLUG}_${CI_COMMIT_REF_SLUG}"` then lowercases and
  * maps disallowed characters to `_`, then trims leading/trailing `_`.
  *
- * @param gitlabPath - Full GitLab path (e.g. external/kai/datahub/datahub-fe)
+ * @param gitlabPath - Full GitLab path (e.g. clients/demo/monorepo-fe)
  * @param branch - Git branch name (e.g. main, staging)
  * @returns Sonar `project` key safe for the Web API and scanner
  */

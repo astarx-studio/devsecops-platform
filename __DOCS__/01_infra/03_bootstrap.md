@@ -77,13 +77,39 @@ Order inside `bootstrap/bootstrap.sh`: **prereqs** → **docker compose up** →
 
 ### End-to-end smoke deploy (optional)
 
-`make smoke` only checks infrastructure (k3d, Traefik, ESO, Management API `/health`). To validate **provisioning → GitLab CI → deploy → HTTPS** in one go (typically three to eight minutes with a registered runner), run:
+`make smoke` only checks infrastructure (k3d, Traefik, ESO, Management API `/health`). To validate **provisioning → GitLab CI → deploy → HTTPS** in one go, run:
 
 ```bash
 ./bootstrap/smoke-deploy.sh
 ```
 
-Optional: `./bootstrap/smoke-deploy.sh --cleanup` deletes the throwaway project from the Management API after a successful URL check. Required `.env` entries include `API_KEY`, `GITLAB_ROOT_TOKEN`, and `GITLAB_DOMAIN`. Override defaults with `SMOKE_SLUG`, `SMOKE_GROUP_PATH` (slash-separated parent path, for example `clients/acme`), `SMOKE_TIMEOUT`, and `API_LOCAL_PORT` if needed. The Make target does not pass flags; invoke the script directly for `--cleanup`.
+This runs four sample projects through the full stack, mirroring what an operator does in the console:
+
+| Project | Type | What it validates |
+|---|---|---|
+| `smoke-api` | Single-app (Node API) | Standard deploy + RUNTIME env profile |
+| `smoke-web` | Single-app (nginx) | Standard deploy + BUILD env profile |
+| `smoke-mono` | Monorepo (two apps) | `upsertDeploymentTarget` with `apps[]`, per-app Dockerfile, two Helm releases, two hosts |
+| `smoke-sonar` | CI-only (no deploy) | Sonar + coverage CI without a Docker image |
+
+The smoke script uses the same Management API GraphQL mutations the console uses (`createProject`, `upsertDeploymentTarget`, `uploadEnvProfile`, `provisionSonarProjects`). Test and Sonar job overrides are committed as a `smoke-ci.yml` local include, simulating the developer-owned CI pattern.
+
+Expect 10–15 minutes for the full suite with a registered runner.
+
+```bash
+# Run full 4-project suite
+make smoke-deploy
+
+# Fast iteration on just the new projects
+SMOKE_PROJECTS=smoke-mono,smoke-sonar ./bootstrap/smoke-deploy.sh
+
+# Teardown with no-trace verification
+make smoke-deploy ARGS='--cleanup'
+# or
+make smoke-cleanup
+```
+
+Required `.env` entries: `API_KEY`, `GITLAB_ROOT_TOKEN`, `GITLAB_DOMAIN`. Optional overrides (see `sample.env` `E2E smoke` section): `SMOKE_GROUP_PATH`, `SMOKE_PROJECTS`, `SMOKE_SONAR`, `SMOKE_TIMEOUT`, `API_LOCAL_PORT`. The Make target does not pass flags; invoke the script directly for `--cleanup` or per-project overrides.
 
 > **VPN edge only:** after the stack is up and the `wireguard` container is healthy, continue with the **Edge VM bootstrap** steps in [Networking — VPN edge ingress](../99_maintainers/05_networking.md#edge-vm-bootstrap-fresh-ubuntu) to configure the cloud VM. The platform is reachable locally before this step; the edge VM makes it reachable from the internet.
 

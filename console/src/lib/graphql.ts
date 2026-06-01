@@ -12,12 +12,19 @@ export const PROJECT_FIELDS = `
   templateSlug
   vaultBasePath
   helmReleaseName
+  appsDomain
   appHosts { dev stg prod }
   deploymentTargets {
     key
     kubeNamespace
     clusterProfile
     appHost
+    apps {
+      name
+      image
+      dockerfile
+      host
+    }
     deployRef
     enabled
     gitlabEnvironment
@@ -112,7 +119,10 @@ export const MUTATIONS = {
   `,
   upsertDeploymentTarget: `
     mutation UpsertDeploymentTarget($id: ID!, $input: UpsertDeploymentTargetInput!) {
-      upsertDeploymentTarget(id: $id, input: $input) { ${PROJECT_FIELDS} }
+      upsertDeploymentTarget(id: $id, input: $input) {
+        ciSyncWarnings
+        project { ${PROJECT_FIELDS} }
+      }
     }
   `,
   removeDeploymentTarget: `

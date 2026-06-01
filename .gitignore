@@ -25,6 +25,7 @@ backups/
 node_modules/
 dist/
 build/
+.next/
 
 # OS
 .DS_Store
@@ -47,3 +48,4 @@ coverage
 # Untracked operator-specific files (not part of the published stack)
 /__LOCAL__/
 .cursor/rules/local-management-ui.mdc
+.cursor/plans/

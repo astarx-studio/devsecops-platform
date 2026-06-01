@@ -4,11 +4,19 @@ export type ClusterProfile = 'DEV' | 'STG' | 'PROD';
 export type Env = 'dev' | 'stg' | 'prod';
 export type SonarGateMode = 'optional' | 'required';
 
+export interface TargetApp {
+  name: string;
+  image: string;
+  dockerfile: string;
+  host: string;
+}
+
 export interface DeploymentTarget {
   key: string;
   kubeNamespace: string;
   clusterProfile: ClusterProfile;
   appHost: string;
+  apps: TargetApp[];
   deployRef: string;
   enabled: boolean;
   gitlabEnvironment?: string | null;
@@ -32,8 +40,8 @@ export interface SonarGatePolicy {
   other?: SonarGateMode | null;
 }
 
-export type EnvProfileInjectionPhase = 'BUILD' | 'RUNTIME';
-export type EnvProfileBuildDelivery = 'RAW_FILE' | 'DOTENV_BUILD_ARGS';
+export type EnvProfileInjectionPhase = "BUILD" | "RUNTIME";
+export type EnvProfileBuildDelivery = "RAW_FILE" | "DOTENV_BUILD_ARGS";
 
 export interface EnvProfile {
   id: string;
@@ -65,7 +73,7 @@ export interface SonarBranchProvision {
   dashboardUrl: string;
 }
 
-export type DeleteProjectOutcome = 'DELETED' | 'ARCHIVED';
+export type DeleteProjectOutcome = "DELETED" | "ARCHIVED";
 
 export interface DeleteProjectResult {
   outcome: DeleteProjectOutcome;
@@ -92,6 +100,7 @@ export interface Project {
   templateSlug?: string | null;
   vaultBasePath: string;
   helmReleaseName: string;
+  appsDomain: string;
   appHosts: AppHosts;
   deploymentTargets: DeploymentTarget[];
   capabilities: Capabilities;
@@ -106,6 +115,11 @@ export interface Project {
   gitlabDeleteError?: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface UpsertDeploymentTargetResult {
+  project: Project;
+  ciSyncWarnings: string[];
 }
 
 export interface GraphqlError {

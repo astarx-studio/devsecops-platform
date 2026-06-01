@@ -12,6 +12,7 @@ import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
 import { AppConfiguration } from '../config';
+import { resolveHelmReleaseName } from '../projects/deploy/target-app.util';
 
 import type {
   ClusterProfile,
@@ -320,32 +321,50 @@ export class K8sService implements OnModuleInit {
     }
   }
 
-  /** Tears down all targets for a project release. */
+  /** Tears down all Helm releases for deployment targets (per-app when `apps[]` is set). */
   async teardownProjectTargets(
-    releaseName: string,
-    targets: Pick<DeploymentTarget, 'clusterProfile' | 'kubeNamespace'>[],
+    effectiveSlug: string,
+    targets: Pick<DeploymentTarget, 'clusterProfile' | 'kubeNamespace' | 'apps'>[],
   ): Promise<void> {
     for (const target of targets) {
-      await this.teardownRelease(target.clusterProfile, target.kubeNamespace, releaseName);
+      const apps = target.apps ?? [];
+      if (apps.length === 0) {
+        await this.teardownRelease(
+          target.clusterProfile,
+          target.kubeNamespace,
+          resolveHelmReleaseName(effectiveSlug, effectiveSlug),
+        );
+        continue;
+      }
+      for (const app of apps) {
+        await this.teardownRelease(
+          target.clusterProfile,
+          target.kubeNamespace,
+          resolveHelmReleaseName(effectiveSlug, app.image),
+        );
+      }
     }
   }
 
   /**
-   * Returns true when a Helm release workload (Deployment) still exists for any target.
+   * Returns true when a Helm release workload (Deployment) still exists for any target/app.
    */
   async hasReleaseInTargets(
-    releaseName: string,
-    targets: Pick<DeploymentTarget, 'clusterProfile' | 'kubeNamespace'>[],
+    effectiveSlug: string,
+    targets: Pick<DeploymentTarget, 'clusterProfile' | 'kubeNamespace' | 'apps'>[],
   ): Promise<boolean> {
     for (const target of targets) {
-      if (
-        await this.hasReleaseWorkload(
-          target.clusterProfile,
-          target.kubeNamespace,
-          releaseName,
-        )
-      ) {
-        return true;
+      const apps = target.apps ?? [];
+      const releases =
+        apps.length > 0
+          ? apps.map((app) => resolveHelmReleaseName(effectiveSlug, app.image))
+          : [resolveHelmReleaseName(effectiveSlug, effectiveSlug)];
+      for (const releaseName of releases) {
+        if (
+          await this.hasReleaseWorkload(target.clusterProfile, target.kubeNamespace, releaseName)
+        ) {
+          return true;
+        }
       }
     }
     return false;

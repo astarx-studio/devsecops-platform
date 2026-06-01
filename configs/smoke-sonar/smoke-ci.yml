@@ -1,0 +1,65 @@
+# =============================================================================
+# smoke-sonar — custom CI overrides (developer-owned)
+# =============================================================================
+# Included from root .gitlab-ci.yml via:
+#   include:
+#     - local: smoke-ci.yml
+#
+# This project is CI-only (no docker image / no deploy). The default build job
+# is disabled here so the pipeline skips Kaniko entirely. The test job generates
+# a minimal lcov coverage report and sonar:scan analyses it.
+#
+# Pattern (from platform docs):
+#   When extending .sonar-scan with a custom before_script, prepend:
+#     - !reference [.sonar-scan, before_script]
+# =============================================================================
+
+# Disable the default Kaniko build — this project has no Docker image.
+build:
+  rules:
+    - when: never
+
+test:
+  stage: test
+  image: node:20-alpine
+  script:
+    - |
+      set -eu
+      mkdir -p coverage
+      node app.test.js
+      node -e "
+        const lines = [
+          'TN:',
+          'SF:app.js',
+          'FN:8,add',
+          'FN:17,isEven',
+          'FNDA:2,add',
+          'FNDA:2,isEven',
+          'FNF:2',
+          'FNH:2',
+          'DA:12,2',
+          'DA:21,2',
+          'LF:2',
+          'LH:2',
+          'end_of_record',
+        ];
+        require('fs').writeFileSync('coverage/lcov.info', lines.join('\n') + '\n');
+        console.log('lcov.info written');
+      "
+  artifacts:
+    paths:
+      - coverage/lcov.info
+    expire_in: 1 day
+  rules:
+    - if: "$CI_COMMIT_BRANCH"
+
+sonar:scan:
+  extends: .sonar-scan
+  needs:
+    - job: test
+      artifacts: true
+      optional: true
+  before_script:
+    - !reference [.sonar-scan, before_script]
+  rules:
+    - if: "$CI_COMMIT_BRANCH"

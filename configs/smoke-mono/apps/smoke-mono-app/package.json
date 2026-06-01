@@ -1,0 +1,10 @@
+{
+  "name": "smoke-mono-app",
+  "version": "1.0.0",
+  "private": true,
+  "description": "DSOaaS smoke monorepo — Node HTTP app",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  }
+}

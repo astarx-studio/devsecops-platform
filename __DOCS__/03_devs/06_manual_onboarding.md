@@ -236,16 +236,29 @@ Via the Management API:
 mutation {
   upsertDeploymentTarget(
     id: "<mongo-project-id>"
-    input: { targetKey: "prod", enabled: false, teardownK8sOnDisable: true }
-  ) { id deploymentTargets { key deployRef enabled } }
+    input: {
+      targetKey: "prod"
+      enabled: false
+      teardownK8sOnDisable: true
+      apps: [{ name: "my-app", image: "my-app" }]
+    }
+  ) { id deploymentTargets { key deployRef enabled apps { name host } } }
 }
 ```
+
+`apps` is required (at least one row). Omit `host` to let the API derive it from `name` and `targetKey`.
 
 Or in GitLab: **Settings → CI/CD → Variables** → set `DEPLOY_PROD_REF` = `none`.
 
 ### Custom deployment targets (e.g. prod-alt)
 
-Use `upsertDeploymentTarget` with a new `targetKey` (DNS label, e.g. `prod-alt`). The API seeds Vault, env-scoped CI variables, ensures the namespace on the chosen cluster profile, and commits **`.dsoaas/deploy-targets.gitlab-ci.yml`** with a matching `deploy:prod-alt` job.
+Use `upsertDeploymentTarget` with a new `targetKey` (DNS label, e.g. `prod-alt`) and one or more `apps`. The API seeds Vault, per-app env-scoped CI variables, ensures the namespace on the chosen cluster profile, and commits **`.dsoaas/build-jobs.gitlab-ci.yml`** and **`.dsoaas/deploy-targets.gitlab-ci.yml`** with matching `build:<image>` and `deploy:prod-alt-<app>` jobs.
+
+### Preserving custom root CI (e.g. `test:`)
+
+On each target sync the API **replaces only** the top-level `include:` block in root `.gitlab-ci.yml`. Other top-level keys (`test:`, `variables:`, custom `build:*`) are left intact. Managed fragments live under `.dsoaas/`. Do not rely on editing entries inside the managed `include:` list — those paths are overwritten.
+
+Details: [Deployment target apps](./08_deployment_target_apps.md) and [Monorepo multi-app CI](./07_monorepo_multi_app_ci.md).
 
 ### Register an existing GitLab repo
 
@@ -284,7 +297,7 @@ deploy:dev:
       when: on_success
 ```
 
-Beware: multiple feature branches share the same Helm release name (`$CI_PROJECT_NAME`) and so collide on the same K8s Deployment in `dev`. The last push wins. For true per-branch review apps, you'd extend the chart with a per-branch release suffix — out of scope here.
+Beware: multiple feature branches share the same Helm release name (`HELM_RELEASE_NAME`, default `$CI_PROJECT_NAME`) and so collide on the same K8s Deployment in `dev`. The last push wins. Monorepo targets set distinct `HELM_RELEASE_NAME` per app via the Management API. For true per-branch review apps, you'd extend the chart with a per-branch release suffix — out of scope here.
 
 ### Re-running a deployment
 
@@ -355,6 +368,24 @@ Each allowed branch is analyzed as a separate Sonar project key: `{project_path_
 **Shared defaults:** Optional baseline `sonar-project.properties` lives in the `configs/sonar-defaults` GitLab repo — copy into your app root or merge the exclusions you need.
 
 **Commit status:** Passing or failing Quality Gate appears on the commit as `sonarqube/quality-gate` with a link to the Sonar dashboard.
+
+**Coverage from `test`:** To pass `coverage.xml` into Sonar, add `needs: [test]` (and usually `dependencies: [test]`) on `sonar:scan`. Keep the platform work-dir setup when you override `before_script`:
+
+```yaml
+sonar:scan:
+  extends: .sonar-scan
+  dependencies: [test]
+  needs:
+    - job: test
+      artifacts: true
+  before_script:
+    - !reference [.sonar-scan, before_script]
+    - # your checks (coverage.xml, sonar-project.properties, …)
+  variables:
+    SONAR_SCANNER_OPTS: "-Dsonar.python.coverage.reportPaths=${CI_PROJECT_DIR}/coverage/coverage.xml"
+```
+
+The template sets `sonar.scanner.workDir` under `/tmp/scannerwork` so the scanner does not need write access to a root-owned project directory. A `chmod` on the `test` job does not carry over to `sonar:scan` (separate job workspace).
 
 ---
 

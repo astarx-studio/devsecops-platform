@@ -64,6 +64,12 @@ export interface GitLabFileContent {
   last_commit_id: string;
 }
 
+/** One file change in a multi-action repository commit (GitLab Commits API). */
+export type GitLabRepositoryCommitAction =
+  | { action: 'create'; file_path: string; content: string }
+  | { action: 'update'; file_path: string; content: string }
+  | { action: 'delete'; file_path: string };
+
 /**
  * Client for the GitLab API v4.
  *
@@ -419,6 +425,88 @@ export class GitLabService {
     } else {
       await this.updateFile(projectId, filePath, content, commitMessage, branch);
     }
+  }
+
+  /**
+   * Deletes a file from a GitLab repository via commit.
+   *
+   * @param projectId - GitLab project ID
+   * @param filePath - Path to the file to delete
+   * @param commitMessage - Commit message
+   * @param branch - Target branch (defaults to "main")
+   */
+  async deleteFile(
+    projectId: number,
+    filePath: string,
+    commitMessage: string,
+    branch = 'main',
+  ): Promise<void> {
+    const encodedPath = encodeURIComponent(filePath);
+    this.logger.log(`Deleting file "${filePath}" from project ${projectId} on branch "${branch}"`);
+
+    await firstValueFrom(
+      this.httpService.delete(
+        `${this.baseUrl}/api/v4/projects/${projectId}/repository/files/${encodedPath}`,
+        {
+          headers: this.headers,
+          data: {
+            branch,
+            commit_message: commitMessage,
+          },
+        },
+      ),
+    );
+  }
+
+  /**
+   * Applies multiple repository file changes in a single Git commit (one pipeline trigger).
+   *
+   * @see https://docs.gitlab.com/ee/api/commits.html#create-a-commit-with-multiple-files-and-actions
+   */
+  async commitRepositoryActions(
+    projectId: number,
+    branch: string,
+    commitMessage: string,
+    actions: GitLabRepositoryCommitAction[],
+  ): Promise<void> {
+    if (actions.length === 0) {
+      return;
+    }
+
+    if (actions.length === 1) {
+      const single = actions[0];
+      if (single.action === 'delete') {
+        await this.deleteFile(projectId, single.file_path, commitMessage, branch);
+        return;
+      }
+      await this.upsertFile(projectId, single.file_path, single.content, commitMessage, branch);
+      return;
+    }
+
+    this.logger.log(
+      `Committing ${actions.length} file action(s) to project ${projectId} on branch "${branch}"`,
+    );
+
+    await firstValueFrom(
+      this.httpService.post(
+        `${this.baseUrl}/api/v4/projects/${projectId}/repository/commits`,
+        {
+          branch,
+          commit_message: commitMessage,
+          actions: actions.map((action) =>
+            action.action === 'delete'
+              ? { action: 'delete', file_path: action.file_path }
+              : {
+                  action: action.action,
+                  file_path: action.file_path,
+                  content: action.content,
+                  encoding: 'text',
+                },
+          ),
+        },
+        { headers: this.headers },
+      ),
+    );
   }
 
   /**

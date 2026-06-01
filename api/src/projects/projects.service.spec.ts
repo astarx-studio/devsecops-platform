@@ -84,6 +84,8 @@ describe('ProjectsService', () => {
   let hasReleaseInTargetsFn: jest.Mock;
   let tryDeleteProjectFn: jest.Mock;
   let getProjectFn: jest.Mock;
+  let getFileContentFn: jest.Mock;
+  let commitRepositoryActionsFn: jest.Mock;
   let hasSecretTreeFn: jest.Mock;
   let slugResolveFn: jest.Mock;
   let slugIsAvailableFn: jest.Mock;
@@ -116,7 +118,11 @@ describe('ProjectsService', () => {
     teardownProjectTargetsFn = jest.fn().mockResolvedValue(undefined);
     hasReleaseInTargetsFn = jest.fn().mockResolvedValue(false);
     tryDeleteProjectFn = jest.fn().mockResolvedValue({ ok: true });
-    getProjectFn = jest.fn().mockRejectedValue({ response: { status: 404 } });
+    getProjectFn = jest
+      .fn()
+      .mockResolvedValue(gitlabProjectFactory({ id: 42, default_branch: 'main' }));
+    getFileContentFn = jest.fn().mockResolvedValue(null);
+    commitRepositoryActionsFn = jest.fn().mockResolvedValue(undefined);
     hasSecretTreeFn = jest.fn().mockResolvedValue(false);
     slugResolveFn = jest.fn().mockImplementation((requested: string) => Promise.resolve(requested));
     slugIsAvailableFn = jest.fn().mockResolvedValue(true);
@@ -126,6 +132,8 @@ describe('ProjectsService', () => {
       forkTemplate: forkTemplateFn,
       createNewProject: createNewProjectFn,
       upsertFile: upsertFileFn,
+      getFileContent: getFileContentFn,
+      commitRepositoryActions: commitRepositoryActionsFn,
       triggerPipeline: triggerPipelineFn,
       listProjects: listProjectsFn,
       deleteProject: deleteProjectFn,
@@ -355,10 +363,30 @@ describe('ProjectsService', () => {
       expect(setProjectCiVariablesFn).toHaveBeenCalledWith(
         42,
         expect.arrayContaining([
-          expect.objectContaining({ key: 'KUBE_NAMESPACE', value: 'dev', environmentScope: 'dev' }),
-          expect.objectContaining({ key: 'APP_HOST', environmentScope: 'dev' }),
-          expect.objectContaining({ key: 'VAULT_PROJECT_PATH', environmentScope: 'dev' }),
-          expect.objectContaining({ key: 'KUBECONFIG_B64', environmentScope: 'dev' }),
+          expect.objectContaining({
+            key: 'KUBE_NAMESPACE',
+            value: 'dev',
+            environmentScope: 'dev-repoa',
+          }),
+          expect.objectContaining({
+            key: 'APP_HOST',
+            value: 'repoa.dev.apps.test.net',
+            environmentScope: 'dev-repoa',
+          }),
+          expect.objectContaining({
+            key: 'VAULT_PROJECT_PATH',
+            environmentScope: 'dev-repoa',
+          }),
+          expect.objectContaining({
+            key: 'HELM_RELEASE_NAME',
+            value: 'repoa',
+            environmentScope: 'dev-repoa',
+          }),
+          expect.objectContaining({
+            key: 'EXTRA_HELM_ARGS',
+            environmentScope: 'dev-repoa',
+          }),
+          expect.objectContaining({ key: 'KUBECONFIG_B64', environmentScope: 'dev-repoa' }),
         ]),
       );
     });
@@ -426,6 +454,13 @@ describe('ProjectsService', () => {
   // ---------------------------------------------------------------------------
 
   describe('deleteProject', () => {
+    beforeEach(() => {
+      tryDeleteProjectFn.mockResolvedValue({ ok: true });
+      getProjectFn.mockRejectedValue({ response: { status: 404 } });
+      hasSecretTreeFn.mockResolvedValue(false);
+      hasReleaseInTargetsFn.mockResolvedValue(false);
+    });
+
     it('should delete GitLab project and remove MongoDB document', async () => {
       const mockDoc = {
         _id: 'abc',

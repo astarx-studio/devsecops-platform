@@ -7,7 +7,9 @@ import {
   type StandardDeployTargetKey,
 } from './deploy.constants';
 
-import type { ClusterProfile, DeploymentTarget } from '../schemas/project.schema';
+import { syntheticAppFromLegacyTarget } from './target-app.util';
+
+import type { ClusterProfile, DeploymentTarget, TargetApp } from '../schemas/project.schema';
 
 /** DNS-label style target key: lowercase, hyphens, must start with a letter. */
 export const TARGET_KEY_PATTERN = /^[a-z][a-z0-9-]*$/;
@@ -196,16 +198,34 @@ export function deriveStandardDeploymentTargets(
       appHosts?.[key] ??
       buildDefaultAppHost(key, effectiveSlug, appsDomain);
     const defaultRef = DEFAULT_DEPLOY_REFS[key];
+    const apps = syntheticAppFromLegacyTarget(effectiveSlug, key, host);
     return {
       key,
       kubeNamespace: key,
       clusterProfile: key as ClusterProfile,
-      appHost: host,
+      appHost: apps[0].host,
+      apps,
       deployRef: deployable ? defaultRef : DEPLOY_REF_DISABLED,
       enabled: deployable,
       gitlabEnvironment: key,
     };
   });
+}
+
+/**
+ * Ensures each target has `apps[]` (lazy migration for records created before apps model).
+ */
+export function ensureTargetApps(
+  target: DeploymentTarget,
+  effectiveSlug: string,
+  appsDomain: string,
+): DeploymentTarget {
+  if (target.apps?.length) {
+    const primaryHost = target.apps[0].host;
+    return { ...target, appHost: primaryHost };
+  }
+  const apps = syntheticAppFromLegacyTarget(effectiveSlug, target.key, target.appHost);
+  return { ...target, apps, appHost: apps[0].host };
 }
 
 /**
@@ -221,14 +241,18 @@ export function ensureDeploymentTargets(
   },
   appsDomain: string,
 ): DeploymentTarget[] {
-  if (doc.deploymentTargets?.length) {
-    return doc.deploymentTargets;
+  let targets: DeploymentTarget[];
+  // Distinguish explicit [] (user removed all targets) from missing field (legacy migration).
+  if (Array.isArray(doc.deploymentTargets)) {
+    targets = doc.deploymentTargets;
+  } else {
+    targets = deriveStandardDeploymentTargets(
+      doc.effectiveSlug,
+      appsDomain,
+      doc.capabilities?.deployable ?? false,
+      doc.appHosts,
+      doc.hostnameOverrides,
+    );
   }
-  return deriveStandardDeploymentTargets(
-    doc.effectiveSlug,
-    appsDomain,
-    doc.capabilities?.deployable ?? false,
-    doc.appHosts,
-    doc.hostnameOverrides,
-  );
+  return targets.map((t) => ensureTargetApps(t, doc.effectiveSlug, appsDomain));
 }

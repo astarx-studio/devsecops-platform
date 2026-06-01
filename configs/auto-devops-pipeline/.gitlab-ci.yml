@@ -29,6 +29,7 @@
 #   CHART_REGISTRY_PLAIN_HTTP  auto | true | false
 #   CHART_REGISTRY_USER / CHART_REGISTRY_PASSWORD  Deploy token on auto-devops-chart (instance CI)
 #   EXTRA_HELM_ARGS       Pass extra --set flags to helm upgrade
+#   HELM_RELEASE_NAME     Helm release name (default CI_PROJECT_NAME; set per-app by Management API)
 #   DEPLOY_DEV_REF        Branch that triggers dev deploy (default: develop)
 #   DEPLOY_STG_REF        Branch that triggers stg deploy (default: staging)
 #   DEPLOY_PROD_REF       Branch that triggers prod deploy (default: main)
@@ -43,6 +44,8 @@
 #   SONAR_HOST_URL           Public Sonar URL (dashboard links; scanner fallback on external runners)
 #   SONAR_HOST_URL_INTERNAL  Scanner URL in-stack (default http://sonarqube:9000 on devops-network)
 #   SONAR_GATE_POLICY_JSON   {"dev":"optional","stg":"required","prod":"required","other":"optional"}
+#   SONAR_SCANNER_WORK_DIR   Scanner temp dir (default /tmp/scannerwork) — avoids .scannerwork permission
+#                            errors when prior jobs run as root and sonar-scanner-cli runs non-root
 # =============================================================================
 
 # =============================================================================
@@ -156,21 +159,26 @@ prepare-build-env:
       KANIKO_DEST_LATEST="${IMAGE_BASE}:latest"
       KANIKO_CACHE_REPO="${IMAGE_BASE}/cache"
       echo "Kaniko image base: ${IMAGE_BASE} (dockerfile=${KANIKO_DOCKERFILE})"
-      KANIKO_EXTRA=""
       KANIKO_ARGS_SUFFIX=""
       if [ -n "${KANIKO_IMAGE_NAME:-}" ]; then
         KANIKO_ARGS_SUFFIX="-${KANIKO_IMAGE_NAME}"
       fi
       KANIKO_BUILD_ARGS_FILE="${CI_PROJECT_DIR}/.dsoaas/kaniko-extra-build-args${KANIKO_ARGS_SUFFIX}"
+      # Load per-app build args from file; each line is a single flag
+      # (--build-arg=KEY=VALUE) and is passed as one positional arg to Kaniko.
+      set --
       if [ -f "${KANIKO_BUILD_ARGS_FILE}" ]; then
-        KANIKO_EXTRA=$(tr '\n' ' ' < "${KANIKO_BUILD_ARGS_FILE}")
+        while IFS= read -r _arg; do
+          [ -n "${_arg}" ] || continue
+          set -- "$@" "${_arg}"
+        done < "${KANIKO_BUILD_ARGS_FILE}"
+        echo "kaniko: loaded $# build arg(s) from ${KANIKO_BUILD_ARGS_FILE}"
       fi
       STAGED_WS="${CI_PROJECT_DIR}/.dsoaas/staged-workspace"
       if [ -d "${STAGED_WS}" ]; then
         cp -a "${STAGED_WS}/." "${CI_PROJECT_DIR}/"
         echo "Applied BUILD raw_file profile(s) from prepare-build-env artifacts"
       fi
-      # shellcheck disable=SC2086
       /kaniko/executor \
         --context="${CI_PROJECT_DIR}" \
         --dockerfile="${KANIKO_DOCKERFILE}" \
@@ -179,7 +187,7 @@ prepare-build-env:
         --cache=true \
         --cache-copy-layers=false \
         --cache-repo="${KANIKO_CACHE_REPO}" \
-        ${KANIKO_EXTRA}
+        "$@"
   rules:
     - if: '$CI_COMMIT_BRANCH'
 
@@ -206,6 +214,14 @@ test:
 # Runs in the test stage with no job dependencies so it is not skipped when a
 # project's `test` job fails. Do not add `needs: [test]` unless you also set
 # optional: true on that need, or Sonar will be skipped on test failure.
+#
+# Uses a writable work dir under /tmp (not $CI_PROJECT_DIR/.scannerwork) because
+# sonarsource/sonar-scanner-cli runs non-root while test/build jobs often leave a
+# root-owned workspace. Override SONAR_SCANNER_WORK_DIR if needed.
+# The script passes -Dsonar.working.directory (the correct sonar-scanner-engine property;
+# older sonar.scanner.workDir is not recognised by scanner >= 5.x).
+# When extending this job with a custom before_script, prepend:
+#   - !reference [.sonar-scan, before_script]
 # =============================================================================
 .sonar-scan:
   stage: test
@@ -216,9 +232,24 @@ test:
     entrypoint: [""]
   variables:
     GIT_DEPTH: "0"
+    SONAR_SCANNER_WORK_DIR: "/tmp/scannerwork"
+  before_script:
+    - |
+      set -eu
+      SONAR_WORK_DIR="${SONAR_SCANNER_WORK_DIR:-/tmp/scannerwork}"
+      rm -rf "${SONAR_WORK_DIR}" .scannerwork 2>/dev/null || true
+      mkdir -p "${SONAR_WORK_DIR}"
+      chmod 777 "${SONAR_WORK_DIR}"
   script:
     - |
       set -euo pipefail
+      SONAR_WORK_DIR="${SONAR_SCANNER_WORK_DIR:-/tmp/scannerwork}"
+      # sonar.working.directory is the correct property recognised by sonar-scanner-engine
+      # (sonar.scanner.workDir is a legacy alias that newer scanner versions ignore).
+      case " ${SONAR_SCANNER_OPTS:-} " in
+        *"sonar.working.directory="*) ;;
+        *) export SONAR_SCANNER_OPTS="-Dsonar.working.directory=${SONAR_WORK_DIR} ${SONAR_SCANNER_OPTS:-}" ;;
+      esac
       if [ -z "${SONAR_ALLOWED_BRANCHES:-}" ] || [ -z "${SONAR_TOKEN:-}" ]; then
         echo "Sonar skipped: set SONAR_ALLOWED_BRANCHES and SONAR_TOKEN to enable analysis."
         exit 0
@@ -399,13 +430,14 @@ container_scanning:
       # (pending-install / pending-upgrade / pending-rollback), helm upgrade
       # refuses to proceed.  Roll back to the last good revision so the next
       # upgrade can start cleanly.
-      RELEASE_STATUS=$(helm status "${CI_PROJECT_NAME}" \
+      RELEASE_NAME="${HELM_RELEASE_NAME:-$CI_PROJECT_NAME}"
+      RELEASE_STATUS=$(helm status "${RELEASE_NAME}" \
         --namespace "${KUBE_NAMESPACE:-$DEPLOY_ENV}" 2>/dev/null | grep "^STATUS:" | awk '{print $2}' || true)
       if echo "${RELEASE_STATUS}" | grep -qE "^pending-"; then
-        echo "Release ${CI_PROJECT_NAME} is stuck in ${RELEASE_STATUS}; rolling back..."
-        helm rollback "${CI_PROJECT_NAME}" 0 \
+        echo "Release ${RELEASE_NAME} is stuck in ${RELEASE_STATUS}; rolling back..."
+        helm rollback "${RELEASE_NAME}" 0 \
           --namespace "${KUBE_NAMESPACE:-$DEPLOY_ENV}" \
-          --wait || helm uninstall "${CI_PROJECT_NAME}" \
+          --wait || helm uninstall "${RELEASE_NAME}" \
           --namespace "${KUBE_NAMESPACE:-$DEPLOY_ENV}" || true
       fi
     - |
@@ -415,7 +447,8 @@ container_scanning:
       fi
       # Fall back to DEPLOY_ENV if KUBE_NAMESPACE is not env-scoped by the API,
       # so the deploy always lands in the correct namespace.
-      helm upgrade --install "${CI_PROJECT_NAME}" "${CHART_OCI_REF}" \
+      RELEASE_NAME="${HELM_RELEASE_NAME:-$CI_PROJECT_NAME}"
+      helm upgrade --install "${RELEASE_NAME}" "${CHART_OCI_REF}" \
         --version "${CHART_VERSION}" ${HELM_PLAIN_HTTP_FLAG} \
         --namespace "${KUBE_NAMESPACE:-$DEPLOY_ENV}" \
         --set image.repository="${CI_REGISTRY_IMAGE}" \
@@ -428,7 +461,7 @@ container_scanning:
         --timeout 5m \
         ${EXTRA_VALUES} \
         ${EXTRA_HELM_ARGS:-}
-    - echo "Deployed ${CI_PROJECT_NAME} to ${DEPLOY_ENV} at https://${APP_HOST}"
+    - echo "Deployed ${HELM_RELEASE_NAME:-$CI_PROJECT_NAME} to ${DEPLOY_ENV} at https://${APP_HOST}"
   after_script:
     - rm -f /tmp/kube/config
 

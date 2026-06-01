@@ -78,7 +78,7 @@ log "Applying GitLab runner RBAC and kubeconfig CI variables..."
 if [[ "${SKIP_SEED:-0}" != "1" ]]; then
   log "Seeding GitLab config/template projects (idempotent)..."
   "${SCRIPT_DIR}/seed-platform-projects.sh"
-  log "Seeding smoke sample apps (smoke-api, smoke-web)..."
+  log "Seeding smoke sample apps (smoke-api, smoke-web, smoke-mono, smoke-sonar)..."
   "${SCRIPT_DIR}/seed-smoke-samples.sh"
 else
   log "SKIP_SEED=1 — skipping seed-platform-projects.sh and seed-smoke-samples.sh"

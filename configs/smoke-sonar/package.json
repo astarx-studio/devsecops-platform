@@ -1,0 +1,6 @@
+{
+  "name": "smoke-sonar",
+  "version": "1.0.0",
+  "private": true,
+  "description": "DSOaaS smoke — CI-only project for Sonar + coverage validation"
+}

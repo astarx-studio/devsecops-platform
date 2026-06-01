@@ -1,0 +1,3 @@
+# Smoke Mono — shared Helm overrides for both apps.
+# The web app has no runtime secrets so external secret sync is not required.
+replicaCount: 1

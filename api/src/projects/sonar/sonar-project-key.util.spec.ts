@@ -6,8 +6,8 @@ import {
 
 describe('normalizeSonarProjectKey', () => {
   it('strips trailing underscore from echo+tr newline artifact', () => {
-    expect(normalizeSonarProjectKey('external-kai-datahub-datahub-fe_main\n')).toBe(
-      'external-kai-datahub-datahub-fe_main',
+    expect(normalizeSonarProjectKey('clients-demo-monorepo-fe_main\n')).toBe(
+      'clients-demo-monorepo-fe_main',
     );
   });
 
@@ -18,8 +18,8 @@ describe('normalizeSonarProjectKey', () => {
 
 describe('buildSonarProjectKey', () => {
   it('matches Auto DevOps pipeline slug rules', () => {
-    expect(buildSonarProjectKey('external/kai/datahub/datahub-fe', 'main')).toBe(
-      'external-kai-datahub-datahub-fe_main',
+    expect(buildSonarProjectKey('clients/demo/monorepo-fe', 'main')).toBe(
+      'clients-demo-monorepo-fe_main',
     );
   });
 
@@ -30,6 +30,6 @@ describe('buildSonarProjectKey', () => {
 
 describe('buildSonarProjectName', () => {
   it('formats display name with branch', () => {
-    expect(buildSonarProjectName('Datahub FE', 'staging')).toBe('Datahub FE (staging)');
+    expect(buildSonarProjectName('Monorepo FE', 'staging')).toBe('Monorepo FE (staging)');
   });
 });

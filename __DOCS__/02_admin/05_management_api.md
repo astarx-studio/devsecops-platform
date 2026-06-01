@@ -116,15 +116,28 @@ Projects may set **both**, **one**, or **neither** capability.
 
 ## Deployment targets
 
-Each project has a **`deploymentTargets`** array (not limited to dev/stg/prod). Standard keys `dev`, `stg`, and `prod` map to the shared pipeline jobs; extra keys (e.g. `prod-alt`) get a generated job in **`.dsoaas/deploy-targets.gitlab-ci.yml`**.
+Each project has a **`deploymentTargets`** array (not limited to dev/stg/prod). Each target may include one or more **`apps`** (build image, Dockerfile path, ingress host). Standard keys `dev`, `stg`, and `prod` use the shared pipeline; when `apps[]` is set, the API generates per-app jobs and disables the stock `deploy:dev` / `deploy:stg` / `deploy:prod` entries in **`.dsoaas/deploy-targets.gitlab-ci.yml`** for that target. Extra keys (e.g. `prod-alt`) always get generated `deploy:<key>-<app>` jobs.
 
 | Mutation | Purpose |
 | -------- | ------- |
-| `upsertDeploymentTarget` | Enable/disable a target, set branch ref, sync Vault + GitLab CI, optional K8s teardown when disabling |
-| `removeDeploymentTarget` | Remove target from registry, tear down K8s, delete env-scoped CI vars |
-| `setDeploymentTargetHostname` | Override `APP_HOST` for any target key |
+| `upsertDeploymentTarget` | Enable/disable a target, set branch ref, **`apps[]`**, sync Vault + GitLab CI + `.dsoaas/*` fragments, merge root `.gitlab-ci.yml` `include:` only, optional K8s teardown when disabling |
+| `removeDeploymentTarget` | Remove target from registry, tear down all per-app Helm releases, delete env-scoped CI vars for each app scope |
+| `setDeploymentTargetHostname` | Override primary `appHost` / first app host for a target key |
+
+**Per-app GitLab CI variables** (environment scope `{targetKey}-{appName}`, e.g. `prod-admin`):
+
+| Variable | Purpose |
+| -------- | ------- |
+| `APP_HOST` | Ingress hostname for that app |
+| `EXTRA_HELM_ARGS` | `--set image.repository=$CI_REGISTRY_IMAGE/<image>` |
+| `HELM_RELEASE_NAME` | Helm release (`{effectiveSlug}` or `{effectiveSlug}-{image}`) |
+| `KUBE_NAMESPACE`, `VAULT_PROJECT_PATH`, `DEPLOY_ENV`, `KUBECONFIG_B64` | Same semantics as single-app deploy |
+
+**Global per target:** `DEPLOY_<KEY>_REF` (scope `*`).
 
 **Deploy deactivation:** set `DEPLOY_<KEY>_REF` to **`none`** (only this value). The API uses `none` when a target is disabled.
+
+See [Deployment target apps](../03_devs/08_deployment_target_apps.md) for GraphQL examples and host derivation rules.
 
 **`registerGitLabProject`:** adopt an existing GitLab project by numeric `gitlabProjectId` (409 if already registered). Optionally wires Auto DevOps the same as `createProject`. Use `branchOptions` (`defaultBranch`, per-env `deployRefs`, or `useDefaultBranchForAllDeployTargets`) when the repo does not use `main` / `develop` / `staging`.
 

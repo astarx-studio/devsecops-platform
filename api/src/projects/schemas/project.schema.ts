@@ -15,6 +15,24 @@ export type DeployEnv = 'dev' | 'stg' | 'prod';
 export type ClusterProfile = 'dev' | 'stg' | 'prod';
 
 /**
+ * One build/deploy app within a deployment target (monorepo-friendly).
+ * Dockerfile-based builds only.
+ */
+export class TargetApp {
+  /** DNS-label app identifier (drives UI label and default image name). */
+  name!: string;
+
+  /** Container registry path suffix ($CI_REGISTRY_IMAGE/<image>). */
+  image!: string;
+
+  /** Dockerfile path relative to repo root (default Dockerfile). */
+  dockerfile!: string;
+
+  /** Resolved ingress hostname for this app. */
+  host!: string;
+}
+
+/**
  * One deployable surface for a project (hostname, namespace, branch ref, CI wiring).
  * Keys are not limited to dev/stg/prod — e.g. `prod-alt` is valid.
  */
@@ -28,8 +46,14 @@ export class DeploymentTarget {
   /** Which kubeconfig file (dev|stg|prod) backs this target. */
   clusterProfile!: ClusterProfile;
 
-  /** Ingress hostname for this target. */
+  /**
+   * Primary ingress hostname (legacy / first app).
+   * Kept in sync with `apps[0].host` when apps are present.
+   */
   appHost!: string;
+
+  /** Per-app build and deploy configuration (min one when set). */
+  apps?: TargetApp[];
 
   /** Git branch that triggers deploy, or `none` when disabled. */
   deployRef!: string;
@@ -77,7 +101,7 @@ export class EnvProfile {
   @Prop({ required: true })
   label!: string;
 
-  @Prop({ required: true, enum: ['build', 'runtime'] })
+  @Prop({ required: true, type: String, enum: ['build', 'runtime'] })
   injectionPhase!: EnvProfileInjectionPhase;
 
   @Prop({ type: [String], required: true, default: [] })
@@ -95,7 +119,7 @@ export class EnvProfile {
   @Prop()
   filename?: string;
 
-  @Prop({ enum: ['raw_file', 'dotenv_build_args'] })
+  @Prop({ type: String, enum: ['raw_file', 'dotenv_build_args'] })
   buildDelivery?: EnvProfileBuildDelivery;
 
   @Prop({ required: true })
@@ -205,10 +229,11 @@ export class Project {
 
   /**
    * Named deployment targets (source of truth for deploy wiring).
-   * When absent on read, derived from appHosts + capabilities.deployable.
+   * When absent on read (undefined), derived from appHosts + capabilities.deployable.
+   * An explicit empty array means the operator removed all targets.
    */
-  @Prop({ type: [Object], default: [] })
-  deploymentTargets!: DeploymentTarget[];
+  @Prop({ type: [Object] })
+  deploymentTargets?: DeploymentTarget[];
 
   /** Branch-scoped env profiles (Vault-backed; see envProfiles[].vaultPath). */
   @Prop({ type: [Object], default: [] })

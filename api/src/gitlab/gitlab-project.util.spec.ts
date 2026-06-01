@@ -17,7 +17,7 @@ describe('isGitLabProjectPendingDeletion', () => {
   it('detects renamed pending-delete paths', () => {
     expect(
       isGitLabProjectPendingDeletion({
-        path_with_namespace: 'external/kai/datahub-fe-deletion_scheduled-2',
+        path_with_namespace: 'clients/demo/monorepo-fe-deletion_scheduled-2',
       }),
     ).toBe(true);
   });

@@ -93,7 +93,7 @@ describe('VaultService', () => {
 
   describe('hasSecretTree', () => {
     it('returns false when metadata is absent', async () => {
-      httpService.get.mockImplementation((url: string) => {
+      getFn.mockImplementation((url: string) => {
         if (String(url).includes('/metadata/projects/acme/webapp')) {
           return throwError(() => ({ response: { status: 404 } }));
         }

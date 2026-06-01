@@ -25,6 +25,21 @@ export class AppHostsType {
   prod?: string;
 }
 
+@ObjectType({ description: 'Build/deploy app within a deployment target.' })
+export class TargetAppType {
+  @Field(() => String, { description: 'App identifier (DNS label).' })
+  name!: string;
+
+  @Field(() => String, { description: 'Container registry image path suffix.' })
+  image!: string;
+
+  @Field(() => String, { description: 'Dockerfile path relative to repo root.' })
+  dockerfile!: string;
+
+  @Field(() => String, { description: 'Ingress hostname for this app.' })
+  host!: string;
+}
+
 @ObjectType({ description: 'A named deployment target (dev, stg, prod, or custom e.g. prod-alt).' })
 export class DeploymentTargetType {
   @Field(() => String, { description: 'Target key (DNS label).' })
@@ -36,8 +51,11 @@ export class DeploymentTargetType {
   @Field(() => ClusterProfile, { description: 'Platform kubeconfig profile.' })
   clusterProfile!: ClusterProfile;
 
-  @Field(() => String, { description: 'Ingress hostname.' })
+  @Field(() => String, { description: 'Primary ingress hostname (first app).' })
   appHost!: string;
+
+  @Field(() => [TargetAppType], { description: 'Per-app build and deploy configuration.' })
+  apps!: TargetAppType[];
 
   @Field(() => String, { description: 'Branch ref that triggers deploy, or "none" when disabled.' })
   deployRef!: string;
@@ -212,9 +230,15 @@ export class ProjectType {
   vaultBasePath!: string;
 
   @Field(() => String, {
-    description: 'Helm release name in each k3d namespace — always equals effectiveSlug.',
+    description:
+      'Default Helm release name (legacy); per-app releases use HELM_RELEASE_NAME in CI.',
   })
   helmReleaseName!: string;
+
+  @Field(() => String, {
+    description: 'Platform apps DNS zone for host derivation (e.g. apps.example.com).',
+  })
+  appsDomain!: string;
 
   @Field(() => AppHostsType, {
     description: 'Legacy hostname map (dev/stg/prod) derived from deploymentTargets.',
@@ -284,6 +308,20 @@ export class ProjectType {
 
   @Field(() => Date, { description: 'Last modification timestamp.' })
   updatedAt!: Date;
+}
+
+@ObjectType({
+  description: 'Result of upsertDeploymentTarget including optional CI sync warnings.',
+})
+export class UpsertDeploymentTargetPayload {
+  @Field(() => ProjectType, { description: 'Updated project.' })
+  project!: ProjectType;
+
+  @Field(() => [String], {
+    description:
+      'Non-fatal warnings from GitLab CI sync (e.g. root .gitlab-ci.yml not updated when parse failed).',
+  })
+  ciSyncWarnings!: string[];
 }
 
 /** Result of reconcileGitLabProjects — legacy backfill from GitLab scan. */

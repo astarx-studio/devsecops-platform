@@ -564,6 +564,27 @@ smoke_delete_k8s_release() {
   done
 }
 
+# Deletes all Helm releases for a project: the base release plus per-app releases
+# (pattern: {effectiveSlug}-{image} when image != effectiveSlug, per resolveHelmReleaseName).
+#
+# Args: $1 effectiveSlug, $2... appImages (optional; omit for single-app projects)
+smoke_delete_k8s_releases_for_project() {
+  local effective_slug="$1"
+  shift
+  local -a app_images=("$@")
+
+  # Always try the base release (single-app pattern or legacy).
+  smoke_delete_k8s_release "${effective_slug}"
+
+  # Per-app releases: {effectiveSlug}-{image} when image differs from slug.
+  for image in "${app_images[@]+"${app_images[@]}"}"; do
+    [[ -z "${image}" ]] && continue
+    if [[ "${image}" != "${effective_slug}" ]]; then
+      smoke_delete_k8s_release "${effective_slug}-${image}"
+    fi
+  done
+}
+
 smoke_delete_mongo_by_id() {
   local mongo_id="$1"
   local path="$2"
@@ -756,10 +777,15 @@ smoke_delete_project_via_api() {
   local gitlab_id="$2"
   local release="$3"
   local path="$4"
+  # Optional: remaining args are app image names for monorepo multi-release cleanup.
+  shift 4
+  local -a app_images=("$@")
+
   local group_path="${path%%/*}"
   local slug="${path##*/}"
 
-  smoke_delete_k8s_release "${release}"
+  # Delete all Helm releases (base + per-app for monorepo).
+  smoke_delete_k8s_releases_for_project "${release}" "${app_images[@]+"${app_images[@]}"}"
 
   if [[ -n "${mongo_id}" && "${mongo_id}" != "null" ]]; then
     smoke_delete_mongo_via_api "${mongo_id}" "${path}" || true
@@ -770,4 +796,71 @@ smoke_delete_project_via_api() {
   fi
 
   smoke_wait_slug_path_free "${group_path}" "${slug}"
+}
+
+# Post-cleanup verification: fails (non-zero exit) if any operational smoke
+# artifacts remain. Audit logs and service logs are intentionally retained.
+#
+# Args: $1 group_path, $2... project slugs
+smoke_verify_cleanup() {
+  local group_path="$1"
+  shift
+  local -a slugs=("$@")
+  local kube_ctx="${KUBE_CONTEXT:-k3d-dsoaas}"
+  local failures=0
+
+  log "Verifying cleanup — checking for remaining smoke artifacts..."
+
+  # 1. GitLab project paths must be free.
+  for slug in "${slugs[@]}"; do
+    local enc http_code
+    enc="$(smoke_encode_path "${group_path}/${slug}")"
+    http_code="$(smoke_gitlab_http_code "${GITLAB_API}/projects/${enc}" 2>/dev/null || echo "000")"
+    if [[ "${http_code}" == "200" ]]; then
+      warn "verify_cleanup: GitLab project ${group_path}/${slug} still exists (HTTP 200)"
+      failures=$((failures + 1))
+    fi
+  done
+
+  # 2. MongoDB project count for the group prefix must be zero.
+  local mongo_count
+  mongo_count="$(smoke_mongosh platform --eval \
+    "db.projects.countDocuments($(smoke_mongo_group_query "${group_path}"))" 2>/dev/null \
+    | tr -d '\r\n ' || echo "?")"
+  if [[ "${mongo_count}" =~ ^[0-9]+$ && "${mongo_count}" != "0" ]]; then
+    warn "verify_cleanup: ${mongo_count} Mongo project document(s) still present for ${group_path}"
+    failures=$((failures + 1))
+  fi
+
+  # 3. No Helm releases matching smoke slug patterns in standard namespaces.
+  local helm_list
+  for ns in dev stg prod; do
+    for slug in "${slugs[@]}"; do
+      if helm --kube-context "${kube_ctx}" -n "${ns}" list --short 2>/dev/null \
+          | grep -q "^${slug}"; then
+        warn "verify_cleanup: Helm release(s) matching '${slug}' still present in namespace ${ns}"
+        failures=$((failures + 1))
+      fi
+    done
+  done
+
+  # 4. Vault secret paths (optional — skip when VAULT_ROOT_TOKEN not set).
+  if [[ -n "${VAULT_ROOT_TOKEN:-}" ]]; then
+    local vp
+    while IFS= read -r vp; do
+      [[ -n "${vp}" ]] || continue
+      local remaining_keys
+      remaining_keys="$(smoke_vault_list_keys "${vp}" 2>/dev/null || true)"
+      if [[ -n "${remaining_keys}" ]]; then
+        warn "verify_cleanup: Vault path '${vp}' still has keys: ${remaining_keys}"
+        failures=$((failures + 1))
+      fi
+    done < <(smoke_vault_paths_for_mongo_query \
+      "$(smoke_mongo_group_query "${group_path}")" 2>/dev/null || true)
+  fi
+
+  if [[ "${failures}" -gt 0 ]]; then
+    die "verify_cleanup: ${failures} remaining artifact(s) found — cleanup incomplete"
+  fi
+  log "verify_cleanup: all checks passed — no operational smoke artifacts remain"
 }

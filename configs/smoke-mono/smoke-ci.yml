@@ -1,0 +1,32 @@
+# =============================================================================
+# smoke-mono — custom CI overrides (developer-owned)
+# =============================================================================
+# Included from root .gitlab-ci.yml via:
+#   include:
+#     - local: smoke-ci.yml
+#
+# Overrides the platform's placeholder test job and extends .sonar-scan for
+# SonarQube analysis. This file is committed to the repo by the developer
+# and is NOT managed by the DSOaaS Management API.
+#
+# Pattern (from platform docs):
+#   When extending .sonar-scan with a custom before_script, prepend:
+#     - !reference [.sonar-scan, before_script]
+# =============================================================================
+
+test:
+  stage: test
+  image: alpine:3.20
+  before_script:
+    - !reference [.load-vault-env, before_script]
+  script:
+    - echo "smoke-mono test pass"
+  rules:
+    - if: "$CI_COMMIT_BRANCH"
+
+sonar:scan:
+  extends: .sonar-scan
+  before_script:
+    - !reference [.sonar-scan, before_script]
+  rules:
+    - if: "$CI_COMMIT_BRANCH"
