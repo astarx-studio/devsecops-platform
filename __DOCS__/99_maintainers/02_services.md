@@ -467,6 +467,8 @@ Users authenticating via OIDC who belong to the Keycloak `admins` group automati
 
 **Health check:** `GET /api/system/status` until `status` is `UP` (long `start_period` on first boot).
 
+**Memory:** Compose sets Web and CE JVM heaps to 1g each (`SONAR_WEB_JAVAADDITIONALOPTS`, `SONAR_CE_JAVAADDITIONALOPTS` in `docker-compose.yml`) plus embedded Elasticsearch in the same container. If optional `__LOCAL__/docker-compose.resources.yml` caps Sonar below ~5G, CE report processing may hit `OutOfMemoryError` in `ce.log`, followed by `CancellationException` on ES refresh in failed background tasks. Re-run the GitLab `sonar:scan` job after fixing heap/container limits (SonarQube cannot retry failed CE tasks via API).
+
 **Host prerequisite (Linux):** `sysctl -w vm.max_map_count=262144` (persist in `/etc/sysctl.conf` on production hosts). WSL2: set in `.wslconfig` or skip Sonar on Windows-only dev if the limit cannot be raised.
 
 **SSO (SAML + Keycloak):** Keycloak side from `realm-export.json` on first import (see [SonarQube SSO](../02_admin/09_sonarqube_sso.md)). Sonar side: `sonarqube-config-init` + `sonarqube-init`.

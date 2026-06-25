@@ -1099,7 +1099,9 @@ services:
       SONAR_JDBC_PASSWORD: ${SONAR_DB_PASSWORD:?set SONAR_DB_PASSWORD in .env}
       # javaagent must be merged with memory flags since this env var overrides the image default
       SONAR_WEB_JAVAADDITIONALOPTS: "-javaagent:/opt/sonarqube/extensions/plugins/sonarqube-community-branch-plugin.jar=web -Xmx1g -Xms512m"
-      SONAR_CE_JAVAADDITIONALOPTS: "-javaagent:/opt/sonarqube/extensions/plugins/sonarqube-community-branch-plugin.jar=ce"
+      # CE heap must be set explicitly: env var overrides image defaults. Low CE heap causes
+      # OutOfMemoryError during report processing and cascading ES CancellationException on refresh.
+      SONAR_CE_JAVAADDITIONALOPTS: "-javaagent:/opt/sonarqube/extensions/plugins/sonarqube-community-branch-plugin.jar=ce -Xmx1g -Xms512m"
     volumes:
       - ./.vols/sonarqube/data:/opt/sonarqube/data
       - ./.vols/sonarqube/extensions:/opt/sonarqube/extensions
