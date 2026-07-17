@@ -12,7 +12,7 @@
 SHELL := /usr/bin/bash
 ROOT := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 
-.PHONY: help bootstrap vault-bootstrap update-dso-configs smoke smoke-deploy smoke-cleanup reset backup restore migrate-v1 verify-sonar reset-sonarqube
+.PHONY: help bootstrap vault-bootstrap update-dso-configs smoke smoke-deploy smoke-cleanup reset backup restore migrate-v1 verify-sonar reset-sonarqube upgrade
 
 help:
 	@echo "Targets:"
@@ -28,6 +28,9 @@ help:
 	@echo "  make backup        - ./bootstrap/backup.sh → backups/platform-<timestamp>.tar.gz"
 	@echo "  make restore       - requires ARCHIVE=backups/platform-....tar.gz (compose stack must be down)"
 	@echo "  make migrate-v1    - prints __DOCS__/01_infra/07_v1_migration.md (manual operator workflow)"
+	@echo "  make upgrade <svc> [VERSION=<tag>] - guided image upgrade (svc: gitlab). Omit VERSION to use the latest (with confirmation)."
+	@echo "                       e.g. make upgrade gitlab  |  make upgrade gitlab VERSION=18.11.2-ce.0"
+	@echo "                       flags: SKIP_BACKUP=1, ASSUME_YES=1, RUNNER_VERSION=X.Y.Z, HEALTH_TIMEOUT=<s>"
 
 bootstrap:
 	@cd "$(ROOT)" && bash ./bootstrap/bootstrap.sh
@@ -69,3 +72,15 @@ reset:
 migrate-v1:
 	@echo "v1 → Auto DevOps migration is a rare, manual workflow (no bundled script)."
 	@echo "See: $(ROOT)__DOCS__/01_infra/07_v1_migration.md"
+
+# `make upgrade <service> VERSION=<tag>` — the service name is passed as an extra
+# goal (e.g. `gitlab`); the catch-all rule below swallows it so make does not error.
+upgrade:
+	@cd "$(ROOT)" && VERSION="$(VERSION)" SKIP_BACKUP="$(SKIP_BACKUP)" ASSUME_YES="$(ASSUME_YES)" \
+	  RUNNER_VERSION="$(RUNNER_VERSION)" HEALTH_TIMEOUT="$(HEALTH_TIMEOUT)" \
+	  bash ./bootstrap/upgrade.sh $(filter-out upgrade,$(MAKECMDGOALS))
+
+# Swallow extra goal words (the service name) for `make upgrade <service>`.
+# Only matches goals with no explicit rule; all real targets take precedence.
+%:
+	@:

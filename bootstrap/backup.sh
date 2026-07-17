@@ -56,14 +56,29 @@ members=()
 [[ -f "${ROOT}/.env" ]] && members+=(".env") || log "WARN  No .env at repo root — archive will contain .vols only"
 [[ -d "${ROOT}/.vols" ]] && members+=(".vols") || { log "WARN  No .vols directory — nothing to archive"; exit 1; }
 
-# shellcheck disable=SC2086
+# GNU tar exit codes: 0 = ok, 1 = "some files differ" (non-fatal — e.g. a live
+# container mutated a file mid-read, such as mongo's diagnostic.data metrics
+# capture), 2 = fatal error. Only treat >=2 as a real failure so a busy stack
+# doesn't turn a good backup into a false negative. `set -e` is relaxed around
+# the call so we can inspect the exit code ourselves.
+set +e
 tar -czf "${ARCHIVE}" \
   --exclude='.vols/gitlab/data/builds' \
   --exclude='.vols/gitlab/logs' \
+  --exclude='.vols/mongo/diagnostic.data' \
   --exclude='node_modules' \
   --exclude='api/node_modules' \
   --exclude='api/dist' \
   -C "${ROOT}" "${members[@]}"
+TAR_STATUS=$?
+set -e
+
+if (( TAR_STATUS >= 2 )); then
+  log "ERROR tar failed with exit ${TAR_STATUS}"
+  exit "${TAR_STATUS}"
+elif (( TAR_STATUS == 1 )); then
+  log "WARN  tar reported non-fatal changes (exit 1) — likely a live container mutating a file mid-read. Archive should still be valid."
+fi
 
 log "Done. Size: $(du -h "${ARCHIVE}" | cut -f1)"
 log "To restore: ./bootstrap/restore.sh ${ARCHIVE}"

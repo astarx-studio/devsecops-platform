@@ -21,6 +21,9 @@ configs/smoke-web/.git/
 # Phase-0 backups — may contain sensitive volume data; never commit
 backups/
 
+# Rollback copies left by bootstrap/upgrade.sh (e.g. docker-compose.yml.bak)
+*.bak
+
 # Node.js
 node_modules/
 dist/

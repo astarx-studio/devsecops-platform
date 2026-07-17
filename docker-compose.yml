@@ -423,7 +423,7 @@ services:
   # First boot takes 3-5 minutes (database migrations). shm_size: 256m
   # recommended by GitLab Docker docs to prevent shared memory issues.
   gitlab:
-    image: gitlab/gitlab-ce:18.10.1-ce.0
+    image: gitlab/gitlab-ce:19.2.0-ce.0
     container_name: gitlab
     hostname: gitlab
     restart: unless-stopped
@@ -603,8 +603,8 @@ services:
   # After setting the token in .env:
   #   docker compose up -d gitlab-runner
   gitlab-runner:
-    # Keep in sync with helper_image tag (x86_64-v18.10.1) in .vols/gitlab-runner/config/config.toml
-    image: gitlab/gitlab-runner:v18.10.1
+    # Keep in sync with helper_image tag (x86_64-v19.2.0) in .vols/gitlab-runner/config/config.toml
+    image: gitlab/gitlab-runner:v19.2.0
     container_name: gitlab-runner
     restart: unless-stopped
     entrypoint: [""]
@@ -624,7 +624,7 @@ services:
             --token "$$GITLAB_RUNNER_TOKEN" \
             --executor "docker" \
             --docker-image "docker:latest" \
-            --docker-helper-image "registry.gitlab.com/gitlab-org/gitlab-runner/gitlab-runner-helper:x86_64-v18.10.1" \
+            --docker-helper-image "registry.gitlab.com/gitlab-org/gitlab-runner/gitlab-runner-helper:x86_64-v19.2.0" \
             --docker-privileged \
             --docker-volumes "/cache" \
             --docker-volumes "/certs/client" \
@@ -640,7 +640,7 @@ services:
         else
           sed -i "/^\[\[runners\]\]/a\  request_concurrency = $$GITLAB_RUNNER_CONCURRENT" /etc/gitlab-runner/config.toml
         fi
-        HELPER_IMAGE="registry.gitlab.com/gitlab-org/gitlab-runner/gitlab-runner-helper:x86_64-v18.10.1"
+        HELPER_IMAGE="registry.gitlab.com/gitlab-org/gitlab-runner/gitlab-runner-helper:x86_64-v19.2.0"
         CFG=/etc/gitlab-runner/config.toml
         # Keys under [runners.docker] need 4 spaces (2 for [[runners]] + 2 for subsection).
         if grep -q '^[[:space:]]*helper_image = ' "$$CFG"; then

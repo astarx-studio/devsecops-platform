@@ -139,6 +139,24 @@ This platform pins specific image versions in `docker-compose.yml` to prevent un
 3. Recreate the container: `docker compose up -d --no-deps --force-recreate <service-name>`
 4. Check logs for any migration errors: `docker compose logs -f <service-name>`
 
+### Guided GitLab upgrade (`make upgrade`)
+
+For GitLab, [`bootstrap/upgrade.sh`](../../bootstrap/upgrade.sh) automates the runbook above — backup, tag rewrite, pull, recreate, health wait, and an optional matching `gitlab-runner` bump:
+
+```bash
+# Pin an explicit target version:
+make upgrade gitlab VERSION=18.11.2-ce.0
+
+# Or omit VERSION to resolve the latest published tag (you still confirm before it runs):
+make upgrade gitlab
+```
+
+It resolves the current pinned tag, prompts you to confirm the upgrade path, runs `make backup`, rewrites the tag in `docker-compose.yml` (keeping a `*.bak` for rollback), recreates only the `gitlab` container, and waits for it to report healthy. It then offers (with confirmation) to bump `gitlab-runner` + `helper_image` to the matching version.
+
+When `VERSION` is omitted, the script queries Docker Hub for the highest published `gitlab/gitlab-ce` tag and shows it as the proposed target. **The latest may be several stops ahead of your current version** — the confirmation prompt is your chance to verify the upgrade path and, if needed, re-run with an explicit intermediate `VERSION=<tag>` instead.
+
+Flags (set as make variables): `SKIP_BACKUP=1`, `ASSUME_YES=1` (non-interactive; also auto-accepts an auto-resolved latest version), `RUNNER_VERSION=X.Y.Z` (override derived runner version), `HEALTH_TIMEOUT=<seconds>` (default 900). Run the command once per required upgrade stop.
+
 **GitLab upgrades require special care.** GitLab has a strict version upgrade path — you cannot skip from a very old version to a very new one without going through intermediate versions. Always check the [GitLab upgrade path tool](https://gitlab-com.gitlab.io/support/toolbox/upgrade-path/) before upgrading.
 
 For other services, minor version bumps are generally safe. Major version bumps may have breaking changes — check the service's release notes before upgrading.

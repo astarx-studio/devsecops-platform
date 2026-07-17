@@ -106,4 +106,4 @@ A few things can't be automated in the current version:
 
 - **Runner registration** happens after first boot, as described above
 - **GitLab group setup** (templates, configs) is a one-time manual step
-- **GitLab upgrades** require attention — never skip major versions, and always check the [GitLab upgrade path tool](https://gitlab-com.gitlab.io/support/toolbox/upgrade-path/) before upgrading
+- **GitLab upgrades** require attention — never skip required versions, and always check the [GitLab upgrade path tool](https://gitlab-com.gitlab.io/support/toolbox/upgrade-path/) before upgrading. Use the guided `make upgrade gitlab VERSION=<tag>` flow (see [Operations → Upgrading services](../01_infra/04_operations.md#upgrading-services))
