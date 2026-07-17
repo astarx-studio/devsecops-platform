@@ -21,6 +21,12 @@ entryPoints:
     address: ":8082"
   web:
     address: ":80"
+    # Large multipart uploads (e.g. Transcriptor) need > default 60s readTimeout.
+    transport:
+      respondingTimeouts:
+        readTimeout: 0s
+        writeTimeout: 0s
+        idleTimeout: 180s
     http:
       redirections:
         entryPoint:
@@ -29,6 +35,13 @@ entryPoints:
           permanent: true
   websecure:
     address: ":443"
+    transport:
+      respondingTimeouts:
+        # 0 = no limit. Default 60s caused Gateway Timeout on ~100MB+ uploads
+        # over the VPN edge (Traefik never finished reading the request body).
+        readTimeout: 0s
+        writeTimeout: 0s
+        idleTimeout: 180s
     http:
       tls:
         certResolver: letsencrypt
