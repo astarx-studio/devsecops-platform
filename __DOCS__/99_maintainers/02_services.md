@@ -418,31 +418,35 @@ Users authenticating via OIDC who belong to the Keycloak `admins` group automati
 | Volumes | — |
 | Depends on | `keycloak` (healthy) |
 
+Two containers share this image: **`oauth2-proxy`** (operator tier, port 4180) and **`oauth2-proxy-apps`** (dev/stg app zones, port 4181).
+
 **Key environment variables:**
 
 | Variable | Purpose |
 |---|---|
 | `OAUTH2_PROXY_OIDC_ISSUER_URL` | Internal Keycloak issuer (`http://keycloak:8080/realms/devops`) |
-| `OAUTH2_PROXY_CLIENT_ID` | `oauth2-proxy` (Keycloak client) |
-| `OAUTH2_PROXY_CLIENT_SECRET` | Client secret from Keycloak |
-| `OAUTH2_PROXY_COOKIE_SECRET` | 32-byte random secret for cookie encryption |
-| `OAUTH2_PROXY_COOKIE_DOMAINS` | `.devops.yourdomain.com` |
-| `OAUTH2_PROXY_REDIRECT_URL` | `https://${OAUTH_DOMAIN}/oauth2/callback` |
-| `OAUTH2_PROXY_WHITELIST_DOMAINS` | `.devops.yourdomain.com` |
+| `OAUTH2_PROXY_CLIENT_ID` | `oauth2-proxy` or `oauth2-proxy-apps` (Keycloak client) |
+| `OAUTH2_PROXY_CLIENT_SECRET` | Client secret from Keycloak (`KC_CLIENT_SECRET_OAUTH2_PROXY` / `_APPS`) |
+| `OAUTH2_PROXY_COOKIE_SECRET` | 32-byte random secret for cookie encryption (separate per instance) |
+| `OAUTH2_PROXY_COOKIE_DOMAINS` | `.yourdomain.com` (base `DOMAIN`, covers app subdomains) |
+| `OAUTH2_PROXY_REDIRECT_URL` | `https://${OAUTH_DOMAIN}` or `https://${OAUTH_APPS_DOMAIN}` + `/oauth2/callback` |
+| `OAUTH2_PROXY_WHITELIST_DOMAINS` | `.yourdomain.com` |
 | `OAUTH2_PROXY_EMAIL_DOMAINS` | `*` (allow all email domains) |
-| `OAUTH2_PROXY_HTTP_ADDRESS` | `0.0.0.0:4180` |
+| `OAUTH2_PROXY_HTTP_ADDRESS` | `0.0.0.0:4180` (operator) or `4181` (apps) |
 | `OAUTH2_PROXY_REVERSE_PROXY` | `true` (trusts X-Forwarded headers from Traefik) |
 | `OAUTH2_PROXY_SET_XAUTHREQUEST` | `true` (sets X-Auth-Request-* headers) |
 | `OAUTH2_PROXY_SKIP_PROVIDER_BUTTON` | `true` (skips the "Sign in with..." button, redirects immediately) |
 | `OAUTH2_PROXY_PASS_ACCESS_TOKEN` | `true` (passes the OIDC access token downstream) |
-| `OAUTH2_PROXY_ALLOWED_GROUPS` | Comma-separated Keycloak group names (JWT `groups` claim; **plural** — required by oauth2-proxy); default `admins` in Compose if unset |
+| `OAUTH2_PROXY_ALLOWED_GROUPS` | Operator tier: comma-separated Keycloak groups (default `admins`) |
+| `OAUTH2_PROXY_APPS_ALLOWED_GROUPS` | App-zone tier only (Compose env → `OAUTH2_PROXY_ALLOWED_GROUPS` on `oauth2-proxy-apps`; default `admins,users`) |
 
 **Health check:** None defined.
 
 **Operational notes:**
-- `oauth2-proxy` is used as a ForwardAuth endpoint via Traefik's `oidc-auth@file` middleware (`traefik/dynamic/forward-auth.yml`). Browser callbacks use `https://${OAUTH_DOMAIN}` (routed like other devops hostnames on Traefik).
-- Tiered OIDC by extending oauth2-proxy / Traefik / Keycloak (extra instances and callbacks): [Adding tiered OIDC with oauth2-proxy](../02_admin/08_oauth2_proxy_tiers_and_forwardauth.md) in the admin guide.
-- The `OAUTH2_PROXY_COOKIE_SECRET` must be exactly 32 bytes. Generate with: `openssl rand -base64 32 | head -c 32`.
+- **`oauth2-proxy`** is the ForwardAuth target for **`oidc-auth@file`** (`traefik/dynamic/forward-auth.yml`). Browser callbacks use `https://${OAUTH_DOMAIN}`.
+- **`oauth2-proxy-apps`** serves as a **reverse proxy** (`OAUTH2_PROXY_UPSTREAMS` → `oauth2-proxy-apps-hostfix` → k3d NodePort) for specific gated paths only — see **`traefik/dynamic/oauth2-proxy-apps-gated-paths.yml`**, not a whole dev/stg zone. Dev/stg hosts are ungated by default (`traefik/dynamic/k3d-passthrough.yml` → `k3d-ingress`); only the paths explicitly listed in the gated-paths file route through this proxy. Callbacks use `https://${OAUTH_APPS_DOMAIN}`.
+- Tiered OIDC patterns and existing-realm client patching: [Adding tiered OIDC with oauth2-proxy](../02_admin/08_oauth2_proxy_tiers_and_forwardauth.md).
+- The `OAUTH2_PROXY_COOKIE_SECRET` values must be exactly 32 bytes. Generate with: `openssl rand -base64 32 | head -c 32`.
 - `OAUTH2_PROXY_INSECURE_OIDC_SKIP_ISSUER_VERIFICATION` is set to `true` because the internal issuer URL (`http://keycloak:8080/...`) does not match the public issuer URL used in browser-facing discovery in every deployment path.
 
 ---
@@ -526,3 +530,24 @@ Uses `SONARQUBE_INTERNAL_URL` (`http://sonarqube:9000`) from inside the stack. R
 **Optional maintainer reset (not part of normal install):** `make reset-sonarqube` wipes only Sonar DB/data and re-runs init; does not touch GitLab or Keycloak.
 
 **vs GitLab security templates:** GitLab SAST / Secret Detection / Container Scanning remain in the `test` stage for vulnerability report triage. Sonar adds maintainability, coverage, and quality gates — complementary, not a replacement.
+
+---
+
+## devtools stack (shared Postgres)
+
+`devtools/` is a **separate, independent** Docker Compose project — not part of `docker-compose.yml`, not started by `make bootstrap`, and not required for a normal `docker compose up`. It exists to give app teams deploying into the k3d cluster (currently: CFA's `backend-sample1`/`backend-sample2` and **Hasura** on dev/stg) one shared Postgres instance for their dev/stg app-level DB connections, instead of standing up per-project database infrastructure.
+
+| Field | Value |
+|---|---|
+| Compose file | `devtools/docker-compose.yml` (run with `docker compose -p devtools -f devtools/docker-compose.yml up -d`) |
+| Image | `postgres:16-alpine` |
+| Network | `devops-network` (external — joins the main stack's network, does not create its own) |
+| Static IP | `172.19.0.100` by default (`DEVTOOLS_PG_STATIC_IP` in `devtools/.env`) |
+| Init scripts | `devtools/postgres-init/*.sh` — creates `cfa_dev` / `cfa_stg` databases + `pgcrypto` and non-CFA sample-app schemas only. CFA schemas (`rf_stub`, `payable_service`, ...) are **not** created here as of 2026-07-23 — they're owned by the CFA infra repo's `db-core` project (`migrations/cfa/`), applied via its `migrate:dev`/`migrate:stg` CI jobs on push, to avoid two divergent sources of truth for the same schema |
+| Volume | `devtools/.vols/postgres` (gitignored via the repo's `.vols*/` rule) |
+
+**k3d bridge (`devtools/k8s-bridge.yaml` + `devtools/apply-k8s-bridge.sh`):** `devtools-postgres` is a plain Docker container, not a k8s workload, so pods can't resolve it by container name across the node/pod network boundary. The bridge creates a `devtools` namespace with a selector-less Service + manually-authored Endpoints pointing at the container's static IP, exposing it in-cluster as `devtools-postgres.devtools.svc.cluster.local:5432`. Apply once, after both the devtools compose stack and the k3d cluster are up — not part of the mandatory bootstrap chain.
+
+**Developer/laptop access:** exposed via Traefik TCP passthrough on host port `25432` (`traefik/dynamic/tcp-passthrough.yml`, entrypoint `devtools-pg` in `traefik/traefik.yml`) since Traefik itself sits on `devops-network` and can reach the container directly — no NodePort indirection needed. Connect with `psql -h <platform-host> -p 25432 -U <user> -d cfa_dev` (or `cfa_stg`).
+
+**Security note:** rotate the default bootstrap credentials in `devtools/.env` before use in anything beyond a personal sandbox — there is no IP allowlisting on port `25432` by default (auth is Postgres's own user/password only).
