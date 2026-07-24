@@ -1,5 +1,5 @@
 # =============================================================================
-# devtools stack — shared Postgres for CFA dev/stg app-level DB connections.
+# devtools stack — shared Postgres + RabbitMQ for app teams on this host.
 #
 # Independent Compose project (deliberately separate from the main platform
 # stack). Run from the devsecops-platform repo root:
@@ -9,7 +9,12 @@
 #
 # Joins the *existing* devops-network created by the main stack (external),
 # so it's reachable by container name from Traefik and from the k3d server
-# node — see devtools/k8s-bridge.yaml for how dev/stg pods reach it.
+# node — see devtools/k8s-bridge.yaml for how pods reach it.
+#
+# Env isolation (generic):
+#   Postgres  → logical DBs created by project-specific scripts in
+#               postgres-init/ (gitignored; copy from *.sample.sh)
+#   RabbitMQ  → vhosts dev / stg  (created by rabbitmq-init/ensure-vhosts.sh)
 # =============================================================================
 
 networks:
@@ -30,6 +35,7 @@ services:
       POSTGRES_PASSWORD: ${DEVTOOLS_PG_PASSWORD:?set DEVTOOLS_PG_PASSWORD in devtools/.env}
     volumes:
       - ./.vols/postgres:/var/lib/postgresql/data
+      # Project-specific *.sh here are gitignored; only *.sample.sh is tracked.
       - ./postgres-init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${DEVTOOLS_PG_USER:-devtools} -d postgres"]
@@ -40,3 +46,44 @@ services:
     networks:
       devops-network:
         ipv4_address: ${DEVTOOLS_PG_STATIC_IP:-172.19.0.100}
+
+  # Shared RabbitMQ broker. Env isolation is vhost (dev/stg), not separate
+  # containers. Admin user comes from RABBITMQ_DEFAULT_* on first empty volume.
+  # Vhosts are applied by the one-shot init service after the broker is healthy.
+  devtools-rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: devtools-rabbitmq
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: ${DEVTOOLS_RMQ_USER:?set DEVTOOLS_RMQ_USER in devtools/.env}
+      RABBITMQ_DEFAULT_PASS: ${DEVTOOLS_RMQ_PASSWORD:?set DEVTOOLS_RMQ_PASSWORD in devtools/.env}
+    volumes:
+      - ./.vols/rabbitmq:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      devops-network:
+        ipv4_address: ${DEVTOOLS_RMQ_STATIC_IP:-172.19.0.101}
+
+  # One-shot: create vhosts + permissions (safe to re-run). Uses Management API
+  # so it runs after RABBITMQ_DEFAULT_USER exists (unlike load_definitions).
+  devtools-rabbitmq-init:
+    image: curlimages/curl:8.11.1
+    container_name: devtools-rabbitmq-init
+    depends_on:
+      devtools-rabbitmq:
+        condition: service_healthy
+    restart: "no"
+    environment:
+      RMQ_USER: ${DEVTOOLS_RMQ_USER:?set DEVTOOLS_RMQ_USER in devtools/.env}
+      RMQ_PASS: ${DEVTOOLS_RMQ_PASSWORD:?set DEVTOOLS_RMQ_PASSWORD in devtools/.env}
+      RMQ_HOST: devtools-rabbitmq
+    volumes:
+      - ./rabbitmq-init/ensure-vhosts.sh:/ensure-vhosts.sh:ro
+    entrypoint: ["/bin/sh", "/ensure-vhosts.sh"]
+    networks:
+      - devops-network

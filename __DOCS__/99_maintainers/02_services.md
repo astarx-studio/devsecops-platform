@@ -533,23 +533,36 @@ Uses `SONARQUBE_INTERNAL_URL` (`http://sonarqube:9000`) from inside the stack. R
 
 ---
 
-## devtools stack (shared Postgres)
+## devtools stack (shared Postgres + RabbitMQ)
 
-`devtools/` is a **separate, independent** Docker Compose project — not part of `docker-compose.yml`, not started by `make bootstrap`, and not required for a normal `docker compose up`. It exists to give app teams deploying into the k3d cluster (currently: CFA's `backend-sample1`/`backend-sample2` and **Hasura** on dev/stg) one shared Postgres instance for their dev/stg app-level DB connections, instead of standing up per-project database infrastructure.
+`devtools/` is a **separate, independent** Docker Compose project — not part of `docker-compose.yml`, not started by `make bootstrap`, and not required for a normal `docker compose up`. It exists to give app teams deploying into the k3d cluster (currently: CFA's `backend-sample1`/`backend-sample2` and **Hasura** on dev/stg) shared Postgres + RabbitMQ for their app-level connections, instead of standing up per-project infrastructure.
 
-| Field | Value |
-|---|---|
-| Compose file | `devtools/docker-compose.yml` (run with `docker compose -p devtools -f devtools/docker-compose.yml up -d`) |
-| Image | `postgres:16-alpine` |
-| Network | `devops-network` (external — joins the main stack's network, does not create its own) |
-| Static IP | `172.19.0.100` by default (`DEVTOOLS_PG_STATIC_IP` in `devtools/.env`) |
-| Init scripts | `devtools/postgres-init/*.sh` — creates `cfa_dev` / `cfa_stg` databases + `pgcrypto` and non-CFA sample-app schemas only. CFA schemas (`rf_stub`, `payable_service`, ...) are **not** created here as of 2026-07-23 — they're owned by the CFA infra repo's `db-core` project (`migrations/cfa/`), applied via its `migrate:dev`/`migrate:stg` CI jobs on push, to avoid two divergent sources of truth for the same schema |
-| Volume | `devtools/.vols/postgres` (gitignored via the repo's `.vols*/` rule) |
+| Field | Postgres | RabbitMQ |
+|---|---|---|
+| Compose file | `devtools/docker-compose.yml` (`docker compose -p devtools -f devtools/docker-compose.yml up -d`) | same |
+| Image | `postgres:16-alpine` | `rabbitmq:3.13-management-alpine` |
+| Network | `devops-network` (external) | same |
+| Static IP | `172.19.0.100` (`DEVTOOLS_PG_STATIC_IP`) | `172.19.0.101` (`DEVTOOLS_RMQ_STATIC_IP`) |
+| Env isolation | project-owned logical DBs (via local init scripts) | vhosts **`dev`** / **`stg`** |
+| Init | Tracked sample: `devtools/postgres-init/00-init-envs.sample.sh`. **Project-specific** scripts (e.g. CFA `00-init-cfa-envs.sh` creating `cfa_dev`/`cfa_stg`) are **gitignored** and stay on the operator host only — keep the stack generic. App schemas (migrations) stay in each project's repo/CI. | `devtools/rabbitmq-init/ensure-vhosts.sh` (one-shot compose service after broker healthy; creates vhosts `dev`/`stg` + admin permissions) |
+| Volume | `devtools/.vols/postgres` | `devtools/.vols/rabbitmq` |
+| Bootstrap user | `DEVTOOLS_PG_USER` / `DEVTOOLS_PG_PASSWORD` | `DEVTOOLS_RMQ_USER` / `DEVTOOLS_RMQ_PASSWORD` (sample: `admin` / `change-me`) |
 
-**k3d bridge (`devtools/k8s-bridge.yaml` + `devtools/apply-k8s-bridge.sh`):** `devtools-postgres` is a plain Docker container, not a k8s workload, so pods can't resolve it by container name across the node/pod network boundary. The bridge creates a `devtools` namespace with a selector-less Service + manually-authored Endpoints pointing at the container's static IP, exposing it in-cluster as `devtools-postgres.devtools.svc.cluster.local:5432`. Apply once, after both the devtools compose stack and the k3d cluster are up — not part of the mandatory bootstrap chain.
+**k3d bridge (`devtools/k8s-bridge.yaml` + `devtools/apply-k8s-bridge.sh`):** both containers are plain Docker, not k8s workloads, so pods can't resolve them by container name across the node/pod network boundary. The bridge creates a `devtools` namespace with selector-less Services + manually-authored Endpoints at the static IPs:
 
-**Developer/laptop access (local host):** exposed via Traefik TCP passthrough on host port `25432` (`traefik/dynamic/tcp-passthrough.yml`, entrypoint `devtools-pg` in `traefik/traefik.yml`) since Traefik itself sits on `devops-network` and can reach the container directly — no NodePort indirection needed. Connect with `psql -h <platform-host> -p 25432 -U <user> -d cfa_dev` (or `cfa_stg`).
+- `devtools-postgres.devtools.svc.cluster.local:5432`
+- `devtools-rabbitmq.devtools.svc.cluster.local:5672` (AMQP) / `:15672` (Management UI)
 
-**External (vpnedge) access:** the edge VM DNATs public **TCP 25432** to `HOME_TRAFFIC_IP:25432` (`FORWARD_TCP` in `edge/vpn-edge/forward-ports.env`). Traffic typically arrives via the passthrough NLB IP (see [GCP edge template](10_gcp_edge_template.md)). Developer-facing guide: [Shared devtools Postgres](../03_devs/10_shared_devtools_postgres.md). **Today only shared Postgres is exposed this way** — other Traefik TCP services (e.g. RabbitMQ `25672`/`25673`) are not forwarded on the edge.
+Apply once, after both the devtools compose stack and the k3d cluster are up — not part of the mandatory bootstrap chain.
 
-**Security note:** rotate the default bootstrap credentials in `devtools/.env` before use in anything beyond a personal sandbox — there is no IP allowlisting on port `25432` by default (auth is Postgres's own user/password only). Optional GCP firewall `--source-ranges` can restrict who reaches the edge.
+**Developer/laptop access (local host):** Traefik TCP passthrough (`traefik/dynamic/tcp-passthrough.yml`) — Traefik sits on `devops-network` and reaches containers by name (no NodePort):
+
+| Tool | Host port | Entrypoint |
+|---|---|---|
+| Postgres | `25432` | `devtools-pg` |
+| RabbitMQ AMQP | `25672` | `devtools-amqp` |
+| RabbitMQ Management UI | `25682` | `devtools-amqp-mgmt` |
+
+**External (vpnedge) access:** the edge VM DNATs public TCP ports from `FORWARD_TCP` in `edge/vpn-edge/forward-ports.env` (Postgres **25432**, RabbitMQ AMQP **25672**, Management UI **25682**). Traffic typically arrives via the passthrough NLB IP (see [GCP edge template](10_gcp_edge_template.md)). Developer guides: [Shared Postgres](../03_devs/10_shared_devtools_postgres.md), [Shared RabbitMQ](../03_devs/11_shared_devtools_rabbitmq.md).
+
+**Security note:** rotate the default bootstrap credentials in `devtools/.env` before use in anything beyond a personal sandbox — there is no IP allowlisting on these TCP ports by default (auth is service user/password only). Optional GCP firewall `--source-ranges` can restrict who reaches the edge.

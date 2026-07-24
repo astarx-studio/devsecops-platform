@@ -1,0 +1,20 @@
+{
+  "_comment": "Reference only — vhosts are applied at runtime by ensure-vhosts.sh after RABBITMQ_DEFAULT_USER exists. Do not load via management.load_definitions (permissions fail with no_such_user on first boot).",
+  "vhosts": [{ "name": "/" }, { "name": "dev" }, { "name": "stg" }],
+  "permissions": [
+    {
+      "user": "admin",
+      "vhost": "dev",
+      "configure": ".*",
+      "write": ".*",
+      "read": ".*"
+    },
+    {
+      "user": "admin",
+      "vhost": "stg",
+      "configure": ".*",
+      "write": ".*",
+      "read": ".*"
+    }
+  ]
+}

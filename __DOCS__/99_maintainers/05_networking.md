@@ -45,8 +45,8 @@ graph LR
 | `10443` | traefik | HTTPS entry |
 | `18080` | traefik | Dashboard (no TLS on host) |
 | `25432` | traefik (TCP passthrough) | devtools shared Postgres — see [devtools stack](02_services.md#devtools-stack-shared-postgres) |
-| `25672` | traefik (TCP passthrough) | CFA dev RabbitMQ (k3d NodePort) |
-| `25673` | traefik (TCP passthrough) | CFA stg RabbitMQ (k3d NodePort) |
+| `25672` | traefik (TCP passthrough) | devtools shared RabbitMQ AMQP (vhosts `dev`/`stg`) |
+| `25682` | traefik (TCP passthrough) | devtools shared RabbitMQ Management UI |
 | `15433` | postgres | PostgreSQL (Keycloak + Sonar databases) |
 | `18200` | vault | API |
 | `12222` | gitlab | SSH |
@@ -183,7 +183,7 @@ http:
 
 **`traefik/dynamic/k3d-passthrough.yml`** — anchored `HostRegexp` routers for `*.dev.apps`, `*.stg.apps`, and `*.apps` hostnames. All three (**`k3d-dev`**, **`k3d-stg`**, **`k3d-prod`**) route directly to **`k3d-ingress`** at priority 10 — **ungated by default**. SSO gating is opt-in per `Host + PathPrefix` instead of per-zone: see **`traefik/dynamic/oauth2-proxy-apps-gated-paths.yml`**, whose routers target **`oauth2-proxy-apps`** (platform login, groups **`admins`** + **`users`**) at priority 100 so they win only for the specific paths listed there (e.g. a frontend's `/app` UI); everything else on the same host falls through to the ungated priority-10 router. How-to for adding a new gated path: [Adding tiered OIDC with oauth2-proxy](../02_admin/08_oauth2_proxy_tiers_and_forwardauth.md#how-to-gate-a-new-app-path).
 
-**`traefik/dynamic/tcp-passthrough.yml`** — non-HTTP TCP passthrough (SSO gating doesn't apply to raw protocols; auth is handled by each service itself). Routes the devtools shared Postgres (`devtools-pg`, direct container address) and CFA's dev/stg RabbitMQ (`cfa-amqp-dev`/`cfa-amqp-stg`, via k3d NodePort) to fixed entrypoints. See [devtools stack](02_services.md#devtools-stack-shared-postgres).
+**`traefik/dynamic/tcp-passthrough.yml`** — non-HTTP TCP passthrough (SSO gating doesn't apply to raw protocols; auth is handled by each service itself). Routes the shared devtools Postgres (`devtools-pg` → `devtools-postgres:5432`) and RabbitMQ (`devtools-amqp` → `devtools-rabbitmq:5672`, `devtools-amqp-mgmt` → `:15672`) by container name. RabbitMQ env isolation is vhost (`dev`/`stg`), not separate ports. See [devtools stack](02_services.md#devtools-stack-shared-postgres).
 
 ### Docker label routing (defined per-service in `docker-compose.yml`)
 
@@ -262,7 +262,7 @@ Use this when a **cloud edge VM** (for example Ubuntu on GCP) holds your public 
 3. **Edge VM:** Install **`wireguard-tools`** and **`nftables`**. Copy `peer_edge.conf` from the home volume to `/etc/wireguard/wg0.conf` (or merge keys with `edge/vpn-edge/wg0.client.conf.sample`). Enable **`net.ipv4.ip_forward=1`** (see `edge/vpn-edge/sysctl-ip-forward.conf`). Run `wg-quick up wg0`.
 4. **Edge NAT:** From the repo, use **`edge/vpn-edge/apply-nat.sh`** with a **`forward-ports.env`** derived from **`edge/vpn-edge/forward-ports.sample.env`**. Set **`HOME_TRAFFIC_IP`** to the **IPv4 of the Docker host on the LAN** where Traefik publishes **`10080`/`10443`** and GitLab SSH **`12222`**. The script DNATs public ports to that IP and SNATs out **`wg0`** so return traffic works. Traefik and GitLab will see the **edge’s WireGuard IP** as the client address (double SNAT: internet → edge → tunnel).
 
-**Default TCP map (edge public → home host port):** `80→10080`, `443→10443`, `12222→12222`, `25432→25432` (devtools shared Postgres). Add more `public:dest` pairs in **`FORWARD_TCP`** if you expose extra services.
+**Default TCP map (edge public → home host port):** `80→10080`, `443→10443`, `12222→12222`, `25432→25432` (devtools Postgres), `25672` (devtools RabbitMQ AMQP), `25682` (Management UI). Add more `public:dest` pairs in **`FORWARD_TCP`** if you expose extra services.
 
 **Git over SSH:** Use port **12222** on the edge as well (do not steal **TCP 22** on the edge VM unless you move admin `sshd` to another port). Example: `ssh -p 12222 git@<GITLAB_DOMAIN>`.
 
@@ -270,7 +270,7 @@ Use this when a **cloud edge VM** (for example Ubuntu on GCP) holds your public 
 
 **DNS:** While using **vpnedge**, point **`A`/`AAAA`** records for `*.devops.<DOMAIN>`, `*.apps.<DOMAIN>`, and related names to the **edge / passthrough LB public IP**, not your home IP. **Let’s Encrypt** can stay on **DNS-01** via Cloudflare (`CF_DNS_API_TOKEN`); HTTP reachability to home is not required for issuance.
 
-**Cloud firewall (example GCP):** Allow **inbound** **TCP 80, 443, 12222, 25432** (and any extra ports you added). Allow **outbound UDP** to home **`51820`**. For this deployment, rule `allow-vpnedge-devtools-pg` opens `tcp:25432` to tag `wireguard-tunnel`. Optional: tighten `--source-ranges` to team CIDRs.
+**Cloud firewall (example GCP):** Allow **inbound** **TCP 80, 443, 12222, 25432, 25672, 25682** (and any extra ports you added). Allow **outbound UDP** to home **`51820`**. Rules: `allow-vpnedge-devtools-pg` (`tcp:25432`), `allow-vpnedge-devtools-amqp` (`tcp:25672,25682`) → tag `wireguard-tunnel`. Optional: tighten `--source-ranges` to team CIDRs.
 
 **GCP image / instance template:** see [10 — GCP edge template](10_gcp_edge_template.md) and [`edge/gcp/`](../../edge/gcp/).
 
@@ -377,7 +377,7 @@ sudo nft list table ip vpnedge
 
 ### Adding a shared-tool TCP forward
 
-Repeatable checklist when exposing another home Traefik TCP service through the VPN edge (today: **devtools Postgres `25432` only**):
+Repeatable checklist when exposing another home Traefik TCP service through the VPN edge (today: **devtools Postgres `25432`**, **devtools RabbitMQ AMQP `25672`**, **Management UI `25682`**):
 
 1. **Home:** publish the port on Traefik (`traefik/traefik.yml` entrypoint + `traefik/dynamic/tcp-passthrough.yml` + compose `ports:`) if it is not already exposed.
 2. **Edge:** add `public:dest` to `FORWARD_TCP` in `edge/vpn-edge/forward-ports.env` (and update `forward-ports.sample.env`).
@@ -438,7 +438,7 @@ flowchart LR
   WG[WireGuard]
   HomeHost[Docker_host_LAN]
 
-  Internet -->|"TCP_80_443_12222_25432"| EdgeVM
+  Internet -->|"TCP_80_443_12222_25432_25672_25682"| EdgeVM
   EdgeVM -->|"UDP_tunnel"| WG
   WG --> HomeHost
 ```

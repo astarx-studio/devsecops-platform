@@ -57,8 +57,8 @@ services:
       - "10443:443"
       - "18080:8080"
       - "25432:25432" # devtools shared Postgres (TCP passthrough, see traefik/dynamic/tcp-passthrough.yml)
-      - "25672:25672" # CFA dev RabbitMQ (TCP passthrough, see traefik/dynamic/tcp-passthrough.yml)
-      - "25673:25673" # CFA stg RabbitMQ (TCP passthrough, see traefik/dynamic/tcp-passthrough.yml)
+      - "25672:25672" # devtools shared RabbitMQ AMQP (vhosts dev/stg)
+      - "25682:25682" # devtools shared RabbitMQ Management UI
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./traefik/traefik.yml:/etc/traefik/traefik-template.yml:ro

@@ -1,14 +1,18 @@
 # =============================================================================
 # devtools k8s bridge
 #
-# devtools-postgres runs as a plain Docker container (devtools/docker-compose.yml),
-# not as a k8s workload. Pods can't reliably resolve a Docker container name
-# across the node/pod network-namespace boundary, so this Namespace + selector-
-# less Service + manual Endpoints bridges a fixed IP on devops-network into
-# normal in-cluster DNS.
+# devtools-postgres and devtools-rabbitmq run as plain Docker containers
+# (devtools/docker-compose.yml), not as k8s workloads. Pods can't reliably
+# resolve a Docker container name across the node/pod network-namespace
+# boundary, so this Namespace + selector-less Services + manual Endpoints
+# bridge fixed IPs on devops-network into normal in-cluster DNS.
 #
 # After applying, any pod in any namespace (dev, stg, prod) can reach:
 #   devtools-postgres.devtools.svc.cluster.local:5432
+#   devtools-rabbitmq.devtools.svc.cluster.local:5672   (AMQP)
+#   devtools-rabbitmq.devtools.svc.cluster.local:15672  (Management UI)
+#
+# RabbitMQ env isolation is by vhost (dev / stg), not by host.
 #
 # Apply with: ./devtools/apply-k8s-bridge.sh
 # (idempotent; not part of the mandatory `make bootstrap` chain — devtools is
@@ -42,3 +46,30 @@ subsets:
     ports:
       - name: pg
         port: 5432
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: devtools-rabbitmq
+  namespace: devtools
+spec:
+  ports:
+    - name: amqp
+      port: 5672
+    - name: management
+      port: 15672
+---
+apiVersion: v1
+kind: Endpoints
+metadata:
+  name: devtools-rabbitmq
+  namespace: devtools
+subsets:
+  - addresses:
+      # Must match DEVTOOLS_RMQ_STATIC_IP in devtools/.env.
+      - ip: 172.19.0.101
+    ports:
+      - name: amqp
+        port: 5672
+      - name: management
+        port: 15672

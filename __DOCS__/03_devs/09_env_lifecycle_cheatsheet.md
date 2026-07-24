@@ -11,7 +11,7 @@ For **CFA app-specific** profiles (backends, frontends, infra Hasura/Keycloak), 
 | Plane                                                  | Entrypoint                              | Console? |
 | ------------------------------------------------------ | --------------------------------------- | -------- |
 | **Platform stack** (`docker-compose.yml`)              | Repo `sample.env` → `.env`              | No       |
-| **devtools** (shared Postgres)                         | `devtools/sample.env` → `devtools/.env` | No       |
+| **devtools** (shared Postgres + RabbitMQ)              | `devtools/sample.env` → `devtools/.env` | No       |
 | **Deployable GitLab projects** (CFA apps, infra, etc.) | Console → **Env profiles (Vault)**      | **Yes**  |
 
 Console: `https://console.devops.<DOMAIN>` → project → **Env profiles (Vault)**.
@@ -36,21 +36,27 @@ Independent compose project — not started by `make bootstrap`.
 
 ```bash
 cp devtools/sample.env devtools/.env
+# Optional: project DB bootstrap (gitignored). Example for a new project:
+#   cp devtools/postgres-init/00-init-envs.sample.sh \
+#      devtools/postgres-init/00-init-myapp-envs.sh
+# CFA on this host keeps a local 00-init-cfa-envs.sh (not in git).
 docker compose -p devtools -f devtools/docker-compose.yml up -d
 ./devtools/apply-k8s-bridge.sh   # once, after k3d is up
 ```
 
-| Variable                                    | Purpose                                    |
-| ------------------------------------------- | ------------------------------------------ |
-| `DEVTOOLS_PG_USER` / `DEVTOOLS_PG_PASSWORD` | Postgres bootstrap superuser               |
-| `DEVTOOLS_PG_DB`                            | Maintenance DB name                        |
-| `DEVTOOLS_PG_STATIC_IP`                     | k8s bridge target (default `172.19.0.100`) |
+| Variable                                      | Purpose                                              |
+| --------------------------------------------- | ---------------------------------------------------- |
+| `DEVTOOLS_PG_USER` / `DEVTOOLS_PG_PASSWORD`   | Postgres bootstrap superuser                         |
+| `DEVTOOLS_PG_DB`                              | Maintenance DB name                                  |
+| `DEVTOOLS_PG_STATIC_IP`                       | k8s bridge target (default `172.19.0.100`)           |
+| `DEVTOOLS_RMQ_USER` / `DEVTOOLS_RMQ_PASSWORD` | RabbitMQ admin (sample `admin` / `change-me`)        |
+| `DEVTOOLS_RMQ_STATIC_IP`                      | k8s bridge target (default `172.19.0.101`)           |
 
-Laptop / LAN: `psql -h <platform-host> -p 25432 -d cfa_dev`.
+Laptop / LAN: `psql -h <platform-host> -p 25432 -d cfa_dev`; AMQP `localhost:25672` vhost `dev`/`stg`; Management UI `http://localhost:25682/`.
 
-External (vpnedge LB): `psql -h 34.101.130.148 -p 25432 -U <user> -d cfa_dev`. Full developer guide: [Shared devtools Postgres](10_shared_devtools_postgres.md). Maintainer stack notes: [devtools stack](../99_maintainers/02_services.md#devtools-stack-shared-postgres).
+External (vpnedge LB): Postgres `25432`, RabbitMQ AMQP `25672`, Management UI `25682`. Guides: [Shared Postgres](10_shared_devtools_postgres.md), [Shared RabbitMQ](11_shared_devtools_rabbitmq.md). Maintainer: [devtools stack](../99_maintainers/02_services.md#devtools-stack-shared-postgres).
 
-**Password rotation:** use `ALTER USER` inside the running container — editing `.env` alone does not change an existing Postgres password. After rotation, update CFA console RUNTIME profiles that embed the password and redeploy affected k8s releases.
+**Password rotation:** Postgres — use `ALTER USER` inside the running container (editing `.env` alone does not change an existing password). RabbitMQ — change the user password via `rabbitmqctl` / Management UI, then update `devtools/.env` for next recreate. After either rotation, update console RUNTIME profiles that embed the password and redeploy affected k8s releases.
 
 ---
 

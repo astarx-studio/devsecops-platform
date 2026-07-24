@@ -21,12 +21,14 @@ entryPoints:
     address: ":8082"
   # TCP passthrough for non-HTTP services — see traefik/dynamic/tcp-passthrough.yml.
   # No TLS: raw wire protocols, auth is handled by each service itself.
+  # Env isolation for RabbitMQ is vhost (dev/stg), not separate host ports.
   devtools-pg:
     address: ":25432"
-  cfa-amqp-dev:
+  devtools-amqp:
     address: ":25672"
-  cfa-amqp-stg:
-    address: ":25673"
+  # RabbitMQ Management UI (HTTP :15672 on shared broker)
+  devtools-amqp-mgmt:
+    address: ":25682"
   web:
     address: ":80"
     # Large multipart uploads (e.g. Transcriptor) need > default 60s readTimeout.

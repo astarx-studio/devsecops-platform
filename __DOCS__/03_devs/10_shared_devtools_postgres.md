@@ -13,11 +13,11 @@ Maintainer internals: [devtools stack](../99_maintainers/02_services.md#devtools
 | Item | Value |
 |---|---|
 | Purpose | Shared app-level DB for remote **dev** / **stg** (not the platform Keycloak/Sonar Postgres) |
-| Databases | `cfa_dev`, `cfa_stg` (plus maintenance DB `devtools`) |
+| Databases | Project-owned logical DBs on this host today: `cfa_dev`, `cfa_stg` (plus maintenance DB `devtools`). Created by a **local** operator init script under `devtools/postgres-init/` (not part of the generic DSOaaS git tree — see `00-init-envs.sample.sh`) |
 | Superuser (bootstrap) | From platform `devtools/.env` (`DEVTOOLS_PG_USER` / `DEVTOOLS_PG_PASSWORD`) — sample defaults are `devtools` / `change-me` |
 | Schemas | CFA schemas come from the CFA `db-core` migration CI; do not invent a second schema source |
 
-**Today:** only this shared Postgres is exposed for external tools. RabbitMQ and other Traefik TCP passthrough ports are **not** forwarded on the edge yet.
+Also exposed via the same edge path: [Shared devtools RabbitMQ](11_shared_devtools_rabbitmq.md) (AMQP + Management UI; vhosts `dev` / `stg`).
 
 ---
 
@@ -56,6 +56,7 @@ On the platform host itself (or LAN), you can also use `localhost:25432` / the D
 
 ---
 
-## Out of scope / future
+## Related
 
-Exposing additional shared tools (e.g. RabbitMQ on `25672`/`25673`) follows the maintainer checklist **Adding a shared-tool TCP forward** in [Networking](../99_maintainers/05_networking.md#adding-a-shared-tool-tcp-forward). Developers do not need to change edge/GCP config for that — ask platform ops.
+- [Shared devtools RabbitMQ](11_shared_devtools_rabbitmq.md)
+- Maintainer checklist for new TCP tools: [Adding a shared-tool TCP forward](../99_maintainers/05_networking.md#adding-a-shared-tool-tcp-forward)

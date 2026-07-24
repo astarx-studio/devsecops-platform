@@ -2,9 +2,9 @@
 
 ← [Back to Maintainer Guide](index.md)
 
-How the **VPN edge** VM is snapshotted into a GCP custom image and instance template so reinstantiation keeps WireGuard, nftables NAT, and shared-tool TCP forwards (currently **devtools Postgres `25432`**).
+How the **VPN edge** VM is snapshotted into a GCP custom image and instance template so reinstantiation keeps WireGuard, nftables NAT, and shared-tool TCP forwards (**devtools Postgres `25432`**, **devtools RabbitMQ AMQP `25672`**, **Management UI `25682`**).
 
-Related: [Networking — VPN edge](05_networking.md#vpn-edge-ingress-wireguard), [`edge/gcp/`](../../edge/gcp/), [Shared devtools Postgres (devs)](../03_devs/10_shared_devtools_postgres.md).
+Related: [Networking — VPN edge](05_networking.md#vpn-edge-ingress-wireguard), [`edge/gcp/`](../../edge/gcp/), [Shared Postgres](../03_devs/10_shared_devtools_postgres.md), [Shared RabbitMQ](../03_devs/11_shared_devtools_rabbitmq.md).
 
 ---
 
@@ -21,8 +21,9 @@ Related: [Networking — VPN edge](05_networking.md#vpn-edge-ingress-wireguard),
 | Forwarding rule | `yada-tunnel-lb-forwarding-rule` (`L3_DEFAULT`, **`allPorts: true`**) |
 | Backend / MIG | `yada-tunnel-lb` / `yada-tunnel-managed` |
 | Image family | `vpn-edge` |
-| Instance template | `vpn-edge-devtools-v1` |
+| Instance template | **`vpn-edge-devtools-v3`** (preferred; `v2` had the old 4-port per-env RabbitMQ map; `v1` is Postgres-only) |
 | Firewall (devtools PG) | `allow-vpnedge-devtools-pg` — `tcp:25432` → tag `wireguard-tunnel` |
+| Firewall (RabbitMQ) | `allow-vpnedge-devtools-amqp` — `tcp:25672,25682` → tag `wireguard-tunnel` |
 
 DNS for `*.devops.<DOMAIN>` / apps zones should point at the **LB IP** (`34.101.130.148`), not the VM's ephemeral NIC IP.
 
@@ -34,7 +35,7 @@ Built from the live edge disk after NAT is configured:
 
 - Packages: `wireguard`, `nftables`, etc.
 - `/etc/wireguard/wg0.conf` (WireGuard **private key** — treat the image as sensitive)
-- `/home/iam_msams/vpn-edge/` kit (`apply-nat.sh`, `forward-ports.env` with `25432`, systemd units)
+- `/home/iam_msams/vpn-edge/` kit (`apply-nat.sh`, `forward-ports.env` with Postgres + RabbitMQ ports, systemd units)
 - Enabled units: `wg-quick@wg0`, `vpn-edge-nat`
 
 **Startup script** ([`edge/gcp/startup-script.sh`](../../edge/gcp/startup-script.sh)) is attached as instance metadata for defense-in-depth: reinstall packages/sysctl if needed, ensure units, re-apply NAT if inactive. It does **not** embed secrets.
@@ -47,12 +48,12 @@ From the **devsecops-platform** repo root, with `gcloud` authenticated:
 
 ```bash
 chmod +x edge/gcp/create-image-and-template.sh edge/gcp/startup-script.sh
-./edge/gcp/create-image-and-template.sh
+GCP_EDGE_TEMPLATE=vpn-edge-devtools-v3 ./edge/gcp/create-image-and-template.sh
 ```
 
 - Default: stops the VM briefly for a consistent image, then starts it again.
 - `--no-stop`: force-create while the VM stays running (shorter downtime, slightly riskier snapshot).
-- If template `vpn-edge-devtools-v1` already exists, delete it or set `GCP_EDGE_TEMPLATE` to a new name before re-running.
+- If template `vpn-edge-devtools-v3` already exists, delete it or set `GCP_EDGE_TEMPLATE` to a new name before re-running.
 
 After a successful rebuild, optionally refresh metadata on the live VM:
 
@@ -71,7 +72,7 @@ gcloud compute instances add-metadata yada-tunnel-managed-68bh \
 gcloud compute instances create yada-tunnel-managed-NEWID \
   --project=yada-technology \
   --zone=asia-southeast2-a \
-  --source-instance-template=vpn-edge-devtools-v1
+  --source-instance-template=vpn-edge-devtools-v3
 ```
 
 Then:
@@ -81,7 +82,7 @@ Then:
 3. Verify:
    ```bash
    sudo wg show          # recent handshake, growing transfer
-   sudo nft list table ip vpnedge | grep 25432
+   sudo nft list table ip vpnedge | grep -E '25432|25672|25682'
    systemctl is-active wg-quick@wg0 vpn-edge-nat
    ```
 4. Update DNS only if the **LB IP** changed (it should not if `yada-tunnel-pip` stays attached to the forwarding rule).
@@ -100,6 +101,6 @@ Optional future improvement: keep `wg0.conf` + `forward-ports.env` on a **persis
 
 ## Security notes
 
-- Port **25432** is open to `0.0.0.0/0` via `allow-vpnedge-devtools-pg`. Auth is Postgres user/password only. Prefer rotating `DEVTOOLS_PG_PASSWORD` and optionally narrowing firewall `sourceRanges`.
+- Ports **25432**, **25672**, and **25682** are open to `0.0.0.0/0` via the devtools firewall rules. Auth is service user/password only. Prefer rotating `DEVTOOLS_PG_PASSWORD` / `DEVTOOLS_RMQ_PASSWORD` and optionally narrowing firewall `sourceRanges`.
 - The custom image embeds the WireGuard private key — limit who can `compute.images.get` / create instances from the template.
 - Do not commit live `forward-ports.env` or `wg0.conf` (already gitignored under `edge/vpn-edge/`).

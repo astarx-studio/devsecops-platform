@@ -5,13 +5,10 @@
 # meaningless for raw TCP protocols (Postgres wire protocol, AMQP) — auth is
 # handled by the service itself (DB user/password, RabbitMQ credentials).
 #
-# devtools-pg: devtools-postgres is a plain Docker container on devops-network
-#   (devtools/docker-compose.yml), reachable directly by container name — no
-#   NodePort indirection needed (unlike services that live inside k3d).
-#
-# cfa-amqp-*: RabbitMQ lives inside the k3d cluster per-namespace, so it is
-#   reached via a NodePort on the k3d server node instead (see CFA infra
-#   repo's helm/infra chart, components.rabbitmq.exposeNodePort).
+# Both backends are plain Docker containers on devops-network
+# (devtools/docker-compose.yml), reachable by container name — no k3d
+# NodePort indirection. Env isolation for RabbitMQ is via vhosts (dev/stg),
+# not separate host ports.
 # =============================================================================
 
 tcp:
@@ -22,17 +19,17 @@ tcp:
         - devtools-pg
       service: devtools-pg
 
-    cfa-amqp-dev:
+    devtools-amqp:
       rule: "HostSNI(`*`)"
       entryPoints:
-        - cfa-amqp-dev
-      service: cfa-amqp-dev
+        - devtools-amqp
+      service: devtools-amqp
 
-    cfa-amqp-stg:
+    devtools-amqp-mgmt:
       rule: "HostSNI(`*`)"
       entryPoints:
-        - cfa-amqp-stg
-      service: cfa-amqp-stg
+        - devtools-amqp-mgmt
+      service: devtools-amqp-mgmt
 
   services:
     devtools-pg:
@@ -40,15 +37,13 @@ tcp:
         servers:
           - address: "devtools-postgres:5432"
 
-    # NodePort values must match components.rabbitmq.exposeNodePort.nodePort
-    # set per-environment in CFA infra's .gitlab-ci.yml deploy:dev-infra /
-    # deploy:stg-infra jobs.
-    cfa-amqp-dev:
+    devtools-amqp:
       loadBalancer:
         servers:
-          - address: "k3d-dsoaas-server-0:30572"
+          - address: "devtools-rabbitmq:5672"
 
-    cfa-amqp-stg:
+    # Management UI is HTTP on :15672; still TCP-passthrough (no TLS / SSO).
+    devtools-amqp-mgmt:
       loadBalancer:
         servers:
-          - address: "k3d-dsoaas-server-0:30573"
+          - address: "devtools-rabbitmq:15672"
