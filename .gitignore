@@ -48,6 +48,9 @@ acme.json
 
 coverage
 
+# Ad-hoc local scratch (CI/k8s probes — never commit)
+.tmp-*
+
 # Local-only tooling (not part of platform deliverables)
 # Untracked operator-specific files (not part of the published stack)
 /__LOCAL__/
