@@ -17,6 +17,7 @@ This section is intentionally dense and technical. It is not written for end use
 | [03 — Management API Internals](./03_management_api.md) | NestJS module tree, request lifecycle, all endpoints with full parameter schemas, service internals |
 | [04 — Data Flows](./04_data_flows.md) | Sequence diagrams: project provisioning, authentication, inbound request routing, CI/CD pipeline |
 | [05 — Networking](./05_networking.md) | Docker network topology, Traefik static/dynamic config, k3d passthrough, DNS strategy, public ingress modes (direct / `cftunnel` / `vpnedge`) |
+| [10 — GCP edge template](./10_gcp_edge_template.md) | VPN edge custom image, instance template `vpn-edge-devtools-v1`, reinstantiation, shared-tool TCP forwards |
 | [06 — CI/CD Internals](./06_ci_cd.md) | GitLab Runner setup, shared config repos, pipeline templates, project pipeline anatomy |
 | [07 — Secrets Management](./07_secrets.md) | Vault KV v2 paths, OIDC auth method, per-project secret schema, init script |
 | [08 — Contributing](./08_contributing.md) | Local dev setup, running tests, adding services, extending the Management API |

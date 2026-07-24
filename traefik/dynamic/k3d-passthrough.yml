@@ -20,6 +20,17 @@
 #      plain HTTP. From devops-network, the LB container is reachable at
 #      k3d-dsoaas-serverlb:8081 (klipper-LB forwards to the in-cluster Service).
 #
+#   5. All three zones (prod, stg, dev) route straight to k3d-ingress by
+#      default — ungated at this layer. SSO gating is opt-in per Host +
+#      PathPrefix instead of blanket per-zone: see
+#      oauth2-proxy-apps-gated-paths.yml, whose routers use priority 100 (>
+#      this file's 10) to intercept only the specific paths that must be
+#      gated (e.g. a frontend's /app UI) while APIs and everything else on
+#      the same host fall through to this file's ungated routers. This lets
+#      local dev/CI call dev/stg APIs directly (app-level JWT auth applies),
+#      and lets non-HTTP local dev tooling reach dev/stg without a platform
+#      SSO session.
+#
 # __DOMAIN__ placeholder is substituted at container startup by the traefik
 # entrypoint sed command (same mechanism as traefik.yml).
 # =============================================================================
@@ -31,7 +42,7 @@ http:
     # Traefik v3 HostRegexp uses pure Go regexp (no named-group syntax).
     # -------------------------------------------------------------------------
     k3d-prod:
-      rule: "HostRegexp(`[a-z0-9-]+\\.apps\\.__DOMAIN__`)"
+      rule: "HostRegexp(`^[a-z0-9-]+\\.apps\\.__DOMAIN__$`)"
       entryPoints:
         - websecure
       service: k3d-ingress
@@ -39,9 +50,11 @@ http:
 
     # -------------------------------------------------------------------------
     # staging zone: *.stg.apps.<DOMAIN>
+    # Ungated by default — see oauth2-proxy-apps-gated-paths.yml for the
+    # higher-priority routers that gate specific paths (e.g. /app) on top.
     # -------------------------------------------------------------------------
     k3d-stg:
-      rule: "HostRegexp(`[a-z0-9-]+\\.stg\\.apps\\.__DOMAIN__`)"
+      rule: "HostRegexp(`^[a-z0-9-]+\\.stg\\.apps\\.__DOMAIN__$`)"
       entryPoints:
         - websecure
       service: k3d-ingress
@@ -49,9 +62,11 @@ http:
 
     # -------------------------------------------------------------------------
     # dev zone: *.dev.apps.<DOMAIN>
+    # Ungated by default — see oauth2-proxy-apps-gated-paths.yml for the
+    # higher-priority routers that gate specific paths (e.g. /app) on top.
     # -------------------------------------------------------------------------
     k3d-dev:
-      rule: "HostRegexp(`[a-z0-9-]+\\.dev\\.apps\\.__DOMAIN__`)"
+      rule: "HostRegexp(`^[a-z0-9-]+\\.dev\\.apps\\.__DOMAIN__$`)"
       entryPoints:
         - websecure
       service: k3d-ingress
@@ -70,7 +85,12 @@ http:
         passHostHeader: true
         servers:
           - url: "http://k3d-dsoaas-server-0:30080"
-        # No active health check — inner Traefik serves /ping on its internal
-        # port (8080), not the web NodePort (30080), so an active check would
-        # always return 404 and mark the server DOWN.  Traefik's passive health
-        # checking is sufficient here.
+
+    oauth2-proxy-apps-upstream:
+      loadBalancer:
+        # passHostHeader must stay false: if Host == X-Forwarded-Host, oauth2-proxy
+        # treats the request as non-forwarded and stores a path-only redirect; after
+        # OIDC callback on OAUTH_APPS_DOMAIN the user lands on the wrong host.
+        passHostHeader: false
+        servers:
+          - url: "http://oauth2-proxy-apps:4181"

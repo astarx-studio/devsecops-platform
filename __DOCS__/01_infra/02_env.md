@@ -218,11 +218,12 @@ CORS_CREDENTIALS=false
 KC_CLIENT_SECRET_GITLAB=CHANGE-ME-GITLAB-CLIENT-SECRET
 KC_CLIENT_SECRET_VAULT=CHANGE-ME-VAULT-CLIENT-SECRET
 KC_CLIENT_SECRET_OAUTH2_PROXY=CHANGE-ME-OAUTH2-PROXY-CLIENT-SECRET
+KC_CLIENT_SECRET_OAUTH2_PROXY_APPS=CHANGE-ME-OAUTH2-PROXY-APPS-CLIENT-SECRET
 ```
 
 These are shared secrets between each service and Keycloak. They're used during the login handshake to verify that a service is who it claims to be. The values you put here must match the values inside `keycloak/realm-export.json`.
 
-The defaults in `sample.env` and `realm-export.json` are intentionally placeholder strings — change all three of them to unique random strings (e.g., run `openssl rand -hex 32` three times and use those). Make sure the values are identical in both `.env` and `realm-export.json`.
+The defaults in `sample.env` and `realm-export.json` are intentionally placeholder strings — change all four of them to unique random strings (e.g., run `openssl rand -hex 32` four times and use those). Make sure the values are identical in both `.env` and `realm-export.json` (greenfield import substitutes placeholders via Keycloak's entrypoint `sed`; existing realms need manual client sync — see [oauth2-proxy tiers](../02_admin/08_oauth2_proxy_tiers_and_forwardauth.md#existing-keycloak-realms-manual-client-patch)).
 
 ---
 
@@ -230,9 +231,10 @@ The defaults in `sample.env` and `realm-export.json` are intentionally placehold
 
 ```
 OAUTH2_PROXY_COOKIE_SECRET=change-me-32-byte-cookie-secret!
+OAUTH2_PROXY_APPS_COOKIE_SECRET=change-me-apps-32-byte-cookie-sc!
 ```
 
-This is used to sign browser cookies for services that use oauth2-proxy for authentication (for example the Traefik dashboard and other operator UIs fronted by ForwardAuth). It must be exactly 32 bytes. Generate a safe value with:
+These sign browser cookies for the operator and app-zone oauth2-proxy instances. Each must be exactly 32 bytes and **must differ** from each other. Generate safe values with:
 
 ```bash
 openssl rand -base64 32 | head -c 32
@@ -244,13 +246,27 @@ openssl rand -base64 32 | head -c 32
 
 ```
 OAUTH2_PROXY_ALLOWED_GROUPS=admins
+OAUTH2_PROXY_APPS_ALLOWED_GROUPS=admins,users
 ```
 
-The variable name must be **`OAUTH2_PROXY_ALLOWED_GROUPS`** (plural). A singular `OAUTH2_PROXY_ALLOWED_GROUP` is **ignored** by oauth2-proxy, so the admin guard would not apply.
+The variable names must use **`OAUTH2_PROXY_*_ALLOWED_GROUPS`** (plural). Singular spellings are **ignored** by oauth2-proxy.
 
-After Keycloak login, oauth2-proxy only allows users whose JWT **`groups`** claim includes at least one of these names (comma-separated means **OR**). The stock realm defines a group named **`admins`** and assigns the bootstrap `admin` user to it; the Keycloak group mapper uses short names (`full.path` is false in `realm-export.json`), so the claim value is `admins`, not `/admins`.
+After Keycloak login, each proxy only allows users whose JWT **`groups`** claim includes at least one listed name (comma-separated means **OR**). The stock realm defines **`admins`** and **`users`**; new users land in **`users`** by default (`defaultGroups` in `realm-export.json`).
 
-If you omit this variable, `docker-compose.yml` defaults to **`admins`**. Set it explicitly when you add more operator groups (for example `admins,sre`). Users who are not in any listed group can still complete Keycloak login but receive **403** from oauth2-proxy when opening a protected operator URL.
+- **`OAUTH2_PROXY_ALLOWED_GROUPS`** — operator surfaces (default **`admins`** if omitted in Compose).
+- **`OAUTH2_PROXY_APPS_ALLOWED_GROUPS`** — gated app paths only (see [oauth2-proxy tiers — how to gate a new app path](../02_admin/08_oauth2_proxy_tiers_and_forwardauth.md#how-to-gate-a-new-app-path); default **`admins,users`** if omitted in Compose).
+
+Users who are not in any listed group can still complete Keycloak login but receive **403** from oauth2-proxy when opening a protected URL.
+
+---
+
+## App-zone oauth callback host
+
+```
+OAUTH_APPS_DOMAIN=oauth-apps.devops.yourdomain.com
+```
+
+Hostname for the **`oauth2-proxy-apps`** OIDC callback (`/oauth2/callback`). Covered by the `*.devops.<DOMAIN>` wildcard cert. Traefik registers a network alias so Keycloak token validation works inside Docker.
 
 ---
 

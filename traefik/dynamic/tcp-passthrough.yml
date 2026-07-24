@@ -1,0 +1,54 @@
+# =============================================================================
+# Traefik Dynamic Configuration — TCP Passthrough
+# =============================================================================
+# Non-HTTP services exposed directly to developers' machines. SSO gating is
+# meaningless for raw TCP protocols (Postgres wire protocol, AMQP) — auth is
+# handled by the service itself (DB user/password, RabbitMQ credentials).
+#
+# devtools-pg: devtools-postgres is a plain Docker container on devops-network
+#   (devtools/docker-compose.yml), reachable directly by container name — no
+#   NodePort indirection needed (unlike services that live inside k3d).
+#
+# cfa-amqp-*: RabbitMQ lives inside the k3d cluster per-namespace, so it is
+#   reached via a NodePort on the k3d server node instead (see CFA infra
+#   repo's helm/infra chart, components.rabbitmq.exposeNodePort).
+# =============================================================================
+
+tcp:
+  routers:
+    devtools-pg:
+      rule: "HostSNI(`*`)"
+      entryPoints:
+        - devtools-pg
+      service: devtools-pg
+
+    cfa-amqp-dev:
+      rule: "HostSNI(`*`)"
+      entryPoints:
+        - cfa-amqp-dev
+      service: cfa-amqp-dev
+
+    cfa-amqp-stg:
+      rule: "HostSNI(`*`)"
+      entryPoints:
+        - cfa-amqp-stg
+      service: cfa-amqp-stg
+
+  services:
+    devtools-pg:
+      loadBalancer:
+        servers:
+          - address: "devtools-postgres:5432"
+
+    # NodePort values must match components.rabbitmq.exposeNodePort.nodePort
+    # set per-environment in CFA infra's .gitlab-ci.yml deploy:dev-infra /
+    # deploy:stg-infra jobs.
+    cfa-amqp-dev:
+      loadBalancer:
+        servers:
+          - address: "k3d-dsoaas-server-0:30572"
+
+    cfa-amqp-stg:
+      loadBalancer:
+        servers:
+          - address: "k3d-dsoaas-server-0:30573"

@@ -44,6 +44,9 @@ graph LR
 | `10080` | traefik | HTTP (redirects to HTTPS) |
 | `10443` | traefik | HTTPS entry |
 | `18080` | traefik | Dashboard (no TLS on host) |
+| `25432` | traefik (TCP passthrough) | devtools shared Postgres — see [devtools stack](02_services.md#devtools-stack-shared-postgres) |
+| `25672` | traefik (TCP passthrough) | CFA dev RabbitMQ (k3d NodePort) |
+| `25673` | traefik (TCP passthrough) | CFA stg RabbitMQ (k3d NodePort) |
 | `15433` | postgres | PostgreSQL (Keycloak + Sonar databases) |
 | `18200` | vault | API |
 | `12222` | gitlab | SSH |
@@ -178,7 +181,9 @@ http:
           - "X-Auth-Request-Access-Token"
 ```
 
-**`traefik/dynamic/k3d-passthrough.yml`** — `HostRegexp` routers for `*.dev.apps`, `*.stg.apps`, and `*.apps` hostnames forwarding to the in-cluster Traefik entrypoint. Workloads inside k3d use Kubernetes Ingress (and Helm releases) for HTTP routing.
+**`traefik/dynamic/k3d-passthrough.yml`** — anchored `HostRegexp` routers for `*.dev.apps`, `*.stg.apps`, and `*.apps` hostnames. All three (**`k3d-dev`**, **`k3d-stg`**, **`k3d-prod`**) route directly to **`k3d-ingress`** at priority 10 — **ungated by default**. SSO gating is opt-in per `Host + PathPrefix` instead of per-zone: see **`traefik/dynamic/oauth2-proxy-apps-gated-paths.yml`**, whose routers target **`oauth2-proxy-apps`** (platform login, groups **`admins`** + **`users`**) at priority 100 so they win only for the specific paths listed there (e.g. a frontend's `/app` UI); everything else on the same host falls through to the ungated priority-10 router. How-to for adding a new gated path: [Adding tiered OIDC with oauth2-proxy](../02_admin/08_oauth2_proxy_tiers_and_forwardauth.md#how-to-gate-a-new-app-path).
+
+**`traefik/dynamic/tcp-passthrough.yml`** — non-HTTP TCP passthrough (SSO gating doesn't apply to raw protocols; auth is handled by each service itself). Routes the devtools shared Postgres (`devtools-pg`, direct container address) and CFA's dev/stg RabbitMQ (`cfa-amqp-dev`/`cfa-amqp-stg`, via k3d NodePort) to fixed entrypoints. See [devtools stack](02_services.md#devtools-stack-shared-postgres).
 
 ### Docker label routing (defined per-service in `docker-compose.yml`)
 
@@ -257,15 +262,17 @@ Use this when a **cloud edge VM** (for example Ubuntu on GCP) holds your public 
 3. **Edge VM:** Install **`wireguard-tools`** and **`nftables`**. Copy `peer_edge.conf` from the home volume to `/etc/wireguard/wg0.conf` (or merge keys with `edge/vpn-edge/wg0.client.conf.sample`). Enable **`net.ipv4.ip_forward=1`** (see `edge/vpn-edge/sysctl-ip-forward.conf`). Run `wg-quick up wg0`.
 4. **Edge NAT:** From the repo, use **`edge/vpn-edge/apply-nat.sh`** with a **`forward-ports.env`** derived from **`edge/vpn-edge/forward-ports.sample.env`**. Set **`HOME_TRAFFIC_IP`** to the **IPv4 of the Docker host on the LAN** where Traefik publishes **`10080`/`10443`** and GitLab SSH **`12222`**. The script DNATs public ports to that IP and SNATs out **`wg0`** so return traffic works. Traefik and GitLab will see the **edge’s WireGuard IP** as the client address (double SNAT: internet → edge → tunnel).
 
-**Default TCP map (edge public → home host port):** `80→10080`, `443→10443`, `12222→12222`. Add more `public:dest` pairs in **`FORWARD_TCP`** if you expose extra services.
+**Default TCP map (edge public → home host port):** `80→10080`, `443→10443`, `12222→12222`, `25432→25432` (devtools shared Postgres). Add more `public:dest` pairs in **`FORWARD_TCP`** if you expose extra services.
 
 **Git over SSH:** Use port **12222** on the edge as well (do not steal **TCP 22** on the edge VM unless you move admin `sshd` to another port). Example: `ssh -p 12222 git@<GITLAB_DOMAIN>`.
 
 **Split tunnel / `AllowedIPs`:** The compose defaults set **`WIREGUARD_PEER_ALLOWEDIPS`** so the edge peer can reach RFC1918 ranges and the VPN subnet; adjust if your home LAN uses only one `/24`. **`WIREGUARD_SERVER_URL`** should be your home public IP or DDNS (passed through to the image as **`SERVERURL`**).
 
-**DNS:** While using **vpnedge**, point **`A`/`AAAA`** records for `*.devops.<DOMAIN>`, `*.apps.<DOMAIN>`, and related names to the **edge VM’s public IP**, not your home IP. **Let’s Encrypt** can stay on **DNS-01** via Cloudflare (`CF_DNS_API_TOKEN`); HTTP reachability to home is not required for issuance.
+**DNS:** While using **vpnedge**, point **`A`/`AAAA`** records for `*.devops.<DOMAIN>`, `*.apps.<DOMAIN>`, and related names to the **edge / passthrough LB public IP**, not your home IP. **Let’s Encrypt** can stay on **DNS-01** via Cloudflare (`CF_DNS_API_TOKEN`); HTTP reachability to home is not required for issuance.
 
-**Cloud firewall (example GCP):** Allow **inbound** **TCP 80, 443, 12222** (and any extra ports you added). Allow **outbound UDP** to home **`51820`**.
+**Cloud firewall (example GCP):** Allow **inbound** **TCP 80, 443, 12222, 25432** (and any extra ports you added). Allow **outbound UDP** to home **`51820`**. For this deployment, rule `allow-vpnedge-devtools-pg` opens `tcp:25432` to tag `wireguard-tunnel`. Optional: tighten `--source-ranges` to team CIDRs.
+
+**GCP image / instance template:** see [10 — GCP edge template](10_gcp_edge_template.md) and [`edge/gcp/`](../../edge/gcp/).
 
 **Home-side hardening (ideal):** Allow **TCP 10080, 10443, 12222** only from the **WireGuard subnet** (e.g. `10.8.0.0/24`) on the Docker host firewall, not from the public WAN. On Windows this is often **Windows Defender Firewall** advanced rules; exact steps depend on your layout.
 
@@ -366,7 +373,19 @@ sudo nft list table ip vpnedge
 
 **Unit files:** [`edge/vpn-edge/systemd/vpn-edge-nat.service`](../../edge/vpn-edge/systemd/vpn-edge-nat.service), [`edge/vpn-edge/systemd/vpn-edge-nat.default.sample`](../../edge/vpn-edge/systemd/vpn-edge-nat.default.sample), [`edge/vpn-edge/systemd/install.sh`](../../edge/vpn-edge/systemd/install.sh).
 
-**Spot / preemptible VMs:** A **new** instance may get a **new public IP** unless you use a **static external IP**. Update **DNS A records** to the new address after recreation. Reinstall **`/etc/wireguard/wg0.conf`** and **`forward-ports.env`** (or keep them on a **persistent disk** / config management).
+**Spot / preemptible VMs:** A **new** instance may get a **new public IP** unless you use a **static external IP**. Update **DNS A records** to the new address after recreation. Reinstall **`/etc/wireguard/wg0.conf`** and **`forward-ports.env`** (or keep them on a **persistent disk** / config management). Prefer recreating from the [GCP instance template](10_gcp_edge_template.md) so NAT + packages match.
+
+### Adding a shared-tool TCP forward
+
+Repeatable checklist when exposing another home Traefik TCP service through the VPN edge (today: **devtools Postgres `25432` only**):
+
+1. **Home:** publish the port on Traefik (`traefik/traefik.yml` entrypoint + `traefik/dynamic/tcp-passthrough.yml` + compose `ports:`) if it is not already exposed.
+2. **Edge:** add `public:dest` to `FORWARD_TCP` in `edge/vpn-edge/forward-ports.env` (and update `forward-ports.sample.env`).
+3. **Edge:** `sudo ~/vpn-edge/apply-nat.sh apply ~/vpn-edge/forward-ports.env` — confirm with `sudo nft list table ip vpnedge`.
+4. **GCP firewall:** allow the new public TCP port to the edge network tags (e.g. `wireguard-tunnel`). Optionally restrict `--source-ranges`.
+5. **GCP LB:** if the passthrough NLB uses `allPorts: true` (current `yada-tunnel-lb-forwarding-rule`), no forwarding-rule change is needed. Otherwise add the port to the forwarding rule / backend.
+6. **Rebuild image + template:** `./edge/gcp/create-image-and-template.sh` (use a new template name or delete the old one first).
+7. **Docs:** update the developer access page and this checklist's "today" note.
 
 ### GCP load balancer (passthrough) in front of the edge VM
 
@@ -419,7 +438,7 @@ flowchart LR
   WG[WireGuard]
   HomeHost[Docker_host_LAN]
 
-  Internet -->|"TCP_80_443_12222"| EdgeVM
+  Internet -->|"TCP_80_443_12222_25432"| EdgeVM
   EdgeVM -->|"UDP_tunnel"| WG
   WG --> HomeHost
 ```

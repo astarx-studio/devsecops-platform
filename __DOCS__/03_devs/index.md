@@ -13,6 +13,8 @@ Here's what's covered:
 - **[Deployments](05_deployments.md)** — What happens after a successful build and what's supported today.
 - **[Manual onboarding](06_manual_onboarding.md)** — Opt an existing repository into deployment without going through the Management API.
 - **[Monorepo / multi-app CI](07_monorepo_multi_app_ci.md)** — Multiple Docker images and shared test/Sonar in one GitLab project (e.g. portal + reports).
+- **[Env & lifecycle cheat sheet](09_env_lifecycle_cheatsheet.md)** — Where config lives (console vs `.env`), password rotation, common operator tasks.
+- **[Shared devtools Postgres](10_shared_devtools_postgres.md)** — External `psql` access to `cfa_dev` / `cfa_stg` via edge TCP `25432`.
 
 ---
 

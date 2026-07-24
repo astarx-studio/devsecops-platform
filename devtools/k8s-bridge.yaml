@@ -1,0 +1,44 @@
+# =============================================================================
+# devtools k8s bridge
+#
+# devtools-postgres runs as a plain Docker container (devtools/docker-compose.yml),
+# not as a k8s workload. Pods can't reliably resolve a Docker container name
+# across the node/pod network-namespace boundary, so this Namespace + selector-
+# less Service + manual Endpoints bridges a fixed IP on devops-network into
+# normal in-cluster DNS.
+#
+# After applying, any pod in any namespace (dev, stg, prod) can reach:
+#   devtools-postgres.devtools.svc.cluster.local:5432
+#
+# Apply with: ./devtools/apply-k8s-bridge.sh
+# (idempotent; not part of the mandatory `make bootstrap` chain — devtools is
+# opt-in and applied manually once both the devtools compose stack and the
+# k3d cluster are up)
+# =============================================================================
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: devtools
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: devtools-postgres
+  namespace: devtools
+spec:
+  ports:
+    - name: pg
+      port: 5432
+---
+apiVersion: v1
+kind: Endpoints
+metadata:
+  name: devtools-postgres
+  namespace: devtools
+subsets:
+  - addresses:
+      # Must match DEVTOOLS_PG_STATIC_IP in devtools/.env.
+      - ip: 172.19.0.100
+    ports:
+      - name: pg
+        port: 5432

@@ -56,6 +56,9 @@ services:
       - "10080:80"
       - "10443:443"
       - "18080:8080"
+      - "25432:25432" # devtools shared Postgres (TCP passthrough, see traefik/dynamic/tcp-passthrough.yml)
+      - "25672:25672" # CFA dev RabbitMQ (TCP passthrough, see traefik/dynamic/tcp-passthrough.yml)
+      - "25673:25673" # CFA stg RabbitMQ (TCP passthrough, see traefik/dynamic/tcp-passthrough.yml)
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./traefik/traefik.yml:/etc/traefik/traefik-template.yml:ro
@@ -90,6 +93,7 @@ services:
           - ${GITLAB_DOMAIN}
           - ${API_DOMAIN}
           - ${OAUTH_DOMAIN}
+          - ${OAUTH_APPS_DOMAIN}
           - ${TRAEFIK_DOMAIN}
           - ${GITLAB_REGISTRY_DOMAIN}
           - ${MINIO_CONSOLE_DOMAIN}
@@ -223,6 +227,7 @@ services:
           -e "s|\$${VAULT_DOMAIN}|$$VAULT_DOMAIN|g" \
           -e "s|\$${API_DOMAIN}|$$API_DOMAIN|g" \
           -e "s|\$${OAUTH_DOMAIN}|$$OAUTH_DOMAIN|g" \
+          -e "s|\$${OAUTH_APPS_DOMAIN}|$$OAUTH_APPS_DOMAIN|g" \
           -e "s|\$${TRAEFIK_DOMAIN}|$$TRAEFIK_DOMAIN|g" \
           -e "s|\$${SMTP_HOST}|$$SMTP_HOST|g" \
           -e "s|\$${SMTP_PORT}|$$SMTP_PORT|g" \
@@ -233,6 +238,7 @@ services:
           -e "s|\$${KC_CLIENT_SECRET_GITLAB}|$$KC_CLIENT_SECRET_GITLAB|g" \
           -e "s|\$${KC_CLIENT_SECRET_VAULT}|$$KC_CLIENT_SECRET_VAULT|g" \
           -e "s|\$${KC_CLIENT_SECRET_OAUTH2_PROXY}|$$KC_CLIENT_SECRET_OAUTH2_PROXY|g" \
+          -e "s|\$${KC_CLIENT_SECRET_OAUTH2_PROXY_APPS}|$$KC_CLIENT_SECRET_OAUTH2_PROXY_APPS|g" \
           -e "s|\$${SONARQUBE_DOMAIN}|$$SONARQUBE_DOMAIN|g" \
           -e "s|\$${KEYCLOAK_ADMIN_PASSWORD}|$$KEYCLOAK_ADMIN_PASSWORD|g" \
           -e "s|\$${KEYCLOAK_ADMIN_EMAIL}|$$KEYCLOAK_ADMIN_EMAIL|g" \
@@ -264,10 +270,12 @@ services:
       KC_CLIENT_SECRET_GITLAB: ${KC_CLIENT_SECRET_GITLAB}
       KC_CLIENT_SECRET_VAULT: ${KC_CLIENT_SECRET_VAULT}
       KC_CLIENT_SECRET_OAUTH2_PROXY: ${KC_CLIENT_SECRET_OAUTH2_PROXY}
+      KC_CLIENT_SECRET_OAUTH2_PROXY_APPS: ${KC_CLIENT_SECRET_OAUTH2_PROXY_APPS}
       GITLAB_DOMAIN: ${GITLAB_DOMAIN}
       VAULT_DOMAIN: ${VAULT_DOMAIN}
       API_DOMAIN: ${API_DOMAIN}
       OAUTH_DOMAIN: ${OAUTH_DOMAIN}
+      OAUTH_APPS_DOMAIN: ${OAUTH_APPS_DOMAIN}
       TRAEFIK_DOMAIN: ${TRAEFIK_DOMAIN}
       SONARQUBE_DOMAIN: ${SONARQUBE_DOMAIN}
     volumes:
@@ -897,6 +905,79 @@ services:
       traefik.http.routers.oauth2-proxy.tls.certresolver: "letsencrypt"
       # oauth2-proxy IS the ForwardAuth target; never apply oidc-auth to itself.
       traefik.http.services.oauth2-proxy.loadbalancer.server.port: "4180"
+    networks:
+      - devops-network
+
+  # ========================================================================
+  # OAUTH2-PROXY-APPS — OIDC ForwardAuth for dev/stg app zones (*.dev.apps / *.stg.apps)
+  # ========================================================================
+  # Second oauth2-proxy tier: allows all devops-realm users in groups admins or users
+  # (default OAUTH2_PROXY_APPS_ALLOWED_GROUPS). Attached via oidc-auth-apps@file on
+  # k3d-dev and k3d-stg routers in traefik/dynamic/k3d-passthrough.yml. Prod app zone
+  # (k3d-prod) stays public at this layer.
+  oauth2-proxy-apps:
+    image: quay.io/oauth2-proxy/oauth2-proxy:latest
+    container_name: oauth2-proxy-apps
+    restart: unless-stopped
+    environment:
+      OAUTH2_PROXY_PROVIDER: oidc
+      OAUTH2_PROXY_OIDC_ISSUER_URL: ${OAUTH2_PROXY_OIDC_ISSUER_URL}
+      OAUTH2_PROXY_INSECURE_OIDC_SKIP_ISSUER_VERIFICATION: "true"
+      OAUTH2_PROXY_CLIENT_ID: oauth2-proxy-apps
+      OAUTH2_PROXY_CLIENT_SECRET: ${KC_CLIENT_SECRET_OAUTH2_PROXY_APPS}
+      OAUTH2_PROXY_COOKIE_SECRET: ${OAUTH2_PROXY_APPS_COOKIE_SECRET}
+      OAUTH2_PROXY_COOKIE_NAME: "_oauth2_proxy_apps"
+      OAUTH2_PROXY_COOKIE_SECURE: "true"
+      OAUTH2_PROXY_COOKIE_DOMAINS: ".${DOMAIN}"
+      OAUTH2_PROXY_COOKIE_SAMESITE: "none"
+      OAUTH2_PROXY_COOKIE_CSRF_PER_REQUEST: "true"
+      OAUTH2_PROXY_COOKIE_CSRF_EXPIRE: "5m"
+      OAUTH2_PROXY_REDIRECT_URL: https://${OAUTH_APPS_DOMAIN}/oauth2/callback
+      OAUTH2_PROXY_EMAIL_DOMAINS: "*"
+      OAUTH2_PROXY_HTTP_ADDRESS: "0.0.0.0:4181"
+      OAUTH2_PROXY_REVERSE_PROXY: "true"
+      OAUTH2_PROXY_SET_XAUTHREQUEST: "true"
+      OAUTH2_PROXY_SKIP_PROVIDER_BUTTON: "true"
+      OAUTH2_PROXY_PASS_ACCESS_TOKEN: "true"
+      OAUTH2_PROXY_WHITELIST_DOMAINS: ".${DOMAIN}"
+      # Points at oauth2-proxy-apps-hostfix, not the k3d NodePort directly — see
+      # that service for why (Traefik's passHostHeader:false on this hop breaks
+      # the Host header oauth2-proxy would otherwise relay to k3d's Ingress).
+      OAUTH2_PROXY_UPSTREAMS: "http://oauth2-proxy-apps-hostfix:8080"
+      OAUTH2_PROXY_ALLOWED_GROUPS: ${OAUTH2_PROXY_APPS_ALLOWED_GROUPS:-admins,users}
+    depends_on:
+      keycloak:
+        condition: service_healthy
+      oauth2-proxy-apps-hostfix:
+        condition: service_started
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.oauth2-proxy-apps.rule: "Host(`${OAUTH_APPS_DOMAIN}`)"
+      traefik.http.routers.oauth2-proxy-apps.entrypoints: "websecure"
+      traefik.http.routers.oauth2-proxy-apps.tls.certresolver: "letsencrypt"
+      traefik.http.services.oauth2-proxy-apps.loadbalancer.server.port: "4181"
+    networks:
+      - devops-network
+
+  # ========================================================================
+  # OAUTH2-PROXY-APPS-HOSTFIX — Host-header repair hop for the app zone
+  # ========================================================================
+  # Traefik's oauth2-proxy-apps-upstream (traefik/dynamic/k3d-passthrough.yml)
+  # uses passHostHeader: false so oauth2-proxy-apps sees Host != X-Forwarded-Host
+  # and correctly builds a full-URL post-login redirect (oauth2-proxy #2552:
+  # https://github.com/oauth2-proxy/oauth2-proxy/issues/2552). That deliberately
+  # corrupts the Host header, which oauth2-proxy would otherwise relay verbatim
+  # to its own upstream (oauth2-proxy has no built-in option to substitute
+  # X-Forwarded-Host there). This tiny nginx hop restores Host from
+  # X-Forwarded-Host — which Traefik always sets from the real inbound
+  # request — before the request reaches k3d's Ingress, so Host-based routing
+  # (*.dev.apps.<DOMAIN> / *.stg.apps.<DOMAIN>) still matches.
+  oauth2-proxy-apps-hostfix:
+    image: nginx:1.27-alpine
+    container_name: oauth2-proxy-apps-hostfix
+    restart: unless-stopped
+    volumes:
+      - ./configs/oauth2-proxy-apps-hostfix/nginx.conf:/etc/nginx/nginx.conf:ro
     networks:
       - devops-network
 

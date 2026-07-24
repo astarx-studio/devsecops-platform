@@ -19,6 +19,14 @@ ping:
 entryPoints:
   ping:
     address: ":8082"
+  # TCP passthrough for non-HTTP services — see traefik/dynamic/tcp-passthrough.yml.
+  # No TLS: raw wire protocols, auth is handled by each service itself.
+  devtools-pg:
+    address: ":25432"
+  cfa-amqp-dev:
+    address: ":25672"
+  cfa-amqp-stg:
+    address: ":25673"
   web:
     address: ":80"
     # Large multipart uploads (e.g. Transcriptor) need > default 60s readTimeout.

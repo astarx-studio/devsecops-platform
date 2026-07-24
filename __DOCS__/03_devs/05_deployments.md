@@ -16,9 +16,11 @@ The **`dsoaas-app`** Helm chart defaults the Service **`targetPort` to 80** so c
 
 Typical patterns (exact values come from your project's `appHosts` in MongoDB and CI variables such as `APP_HOST`):
 
-- **Development:** `https://<effectiveSlug>.dev.apps.<DOMAIN>`
-- **Staging:** `https://<effectiveSlug>.stg.apps.<DOMAIN>`
-- **Production:** `https://<effectiveSlug>.apps.<DOMAIN>`
+- **Development:** `https://<effectiveSlug>.dev.apps.<DOMAIN>` — **ungated by default.** No platform-level login gate unless your team explicitly registered a gated path (see below); rely on your own application auth for APIs.
+- **Staging:** `https://<effectiveSlug>.stg.apps.<DOMAIN>` — same, ungated by default.
+- **Production:** `https://<effectiveSlug>.apps.<DOMAIN>` — no platform-level login gate; rely on application auth if needed.
+
+**Opting into platform SSO for a specific path** (e.g. a frontend's UI, not its API): ask platform ops to add a `Host() && PathPrefix()` router to [`traefik/dynamic/oauth2-proxy-apps-gated-paths.yml`](../../traefik/dynamic/oauth2-proxy-apps-gated-paths.yml) in `devsecops-platform` — see [how to gate a new app path](../02_admin/08_oauth2_proxy_tiers_and_forwardauth.md#how-to-gate-a-new-app-path). Only that path prefix on that host requires DSOaaS Keycloak login (groups **`admins`** or **`users`**); everything else on the same host (including your APIs) stays ungated.
 
 ---
 
@@ -26,7 +28,7 @@ Typical patterns (exact values come from your project's `appHosts` in MongoDB an
 
 1. **GitLab pipeline** — the latest pipeline for your default branch should pass build and deploy stages.
 2. **Ingress** — in the target namespace (`dev`, `stg`, or `prod`), `kubectl get ingress` should list a host rule matching your app zone.
-3. **HTTP check** — `curl -vk https://<hostname>/` from a machine that resolves DNS to your platform should return your application response (or a redirect you intentionally configure).
+3. **HTTP check** — from a browser, open the hostname while logged into DSOaaS Keycloak (dev/stg require platform login first). For scripted checks, unauthenticated `curl` to dev/stg URLs returns **302** to Keycloak — use in-cluster probes or authenticated sessions instead.
 
 ---
 

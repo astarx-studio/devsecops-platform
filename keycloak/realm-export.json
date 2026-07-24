@@ -299,6 +299,21 @@
       "defaultClientScopes": ["openid", "profile", "email", "roles", "groups"]
     },
     {
+      "clientId": "oauth2-proxy-apps",
+      "name": "OAuth2 Proxy (app zones)",
+      "description": "OIDC client for oauth2-proxy-apps — ForwardAuth on *.dev.apps and *.stg.apps hostnames",
+      "enabled": true,
+      "publicClient": false,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "protocol": "openid-connect",
+      "secret": "${KC_CLIENT_SECRET_OAUTH2_PROXY_APPS}",
+      "redirectUris": ["https://${OAUTH_APPS_DOMAIN}/oauth2/callback"],
+      "webOrigins": ["https://${OAUTH_APPS_DOMAIN}"],
+      "defaultClientScopes": ["openid", "profile", "email", "roles", "groups"]
+    },
+    {
       "clientId": "sonarqube",
       "name": "SonarQube",
       "description": "SAML client for SonarQube UI (Community Build)",

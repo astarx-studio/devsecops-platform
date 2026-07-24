@@ -142,7 +142,7 @@ Instead of hard-coding build args in `.gitlab-ci.yml`, use **BUILD** env profile
 2. Set **job selector** to `portal` or `reports` (same value as `KANIKO_IMAGE_NAME`).
 3. Set **branches** to the refs you build from (e.g. `main`).
 
-The pipeline loads profiles in **every** job that uses `.load-vault-env` (build, test, sonar, deploy). `dotenv_build_args` keys are exported as shell variables in that job and passed to Kaniko as `--build-arg` on build jobs. For a custom `test` job, prepend:
+The pipeline loads profiles in **every** job that uses `.load-vault-env` (build, test, sonar, deploy). `dotenv_build_args` keys are exported as shell variables in that job and passed to Kaniko as `--build-arg` on build jobs. Prefer setting **job selector** to the same value as `KANIKO_IMAGE_NAME` so prepare writes `.dsoaas/kaniko-extra-build-args-<image>`. If the selector is left empty, prepare writes the unsuffixed file; `.build-kaniko` falls back to that unsuffixed path when the per-image file is missing. Image tags are `${CI_COMMIT_SHORT_SHA}-${CI_COMMIT_REF_SLUG}` (and `latest-<ref>`) so tip-mirrored branches with the same commit SHA do not overwrite each other’s BUILD-time bake (e.g. per-branch Vite URLs). For a custom `test` job, prepend:
 
 ```yaml
 before_script:

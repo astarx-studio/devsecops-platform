@@ -1,0 +1,55 @@
+# =============================================================================
+# Traefik Dynamic Configuration — Opt-in SSO gating for specific app paths
+# =============================================================================
+# k3d-passthrough.yml routes *.dev.apps.<DOMAIN> and *.stg.apps.<DOMAIN>
+# straight to k3d-ingress (ungated) at priority 10. This file adds narrower
+# Host() + PathPrefix() routers at priority 100 (evaluated first) that send
+# only specific paths through oauth2-proxy-apps (platform Keycloak login)
+# instead — everything else on the same host falls through to the ungated
+# priority-10 routers.
+#
+# Use this for frontend-facing UI paths that should require a platform SSO
+# session. Do NOT gate API paths here — APIs should enforce their own
+# app-level auth (JWT etc.) so local dev tooling and service-to-service calls
+# can reach them directly without a browser SSO session.
+#
+# The oauth2-proxy-apps-upstream service is defined in k3d-passthrough.yml
+# (Traefik's file provider merges services across all files in this
+# directory into one namespace, so referencing it here is safe).
+#
+# To onboard a new gated app/path: copy one router block below, change the
+# name/Host/PathPrefix, and add one entry per environment (dev/stg) as
+# needed. __DOMAIN__ is substituted at container startup (see traefik.yml).
+# =============================================================================
+
+http:
+  routers:
+    # -------------------------------------------------------------------------
+    # CFA core-finance-apps — /app UI (frontend-host + Module Federation
+    # remotes). /api/*, /auth/*, /gql on the same host stay ungated via the
+    # priority-10 routers in k3d-passthrough.yml.
+    # -------------------------------------------------------------------------
+    gated-kai-core-finance-apps-dev-ui:
+      rule: "Host(`kai-core-finance-apps.dev.apps.__DOMAIN__`) && PathPrefix(`/app`)"
+      entryPoints:
+        - websecure
+      service: oauth2-proxy-apps-upstream
+      priority: 100
+
+    gated-kai-core-finance-apps-stg-ui:
+      rule: "Host(`kai-core-finance-apps.stg.apps.__DOMAIN__`) && PathPrefix(`/app`)"
+      entryPoints:
+        - websecure
+      service: oauth2-proxy-apps-upstream
+      priority: 100
+
+    # -------------------------------------------------------------------------
+    # Template — copy for the next app that needs a gated path. Replace
+    # <name>, <host>, and <path-prefix>; duplicate per environment as needed.
+    # -------------------------------------------------------------------------
+    # gated-<name>-<env>-ui:
+    #   rule: "Host(`<host>`) && PathPrefix(`<path-prefix>`)"
+    #   entryPoints:
+    #     - websecure
+    #   service: oauth2-proxy-apps-upstream
+    #   priority: 100

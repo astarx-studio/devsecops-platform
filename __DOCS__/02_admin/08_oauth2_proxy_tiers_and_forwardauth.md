@@ -6,11 +6,58 @@ This guide explains **how to extend** the platform when you need **more than one
 
 ## What exists today
 
-The repo runs **one** `oauth2-proxy` container. Traefik’s ForwardAuth middleware **`oidc-auth`** is defined in [`traefik/dynamic/forward-auth.yml`](../../traefik/dynamic/forward-auth.yml) and delegates login checks to **`http://oauth2-proxy:4180/`**. Operator surfaces that need SSO attach that middleware via **Docker labels** in [`docker-compose.yml`](../../docker-compose.yml) (for example the Traefik dashboard and MinIO console).
+The repo runs **two** oauth2-proxy containers:
+
+| Instance | Middleware | Surfaces | Default groups |
+|----------|------------|----------|----------------|
+| **`oauth2-proxy`** | `oidc-auth@file` | Operator UIs via Docker labels (Traefik dashboard, MinIO console, console, …) | `admins` (`OAUTH2_PROXY_ALLOWED_GROUPS`) |
+| **`oauth2-proxy-apps`** | (reverse proxy, opt-in per path — see below) | Specific app-zone paths only, e.g. `/app/*` on `*.dev.apps.<DOMAIN>` / `*.stg.apps.<DOMAIN>` | `admins,users` (`OAUTH2_PROXY_APPS_ALLOWED_GROUPS`) |
+
+**Gating is opt-in per `Host + PathPrefix`, not per zone.** [`traefik/dynamic/k3d-passthrough.yml`](../../traefik/dynamic/k3d-passthrough.yml) routes all three app zones (prod, stg, dev) straight to `k3d-ingress` (ungated) at priority 10. [`traefik/dynamic/oauth2-proxy-apps-gated-paths.yml`](../../traefik/dynamic/oauth2-proxy-apps-gated-paths.yml) adds narrower `Host() && PathPrefix()` routers at priority 100 that intercept only the paths that must require a platform SSO session (typically a frontend's UI path, e.g. `/app`) before those requests reach `oauth2-proxy-apps-upstream`. Everything else on the same host — APIs, health checks, GraphQL, etc. — falls through to the ungated priority-10 router.
+
+This means: **APIs are never gated at this layer.** They're expected to enforce their own app-level auth (JWT, etc.), so local dev tooling, CI smoke checks, and service-to-service calls can reach dev/stg APIs directly without a browser SSO session. Only paths you explicitly add to `oauth2-proxy-apps-gated-paths.yml` require platform login.
+
+The operator tier's ForwardAuth middleware **`oidc-auth`** is defined in [`traefik/dynamic/forward-auth.yml`](../../traefik/dynamic/forward-auth.yml) and delegates login checks to **`http://oauth2-proxy:4180/`**. Optional middleware **`oidc-auth-apps`** targets **`/oauth2/auth`** if you attach ForwardAuth manually; the shipped app-zone path uses reverse-proxy mode instead.
+
+Callback hostnames: **`OAUTH_DOMAIN`** (operator) and **`OAUTH_APPS_DOMAIN`** (app zones). Both must resolve to Traefik and appear in Keycloak client redirect URIs.
 
 ---
 
-## Why you would add another tier
+## How to gate a new app path
+
+To require platform SSO login for a new app's UI (or any other path you want gated), add a router to [`traefik/dynamic/oauth2-proxy-apps-gated-paths.yml`](../../traefik/dynamic/oauth2-proxy-apps-gated-paths.yml) — no other file needs to change, and no restart is needed (the file provider watches for changes):
+
+```yaml
+http:
+  routers:
+    gated-<name>-<env>-ui:
+      rule: "Host(`<host>`) && PathPrefix(`<path-prefix>`)"
+      entryPoints:
+        - websecure
+      service: oauth2-proxy-apps-upstream
+      priority: 100
+```
+
+- `priority: 100` must stay higher than the `priority: 10` ungated zone routers in `k3d-passthrough.yml`, or the ungated router wins the match.
+- `service: oauth2-proxy-apps-upstream` is defined once in `k3d-passthrough.yml` and reused here — Traefik's file provider merges services across all files in `traefik/dynamic/`.
+- Do **not** gate `/api/*` paths this way — see the "APIs are never gated" note above.
+- Duplicate the block per environment (dev/stg) with the matching host.
+
+---
+
+## Existing Keycloak realms (manual client patch)
+
+`realm-export.json` is applied on **first** Keycloak import only. On an already-running platform, create the **`oauth2-proxy-apps`** client in the Keycloak admin UI (or import the client JSON) before starting `oauth2-proxy-apps`:
+
+1. **Clients → Create** — client ID `oauth2-proxy-apps`, confidential, standard flow enabled.
+2. **Valid redirect URIs:** `https://${OAUTH_APPS_DOMAIN}/oauth2/callback`
+3. **Web origins:** `https://${OAUTH_APPS_DOMAIN}`
+4. **Client scopes:** include `groups` (same as the stock `oauth2-proxy` client).
+5. **Credentials** — set the secret to match **`KC_CLIENT_SECRET_OAUTH2_PROXY_APPS`** in `.env`.
+
+Then add the new `.env` keys from `sample.env`, run `bootstrap/patch-keycloak-oauth2-proxy-apps.sh` (falls back to `bootstrap/seed-keycloak-oauth2-proxy-apps-db.sh` when Admin API login fails), then `docker compose up -d oauth2-proxy-apps traefik`, and verify a dev/stg hostname redirects to Keycloak for unauthenticated browsers.
+
+---
 
 Typical reasons:
 

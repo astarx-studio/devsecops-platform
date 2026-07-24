@@ -23,7 +23,7 @@
 # Optional overrides (project-level CI variables):
 #   KANIKO_DOCKERFILE     Dockerfile path relative to repo root (default: Dockerfile)
 #   KANIKO_IMAGE_NAME     Optional registry path suffix for monorepos, e.g. "admin"
-#                         → pushes to $CI_REGISTRY_IMAGE/admin:$CI_COMMIT_SHORT_SHA
+#                         → pushes to $CI_REGISTRY_IMAGE/admin:$CI_COMMIT_SHORT_SHA-$CI_COMMIT_REF_SLUG
 #   CHART_VERSION         Pin a chart version  (default: latest stable)
 #   CHART_REGISTRY_HOST   Helm OCI host (default gitlab:5000 in-stack; external: GITLAB_REGISTRY_DOMAIN)
 #   CHART_REGISTRY_PLAIN_HTTP  auto | true | false
@@ -96,7 +96,9 @@ variables:
   # Container-Scanning target — the image built and pushed by Kaniko.
   # Without this, the template defaults to Auto DevOps vars that are not set
   # in this pipeline and the scan would error or scan nothing.
-  CS_IMAGE: "$CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA"
+  # Include ref slug so tip-mirrored branches (same SHA, different BUILD env) do not
+  # overwrite each other's registry tags / baked Vite args.
+  CS_IMAGE: "$CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA-$CI_COMMIT_REF_SLUG"
   # Branch refs controlling auto-deploys (can be overridden per project)
   DEPLOY_DEV_REF: "develop"
   DEPLOY_STG_REF: "staging"
@@ -155,15 +157,28 @@ prepare-build-env:
       if [ -n "${KANIKO_IMAGE_NAME:-}" ]; then
         IMAGE_BASE="${CI_REGISTRY_IMAGE}/${KANIKO_IMAGE_NAME}"
       fi
-      KANIKO_DEST_SHA="${IMAGE_BASE}:${CI_COMMIT_SHORT_SHA}"
-      KANIKO_DEST_LATEST="${IMAGE_BASE}:latest"
+      # Tag includes CI_COMMIT_REF_SLUG so development/staging/main tip-mirrors
+      # (identical SHORT_SHA) keep distinct images when BUILD dotenv differs per branch.
+      IMAGE_TAG="${CI_COMMIT_SHORT_SHA}-${CI_COMMIT_REF_SLUG}"
+      KANIKO_DEST_SHA="${IMAGE_BASE}:${IMAGE_TAG}"
+      KANIKO_DEST_LATEST="${IMAGE_BASE}:latest-${CI_COMMIT_REF_SLUG}"
       KANIKO_CACHE_REPO="${IMAGE_BASE}/cache"
-      echo "Kaniko image base: ${IMAGE_BASE} (dockerfile=${KANIKO_DOCKERFILE})"
+      echo "Kaniko image base: ${IMAGE_BASE} tag=${IMAGE_TAG} (dockerfile=${KANIKO_DOCKERFILE})"
       KANIKO_ARGS_SUFFIX=""
       if [ -n "${KANIKO_IMAGE_NAME:-}" ]; then
         KANIKO_ARGS_SUFFIX="-${KANIKO_IMAGE_NAME}"
       fi
       KANIKO_BUILD_ARGS_FILE="${CI_PROJECT_DIR}/.dsoaas/kaniko-extra-build-args${KANIKO_ARGS_SUFFIX}"
+      # Profiles with empty jobSelector write the unsuffixed file; prefer the
+      # per-image file when present, otherwise fall back so single-app builds
+      # with KANIKO_IMAGE_NAME still receive dotenv_build_args.
+      if [ ! -f "${KANIKO_BUILD_ARGS_FILE}" ] && [ -n "${KANIKO_ARGS_SUFFIX}" ]; then
+        _fallback="${CI_PROJECT_DIR}/.dsoaas/kaniko-extra-build-args"
+        if [ -f "${_fallback}" ]; then
+          echo "kaniko: suffixed build-args file missing; falling back to ${_fallback}"
+          KANIKO_BUILD_ARGS_FILE="${_fallback}"
+        fi
+      fi
       # Load per-app build args from file; each line is a single flag
       # (--build-arg=KEY=VALUE) and is passed as one positional arg to Kaniko.
       set --
@@ -173,6 +188,8 @@ prepare-build-env:
           set -- "$@" "${_arg}"
         done < "${KANIKO_BUILD_ARGS_FILE}"
         echo "kaniko: loaded $# build arg(s) from ${KANIKO_BUILD_ARGS_FILE}"
+      else
+        echo "kaniko: no build-args file at ${KANIKO_BUILD_ARGS_FILE}${KANIKO_ARGS_SUFFIX:+ (or unsuffixed fallback)}"
       fi
       STAGED_WS="${CI_PROJECT_DIR}/.dsoaas/staged-workspace"
       if [ -d "${STAGED_WS}" ]; then
@@ -452,7 +469,7 @@ container_scanning:
         --version "${CHART_VERSION}" ${HELM_PLAIN_HTTP_FLAG} \
         --namespace "${KUBE_NAMESPACE:-$DEPLOY_ENV}" \
         --set image.repository="${CI_REGISTRY_IMAGE}" \
-        --set image.tag="${CI_COMMIT_SHORT_SHA}" \
+        --set image.tag="${CI_COMMIT_SHORT_SHA}-${CI_COMMIT_REF_SLUG}" \
         --set ingress.host="${APP_HOST}" \
         --set project.path="${VAULT_PROJECT_PATH}" \
         --set project.env="${DEPLOY_ENV}" \

@@ -93,9 +93,11 @@ sequenceDiagram
 ```
 
 **Notes:**
-- App-zone routers generally do **not** attach `oidc-auth@file`; applications implement their own auth. Operator tools (Traefik dashboard, MinIO console, etc.) attach ForwardAuth via Docker labels.
+- **dev**, **stg**, and **prod** app zones all route directly to **`k3d-ingress`** by default (ungated). **`HostRegexp`** rules are anchored (`^…$`) so prod cannot substring-match dev/stg hosts. Only paths explicitly listed in `traefik/dynamic/oauth2-proxy-apps-gated-paths.yml` (matched via higher-priority `Host() && PathPrefix()` routers, typically a frontend's UI path) are instead routed through **`oauth2-proxy-apps`** — users in groups **`admins`** or **`users`** may browse those after platform Keycloak login. APIs and other ungated paths on the same host bypass this check entirely.
+- Operator tools (Traefik dashboard, MinIO console, etc.) attach **`oidc-auth@file`** via Docker labels.
 - When not using Cloudflare Tunnel, traffic can reach Traefik directly on `10443` with the same Host-based routing model.
 - Inner routing is standard Kubernetes; the platform CI templates produce the Ingress and Helm release.
+- Applications may still enforce their own OIDC/SAML after the platform gate — expect two login steps when app auth is enabled.
 
 ---
 

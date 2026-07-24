@@ -1,0 +1,42 @@
+# =============================================================================
+# devtools stack — shared Postgres for CFA dev/stg app-level DB connections.
+#
+# Independent Compose project (deliberately separate from the main platform
+# stack). Run from the devsecops-platform repo root:
+#
+#   docker compose -p devtools -f devtools/docker-compose.yml up -d
+#   docker compose -p devtools -f devtools/docker-compose.yml down
+#
+# Joins the *existing* devops-network created by the main stack (external),
+# so it's reachable by container name from Traefik and from the k3d server
+# node — see devtools/k8s-bridge.yaml for how dev/stg pods reach it.
+# =============================================================================
+
+networks:
+  devops-network:
+    external: true
+    name: ${DOCKER_NETWORK:-devops-network}
+
+services:
+  # DNS: devtools-postgres (service/container name). Fixed static IP so the
+  # k8s bridge Service/Endpoints (k8s-bridge.yaml) has a stable target.
+  devtools-postgres:
+    image: postgres:16-alpine
+    container_name: devtools-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DEVTOOLS_PG_DB:-devtools}
+      POSTGRES_USER: ${DEVTOOLS_PG_USER:?set DEVTOOLS_PG_USER in devtools/.env}
+      POSTGRES_PASSWORD: ${DEVTOOLS_PG_PASSWORD:?set DEVTOOLS_PG_PASSWORD in devtools/.env}
+    volumes:
+      - ./.vols/postgres:/var/lib/postgresql/data
+      - ./postgres-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DEVTOOLS_PG_USER:-devtools} -d postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      devops-network:
+        ipv4_address: ${DEVTOOLS_PG_STATIC_IP:-172.19.0.100}
