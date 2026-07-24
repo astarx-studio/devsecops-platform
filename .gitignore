@@ -53,3 +53,8 @@ coverage
 /__LOCAL__/
 .cursor/rules/local-management-ui.mdc
 .cursor/plans/
+
+# Project-specific shared-devtools Postgres init (e.g. CFA cfa_dev/cfa_stg).
+# The stack ships only *.sample.sh; operators keep real init scripts locally.
+/devtools/postgres-init/*
+!/devtools/postgres-init/*.sample.sh
