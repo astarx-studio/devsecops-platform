@@ -59,6 +59,7 @@ services:
       - "25432:25432" # devtools shared Postgres (TCP passthrough, see traefik/dynamic/tcp-passthrough.yml)
       - "25672:25672" # devtools shared RabbitMQ AMQP (vhosts dev/stg)
       - "25682:25682" # devtools shared RabbitMQ Management UI
+      - "29000:29000" # DevTools shared MinIO S3 API (TCP passthrough)
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./traefik/traefik.yml:/etc/traefik/traefik-template.yml:ro
@@ -99,6 +100,9 @@ services:
           - ${MINIO_CONSOLE_DOMAIN}
           - ${SONARQUBE_DOMAIN}
           - ${CONSOLE_DOMAIN}
+          - ${GRAFANA_DOMAIN}
+          - ${DEVTOOLS_MINIO_API_DOMAIN}
+          - ${DEVTOOLS_MINIO_CONSOLE_DOMAIN}
 
   # ========================================================================
   # MONGODB — Platform Registry (v2)
@@ -956,6 +960,49 @@ services:
       traefik.http.routers.oauth2-proxy-apps.entrypoints: "websecure"
       traefik.http.routers.oauth2-proxy-apps.tls.certresolver: "letsencrypt"
       traefik.http.services.oauth2-proxy-apps.loadbalancer.server.port: "4181"
+    networks:
+      - devops-network
+
+  # ========================================================================
+  # OAUTH2-PROXY-DEVTOOLS — ForwardAuth for shared DevTools UIs (Grafana, …)
+  # ========================================================================
+  # Allows Keycloak groups admins + users (same allowlist as oauth2-proxy-apps).
+  # Uses static://202 for Traefik ForwardAuth. Reuses the oauth2-proxy-apps
+  # Keycloak client + cookie secret/name so login completes on OAUTH_APPS_DOMAIN
+  # (apps proxy owns the callback router) while this instance only validates
+  # the session for oidc-auth-devtools@file. Console stays admins-only.
+  oauth2-proxy-devtools:
+    image: quay.io/oauth2-proxy/oauth2-proxy:latest
+    container_name: oauth2-proxy-devtools
+    restart: unless-stopped
+    environment:
+      OAUTH2_PROXY_PROVIDER: oidc
+      OAUTH2_PROXY_OIDC_ISSUER_URL: ${OAUTH2_PROXY_OIDC_ISSUER_URL}
+      OAUTH2_PROXY_INSECURE_OIDC_SKIP_ISSUER_VERIFICATION: "true"
+      OAUTH2_PROXY_CLIENT_ID: oauth2-proxy-apps
+      OAUTH2_PROXY_CLIENT_SECRET: ${KC_CLIENT_SECRET_OAUTH2_PROXY_APPS}
+      OAUTH2_PROXY_COOKIE_SECRET: ${OAUTH2_PROXY_APPS_COOKIE_SECRET}
+      OAUTH2_PROXY_COOKIE_NAME: "_oauth2_proxy_apps"
+      OAUTH2_PROXY_COOKIE_SECURE: "true"
+      OAUTH2_PROXY_COOKIE_DOMAINS: ".${DOMAIN}"
+      OAUTH2_PROXY_COOKIE_SAMESITE: "none"
+      OAUTH2_PROXY_COOKIE_CSRF_PER_REQUEST: "true"
+      OAUTH2_PROXY_COOKIE_CSRF_EXPIRE: "5m"
+      OAUTH2_PROXY_REDIRECT_URL: https://${OAUTH_APPS_DOMAIN}/oauth2/callback
+      OAUTH2_PROXY_EMAIL_DOMAINS: "*"
+      OAUTH2_PROXY_HTTP_ADDRESS: "0.0.0.0:4182"
+      OAUTH2_PROXY_REVERSE_PROXY: "true"
+      OAUTH2_PROXY_SET_XAUTHREQUEST: "true"
+      OAUTH2_PROXY_SKIP_PROVIDER_BUTTON: "true"
+      OAUTH2_PROXY_PASS_ACCESS_TOKEN: "true"
+      OAUTH2_PROXY_WHITELIST_DOMAINS: ".${DOMAIN}"
+      OAUTH2_PROXY_UPSTREAMS: "static://202"
+      OAUTH2_PROXY_ALLOWED_GROUPS: ${OAUTH2_PROXY_DEVTOOLS_ALLOWED_GROUPS:-admins,users}
+    depends_on:
+      keycloak:
+        condition: service_healthy
+      oauth2-proxy-apps:
+        condition: service_started
     networks:
       - devops-network
 

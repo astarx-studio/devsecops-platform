@@ -247,6 +247,7 @@ openssl rand -base64 32 | head -c 32
 ```
 OAUTH2_PROXY_ALLOWED_GROUPS=admins
 OAUTH2_PROXY_APPS_ALLOWED_GROUPS=admins,users
+OAUTH2_PROXY_DEVTOOLS_ALLOWED_GROUPS=admins,users
 ```
 
 The variable names must use **`OAUTH2_PROXY_*_ALLOWED_GROUPS`** (plural). Singular spellings are **ignored** by oauth2-proxy.
@@ -255,6 +256,7 @@ After Keycloak login, each proxy only allows users whose JWT **`groups`** claim 
 
 - **`OAUTH2_PROXY_ALLOWED_GROUPS`** — operator surfaces (default **`admins`** if omitted in Compose).
 - **`OAUTH2_PROXY_APPS_ALLOWED_GROUPS`** — gated app paths only (see [oauth2-proxy tiers — how to gate a new app path](../02_admin/08_oauth2_proxy_tiers_and_forwardauth.md#how-to-gate-a-new-app-path); default **`admins,users`** if omitted in Compose).
+- **`OAUTH2_PROXY_DEVTOOLS_ALLOWED_GROUPS`** — shared DevTools UIs such as Grafana (`oidc-auth-devtools`; default **`admins,users`** if omitted in Compose).
 
 Users who are not in any listed group can still complete Keycloak login but receive **403** from oauth2-proxy when opening a protected URL.
 

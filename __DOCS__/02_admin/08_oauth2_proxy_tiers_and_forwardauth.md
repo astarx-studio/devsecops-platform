@@ -6,18 +6,25 @@ This guide explains **how to extend** the platform when you need **more than one
 
 ## What exists today
 
-The repo runs **two** oauth2-proxy containers:
+The repo runs **three** oauth2-proxy containers:
 
 | Instance | Middleware | Surfaces | Default groups |
 |----------|------------|----------|----------------|
 | **`oauth2-proxy`** | `oidc-auth@file` | Operator UIs via Docker labels (Traefik dashboard, MinIO console, console, …) | `admins` (`OAUTH2_PROXY_ALLOWED_GROUPS`) |
 | **`oauth2-proxy-apps`** | (reverse proxy, opt-in per path — see below) | Specific app-zone paths only, e.g. `/app/*` on `*.dev.apps.<DOMAIN>` / `*.stg.apps.<DOMAIN>` | `admins,users` (`OAUTH2_PROXY_APPS_ALLOWED_GROUPS`) |
+| **`oauth2-proxy-devtools`** | `oidc-auth-devtools@file` | Shared DevTools UIs (Grafana Explore) | `admins,users` (`OAUTH2_PROXY_DEVTOOLS_ALLOWED_GROUPS`) |
+
+`oauth2-proxy-devtools` is ForwardAuth-only (`static://202`). It **reuses** the `oauth2-proxy-apps` Keycloak client, cookie name/secret, and callback on `OAUTH_APPS_DOMAIN` so login completes on the apps proxy while DevTools routers only validate the session.
 
 **Gating is opt-in per `Host + PathPrefix`, not per zone.** [`traefik/dynamic/k3d-passthrough.yml`](../../traefik/dynamic/k3d-passthrough.yml) routes all three app zones (prod, stg, dev) straight to `k3d-ingress` (ungated) at priority 10. [`traefik/dynamic/oauth2-proxy-apps-gated-paths.yml`](../../traefik/dynamic/oauth2-proxy-apps-gated-paths.yml) adds narrower `Host() && PathPrefix()` routers at priority 100 that intercept only the paths that must require a platform SSO session (typically a frontend's UI path, e.g. `/app`) before those requests reach `oauth2-proxy-apps-upstream`. Everything else on the same host — APIs, health checks, GraphQL, etc. — falls through to the ungated priority-10 router.
 
 This means: **APIs are never gated at this layer.** They're expected to enforce their own app-level auth (JWT, etc.), so local dev tooling, CI smoke checks, and service-to-service calls can reach dev/stg APIs directly without a browser SSO session. Only paths you explicitly add to `oauth2-proxy-apps-gated-paths.yml` require platform login.
 
-The operator tier's ForwardAuth middleware **`oidc-auth`** is defined in [`traefik/dynamic/forward-auth.yml`](../../traefik/dynamic/forward-auth.yml) and delegates login checks to **`http://oauth2-proxy:4180/`**. Optional middleware **`oidc-auth-apps`** targets **`/oauth2/auth`** if you attach ForwardAuth manually; the shipped app-zone path uses reverse-proxy mode instead.
+ForwardAuth middlewares in [`traefik/dynamic/forward-auth.yml`](../../traefik/dynamic/forward-auth.yml):
+
+- **`oidc-auth`** → **`http://oauth2-proxy:4180/`** (operators)
+- **`oidc-auth-devtools`** → **`http://oauth2-proxy-devtools:4182/`** (Grafana / shared DevTools)
+- Optional **`oidc-auth-apps`** → **`/oauth2/auth`** on apps proxy if you attach ForwardAuth manually; the shipped app-zone path uses reverse-proxy mode instead.
 
 Callback hostnames: **`OAUTH_DOMAIN`** (operator) and **`OAUTH_APPS_DOMAIN`** (app zones). Both must resolve to Traefik and appear in Keycloak client redirect URIs.
 

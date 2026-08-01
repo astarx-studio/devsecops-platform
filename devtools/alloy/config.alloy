@@ -1,0 +1,57 @@
+// Grafana Alloy — collect Docker container logs (platform compose +
+// DevTools) and push to shared Loki. k3d pod logs are collected by the
+// Alloy DaemonSet (devtools/k8s/alloy-daemonset.yaml).
+
+discovery.docker "containers" {
+  host             = "unix:///var/run/docker.sock"
+  refresh_interval = "10s"
+}
+
+discovery.relabel "containers" {
+  targets = discovery.docker.containers.targets
+
+  // Drop Alloy / Loki / Grafana themselves to reduce noise loops.
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/devtools-(alloy|loki|grafana)"
+    action        = "drop"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/(.*)"
+    target_label  = "container"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_project"]
+    target_label  = "compose_project"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    target_label  = "compose_service"
+  }
+
+  rule {
+    target_label = "source"
+    replacement  = "docker"
+  }
+
+  rule {
+    target_label = "job"
+    replacement  = "docker"
+  }
+}
+
+loki.source.docker "containers" {
+  host       = "unix:///var/run/docker.sock"
+  targets    = discovery.relabel.containers.output
+  forward_to = [loki.write.devtools.receiver]
+}
+
+loki.write "devtools" {
+  endpoint {
+    url = "http://devtools-loki:3100/loki/api/v1/push"
+  }
+}

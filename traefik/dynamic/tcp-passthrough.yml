@@ -31,6 +31,12 @@ tcp:
         - devtools-amqp-mgmt
       service: devtools-amqp-mgmt
 
+    devtools-minio-s3:
+      rule: "HostSNI(`*`)"
+      entryPoints:
+        - devtools-minio-s3
+      service: devtools-minio-s3
+
   services:
     devtools-pg:
       loadBalancer:
@@ -47,3 +53,8 @@ tcp:
       loadBalancer:
         servers:
           - address: "devtools-rabbitmq:15672"
+
+    devtools-minio-s3:
+      loadBalancer:
+        servers:
+          - address: "devtools-minio:9000"

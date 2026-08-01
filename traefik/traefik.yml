@@ -29,6 +29,8 @@ entryPoints:
   # RabbitMQ Management UI (HTTP :15672 on shared broker)
   devtools-amqp-mgmt:
     address: ":25682"
+  devtools-minio-s3:
+    address: ":29000"
   web:
     address: ":80"
     # Large multipart uploads (e.g. Transcriptor) need > default 60s readTimeout.

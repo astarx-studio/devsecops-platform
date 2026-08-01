@@ -15,7 +15,9 @@ Here's what's covered:
 - **[Monorepo / multi-app CI](07_monorepo_multi_app_ci.md)** — Multiple Docker images and shared test/Sonar in one GitLab project (e.g. portal + reports).
 - **[Env & lifecycle cheat sheet](09_env_lifecycle_cheatsheet.md)** — Where config lives (console vs `.env`), password rotation, common operator tasks.
 - **[Shared devtools Postgres](10_shared_devtools_postgres.md)** — External `psql` access to `cfa_dev` / `cfa_stg` via edge TCP `25432`.
-- **[Shared devtools RabbitMQ](11_shared_devtools_rabbitmq.md)** — External AMQP + Management UI via edge TCP `25672` / `25682` (vhosts `dev` / `stg`).
+- **[Shared DevTools RabbitMQ](11_shared_devtools_rabbitmq.md)** — External AMQP + Management UI via edge TCP `25672` / `25682` (vhosts `dev` / `stg`).
+- **[Shared DevTools MinIO](13_shared_devtools_minio.md)** — Shared S3 (`s3-devtools` / TCP `29000`); users `admin` + `cfa`.
+- **[Shared DevTools logging](12_shared_devtools_logging.md)** — Grafana/Loki for all DSOaaS-deployed app logs (`https://grafana.devops.<DOMAIN>`).
 
 ---
 

@@ -2,20 +2,14 @@
 # =============================================================================
 # devtools/apply-k8s-bridge.sh
 # =============================================================================
-# Bridges the devtools Postgres + RabbitMQ Docker containers into the k3d
-# cluster so pods in dev/stg/prod namespaces can reach them via normal k8s DNS.
+# Bridges shared Postgres + RabbitMQ + Loki Docker containers into the k3d
+# cluster so pods in dev/stg/prod namespaces can reach them via k8s DNS.
 # Idempotent.
 #
 # Usage:
 #   ./devtools/apply-k8s-bridge.sh
 #
-# Prerequisites:
-#   - devtools/docker-compose.yml stack is up (devtools-postgres +
-#     devtools-rabbitmq running)
-#   - k3d cluster is up (bootstrap/k3d-cluster.sh) and kubectl context is set
-#
-# Not part of the mandatory `make bootstrap` chain — devtools is opt-in and
-# this is applied manually once, after both stacks above are running.
+# Not part of make bootstrap — devtools is opt-in.
 # =============================================================================
 set -euo pipefail
 
@@ -27,18 +21,23 @@ die()  { echo "[devtools-bridge] ERROR $*" >&2; exit 1; }
 
 command -v kubectl >/dev/null || die "kubectl is not installed."
 
-log "Checking devtools-postgres container is running..."
-docker inspect -f '{{.State.Running}}' devtools-postgres 2>/dev/null | grep -q true \
-  || die "devtools-postgres is not running. Start it first: docker compose -p devtools -f devtools/docker-compose.yml up -d"
+COMPOSE='docker compose -p devtools -f devtools/docker-compose.yml'
 
-log "Checking devtools-rabbitmq container is running..."
-docker inspect -f '{{.State.Running}}' devtools-rabbitmq 2>/dev/null | grep -q true \
-  || die "devtools-rabbitmq is not running. Start it first: docker compose -p devtools -f devtools/docker-compose.yml up -d"
+for c in devtools-postgres devtools-rabbitmq devtools-loki devtools-minio; do
+  log "Checking ${c} container is running..."
+  if ! docker inspect -f '{{.State.Running}}' "${c}" 2>/dev/null | grep -q true; then
+    die "${c} is not running. Start it first: ${COMPOSE} up -d"
+  fi
+done
 
-log "Applying k8s-bridge.yaml (namespace/Service/Endpoints) to current context: $(kubectl config current-context)..."
-kubectl apply -f "${SCRIPT_DIR}/k8s-bridge.yaml"
+log "Applying k8s-bridge.yaml to context: $(kubectl config current-context)..."
+# Pipe YAML so Windows path casing does not break kubectl -f <path>
+cat "${SCRIPT_DIR}/k8s-bridge.yaml" | kubectl apply -f -
 
 info "Bridge applied."
 info "  Postgres:  devtools-postgres.devtools.svc.cluster.local:5432"
 info "  RabbitMQ:  devtools-rabbitmq.devtools.svc.cluster.local:5672  (vhosts: dev, stg)"
 info "  Mgmt UI:   devtools-rabbitmq.devtools.svc.cluster.local:15672"
+info "  Loki:      devtools-loki.devtools.svc.cluster.local:3100"
+info "  MinIO S3:  devtools-minio.devtools.svc.cluster.local:9000"
+info "Then: cat devtools/k8s/alloy-daemonset.yaml | kubectl apply -f -"

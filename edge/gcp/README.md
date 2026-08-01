@@ -16,6 +16,7 @@ Operator kit for the **vpnedge** public ingress VM. Full maintainer docs:
 | Instance template          | `vpn-edge-devtools-v3` (preferred; `v2` had 4-port per-env RabbitMQ; `v1` Postgres-only)  |
 | Devtools Postgres firewall | `allow-vpnedge-devtools-pg` (`tcp:25432` → tag `wireguard-tunnel`)                        |
 | Devtools RabbitMQ firewall | `allow-vpnedge-devtools-amqp` (`tcp:25672,25682` → tag `wireguard-tunnel`)                |
+| Devtools MinIO firewall     | `allow-vpnedge-devtools-minio` (`tcp:29000` → tag `wireguard-tunnel`)                     |
 
 ## Files
 
@@ -66,4 +67,4 @@ See the checklist in [`__DOCS__/99_maintainers/05_networking.md`](../../__DOCS__
 5. Rebuild image + template (new template name or delete old)
 6. Update developer docs
 
-**Exposed beyond HTTP(S) and GitLab SSH today:** shared Postgres `25432`, shared RabbitMQ AMQP `25672` (vhosts `dev`/`stg`), Management UI `25682`.
+**Exposed beyond HTTP(S) and GitLab SSH today:** shared Postgres `25432`, shared RabbitMQ AMQP `25672` (vhosts `dev`/`stg`), Management UI `25682`, MinIO S3 `29000`.

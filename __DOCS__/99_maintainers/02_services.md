@@ -439,6 +439,7 @@ Two containers share this image: **`oauth2-proxy`** (operator tier, port 4180) a
 | `OAUTH2_PROXY_PASS_ACCESS_TOKEN` | `true` (passes the OIDC access token downstream) |
 | `OAUTH2_PROXY_ALLOWED_GROUPS` | Operator tier: comma-separated Keycloak groups (default `admins`) |
 | `OAUTH2_PROXY_APPS_ALLOWED_GROUPS` | App-zone tier only (Compose env → `OAUTH2_PROXY_ALLOWED_GROUPS` on `oauth2-proxy-apps`; default `admins,users`) |
+| `OAUTH2_PROXY_DEVTOOLS_ALLOWED_GROUPS` | DevTools ForwardAuth tier (`oauth2-proxy-devtools` / `oidc-auth-devtools`; default `admins,users`) |
 
 **Health check:** None defined.
 
@@ -533,7 +534,7 @@ Uses `SONARQUBE_INTERNAL_URL` (`http://sonarqube:9000`) from inside the stack. R
 
 ---
 
-## devtools stack (shared Postgres + RabbitMQ)
+## DevTools stack (shared Postgres + RabbitMQ + MinIO + logging)
 
 `devtools/` is a **separate, independent** Docker Compose project — not part of `docker-compose.yml`, not started by `make bootstrap`, and not required for a normal `docker compose up`. It exists to give app teams deploying into the k3d cluster (currently: CFA's `backend-sample1`/`backend-sample2` and **Hasura** on dev/stg) shared Postgres + RabbitMQ for their app-level connections, instead of standing up per-project infrastructure.
 
@@ -555,6 +556,10 @@ Uses `SONARQUBE_INTERNAL_URL` (`http://sonarqube:9000`) from inside the stack. R
 
 Apply once, after both the devtools compose stack and the k3d cluster are up — not part of the mandatory bootstrap chain.
 
+**MinIO:** `devtools-minio` at static IP `172.19.0.103`. Root user `admin`; service user `cfa` + buckets `cfa-dev`/`cfa-stg` via `devtools/minio-init/ensure-users.sh`. Console `https://${DEVTOOLS_MINIO_CONSOLE_DOMAIN}` (`oidc-auth-devtools`); S3 API `https://${DEVTOOLS_MINIO_API_DOMAIN}` (no SSO) and TCP `:29000`. In-cluster: `devtools-minio.devtools.svc.cluster.local:9000`. See [13_shared_devtools_minio.md](../03_devs/13_shared_devtools_minio.md).
+
+**Logging (Loki + Grafana + Alloy):** optional DevTools services. Loki stores logs; compose Alloy scrapes Docker; k3d Alloy DaemonSet scrapes all Auto DevOps pods (DSOaaS apps and CFA alike). Grafana UI: `https://${GRAFANA_DOMAIN}` behind **`oidc-auth-devtools`** (`admins` + `users`). See [12_shared_devtools_logging.md](../03_devs/12_shared_devtools_logging.md).
+
 **Developer/laptop access (local host):** Traefik TCP passthrough (`traefik/dynamic/tcp-passthrough.yml`) — Traefik sits on `devops-network` and reaches containers by name (no NodePort):
 
 | Tool | Host port | Entrypoint |
@@ -562,7 +567,8 @@ Apply once, after both the devtools compose stack and the k3d cluster are up —
 | Postgres | `25432` | `devtools-pg` |
 | RabbitMQ AMQP | `25672` | `devtools-amqp` |
 | RabbitMQ Management UI | `25682` | `devtools-amqp-mgmt` |
+| MinIO S3 API | `29000` | `devtools-minio-s3` |
 
-**External (vpnedge) access:** the edge VM DNATs public TCP ports from `FORWARD_TCP` in `edge/vpn-edge/forward-ports.env` (Postgres **25432**, RabbitMQ AMQP **25672**, Management UI **25682**). Traffic typically arrives via the passthrough NLB IP (see [GCP edge template](10_gcp_edge_template.md)). Developer guides: [Shared Postgres](../03_devs/10_shared_devtools_postgres.md), [Shared RabbitMQ](../03_devs/11_shared_devtools_rabbitmq.md).
+**External (vpnedge) access:** the edge VM DNATs public TCP ports from `FORWARD_TCP` in `edge/vpn-edge/forward-ports.env` (Postgres **25432**, RabbitMQ AMQP **25672**, Management UI **25682**, MinIO S3 **29000**). Traffic typically arrives via the passthrough NLB IP (see [GCP edge template](10_gcp_edge_template.md)). Developer guides: [Shared Postgres](../03_devs/10_shared_devtools_postgres.md), [Shared RabbitMQ](../03_devs/11_shared_devtools_rabbitmq.md).
 
 **Security note:** rotate the default bootstrap credentials in `devtools/.env` before use in anything beyond a personal sandbox — there is no IP allowlisting on these TCP ports by default (auth is service user/password only). Optional GCP firewall `--source-ranges` can restrict who reaches the edge.

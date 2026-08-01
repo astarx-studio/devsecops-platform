@@ -1,5 +1,6 @@
 # =============================================================================
-# devtools stack — shared Postgres + RabbitMQ for app teams on this host.
+# devtools stack — shared Postgres + RabbitMQ + MinIO + logging
+# (Loki/Grafana/Alloy) for app teams on this host.
 #
 # Independent Compose project (deliberately separate from the main platform
 # stack). Run from the devsecops-platform repo root:
@@ -15,6 +16,11 @@
 #   Postgres  → logical DBs created by project-specific scripts in
 #               postgres-init/ (gitignored; copy from *.sample.sh)
 #   RabbitMQ  → vhosts dev / stg  (created by rabbitmq-init/ensure-vhosts.sh)
+#   MinIO     → users admin (root) + cfa (readwrite); buckets cfa-dev / cfa-stg
+#   Logging   → Loki labels (namespace / app / container); Grafana UI via
+#               https://${GRAFANA_DOMAIN} + oidc-auth-devtools (admins+users)
+#
+# k3d pod logs: apply devtools/k8s/alloy-daemonset.yaml after the bridge.
 # =============================================================================
 
 networks:
@@ -85,5 +91,156 @@ services:
     volumes:
       - ./rabbitmq-init/ensure-vhosts.sh:/ensure-vhosts.sh:ro
     entrypoint: ["/bin/sh", "/ensure-vhosts.sh"]
+    networks:
+      - devops-network
+
+  # Shared Loki — log store for all DSOaaS-deployed apps (and CFA apps that
+  # already deploy via Auto DevOps). Push API is internal-only (compose DNS +
+  # k8s bridge); developers browse via Grafana, not raw Loki.
+  devtools-loki:
+    image: grafana/loki:3.5.3
+    container_name: devtools-loki
+    restart: unless-stopped
+    command: ["-config.file=/etc/loki/loki-config.yml"]
+    user: "10001:10001"
+    volumes:
+      - ./loki/loki-config.yml:/etc/loki/loki-config.yml:ro
+      - ./.vols/loki:/loki
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3100/ready || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 8
+      start_period: 20s
+    networks:
+      devops-network:
+        ipv4_address: ${DEVTOOLS_LOKI_STATIC_IP:-172.19.0.102}
+
+  # Grafana Explore UI — oidc-auth-devtools@file (Keycloak groups admins + users).
+  # Requires GRAFANA_DOMAIN in devtools/.env AND a Traefik network alias in
+  # the main stack sample.env / docker-compose.yml (see maintainer docs).
+  devtools-grafana:
+    image: grafana/grafana:11.6.1
+    container_name: devtools-grafana
+    restart: unless-stopped
+    depends_on:
+      devtools-loki:
+        condition: service_healthy
+    environment:
+      GF_SERVER_ROOT_URL: https://${GRAFANA_DOMAIN:?set GRAFANA_DOMAIN in devtools/.env}
+      GF_SERVER_DOMAIN: ${GRAFANA_DOMAIN:?set GRAFANA_DOMAIN in devtools/.env}
+      GF_SECURITY_ADMIN_USER: ${DEVTOOLS_GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${DEVTOOLS_GRAFANA_ADMIN_PASSWORD:?set DEVTOOLS_GRAFANA_ADMIN_PASSWORD in devtools/.env}
+      # Trust oauth2-proxy ForwardAuth headers (X-Auth-Request-Email).
+      GF_AUTH_PROXY_ENABLED: "true"
+      GF_AUTH_PROXY_HEADER_NAME: X-Auth-Request-Email
+      GF_AUTH_PROXY_HEADER_PROPERTY: email
+      GF_AUTH_PROXY_AUTO_SIGN_UP: "true"
+      GF_AUTH_PROXY_HEADERS: Email:X-Auth-Request-Email Name:X-Auth-Request-User
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_USERS_AUTO_ASSIGN_ORG_ROLE: Editor
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_LOG_LEVEL: info
+    volumes:
+      - ./.vols/grafana:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/api/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 8
+      start_period: 20s
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.devtools-grafana.rule: "Host(`${GRAFANA_DOMAIN:?set GRAFANA_DOMAIN in devtools/.env}`)"
+      traefik.http.routers.devtools-grafana.entrypoints: "websecure"
+      traefik.http.routers.devtools-grafana.tls.certresolver: "letsencrypt"
+      traefik.http.routers.devtools-grafana.middlewares: "oidc-auth-devtools@file"
+      traefik.http.services.devtools-grafana.loadbalancer.server.port: "3000"
+    networks:
+      - devops-network
+
+
+  # Shared MinIO (S3). Root user is admin; cfa service user + buckets from
+  # minio-init/ensure-users.sh. Console HTTPS via oidc-auth-devtools; S3 API
+  # HTTPS without SSO (access-key auth) + TCP passthrough :29000.
+  devtools-minio:
+    image: quay.io/minio/minio:latest
+    container_name: devtools-minio
+    restart: unless-stopped
+    command: server /data --console-address :9001
+    environment:
+      MINIO_ROOT_USER: ${DEVTOOLS_MINIO_ROOT_USER:-admin}
+      MINIO_ROOT_PASSWORD: ${DEVTOOLS_MINIO_ROOT_PASSWORD:?set DEVTOOLS_MINIO_ROOT_PASSWORD in devtools/.env}
+      MINIO_SERVER_URL: https://${DEVTOOLS_MINIO_API_DOMAIN:?set DEVTOOLS_MINIO_API_DOMAIN in devtools/.env}
+      MINIO_BROWSER_REDIRECT_URL: https://${DEVTOOLS_MINIO_CONSOLE_DOMAIN:?set DEVTOOLS_MINIO_CONSOLE_DOMAIN in devtools/.env}
+    volumes:
+      - ./.vols/minio:/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:9000/minio/health/live || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 8
+      start_period: 15s
+    labels:
+      traefik.enable: "true"
+      # S3 API — access-key auth only (do not put oauth2-proxy in front).
+      traefik.http.routers.devtools-minio-api.rule: "Host(`${DEVTOOLS_MINIO_API_DOMAIN}`)"
+      traefik.http.routers.devtools-minio-api.entrypoints: "websecure"
+      traefik.http.routers.devtools-minio-api.tls.certresolver: "letsencrypt"
+      traefik.http.routers.devtools-minio-api.service: "devtools-minio-api"
+      traefik.http.services.devtools-minio-api.loadbalancer.server.port: "9000"
+      # Console — platform SSO (admins+users) then MinIO login form.
+      traefik.http.routers.devtools-minio-console.rule: "Host(`${DEVTOOLS_MINIO_CONSOLE_DOMAIN}`)"
+      traefik.http.routers.devtools-minio-console.entrypoints: "websecure"
+      traefik.http.routers.devtools-minio-console.tls.certresolver: "letsencrypt"
+      traefik.http.routers.devtools-minio-console.middlewares: "oidc-auth-devtools@file"
+      traefik.http.routers.devtools-minio-console.service: "devtools-minio-console"
+      traefik.http.services.devtools-minio-console.loadbalancer.server.port: "9001"
+    networks:
+      devops-network:
+        ipv4_address: ${DEVTOOLS_MINIO_STATIC_IP:-172.19.0.103}
+
+  devtools-minio-init:
+    image: quay.io/minio/mc:latest
+    container_name: devtools-minio-init
+    depends_on:
+      devtools-minio:
+        condition: service_healthy
+    restart: "no"
+    environment:
+      MINIO_ROOT_USER: ${DEVTOOLS_MINIO_ROOT_USER:-admin}
+      MINIO_ROOT_PASSWORD: ${DEVTOOLS_MINIO_ROOT_PASSWORD:?set DEVTOOLS_MINIO_ROOT_PASSWORD in devtools/.env}
+      DEVTOOLS_MINIO_CFA_USER: ${DEVTOOLS_MINIO_CFA_USER:-cfa}
+      DEVTOOLS_MINIO_CFA_PASSWORD: ${DEVTOOLS_MINIO_CFA_PASSWORD:?set DEVTOOLS_MINIO_CFA_PASSWORD in devtools/.env}
+      MINIO_ENDPOINT: http://devtools-minio:9000
+    volumes:
+      - ./minio-init/ensure-users.sh:/ensure-users.sh:ro
+    entrypoint: ["/bin/sh", "/ensure-users.sh"]
+    networks:
+      - devops-network
+
+  # Alloy — scrape Docker container logs (main platform compose + DevTools)
+  # and push to Loki. k3d pod logs use the DaemonSet under devtools/k8s/.
+  devtools-alloy:
+    image: grafana/alloy:v1.9.2
+    container_name: devtools-alloy
+    restart: unless-stopped
+    depends_on:
+      devtools-loki:
+        condition: service_healthy
+    command:
+      - run
+      - /etc/alloy/config.alloy
+      - --storage.path=/var/lib/alloy/data
+      - --server.http.listen-addr=0.0.0.0:12345
+    volumes:
+      - ./alloy/config.alloy:/etc/alloy/config.alloy:ro
+      - ./.vols/alloy:/var/lib/alloy/data
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    # Alloy image has no wget/curl; process up + /-/ready is checked via host curl in verify.
     networks:
       - devops-network

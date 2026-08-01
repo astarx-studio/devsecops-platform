@@ -1,7 +1,7 @@
 # =============================================================================
 # devtools k8s bridge
 #
-# devtools-postgres and devtools-rabbitmq run as plain Docker containers
+# devtools-postgres, devtools-rabbitmq, and devtools-minio run as plain Docker containers
 # (devtools/docker-compose.yml), not as k8s workloads. Pods can't reliably
 # resolve a Docker container name across the node/pod network-namespace
 # boundary, so this Namespace + selector-less Services + manual Endpoints
@@ -11,6 +11,7 @@
 #   devtools-postgres.devtools.svc.cluster.local:5432
 #   devtools-rabbitmq.devtools.svc.cluster.local:5672   (AMQP)
 #   devtools-rabbitmq.devtools.svc.cluster.local:15672  (Management UI)
+#   devtools-minio.devtools.svc.cluster.local:9000      (S3 API)
 #
 # RabbitMQ env isolation is by vhost (dev / stg), not by host.
 #
@@ -73,3 +74,55 @@ subsets:
         port: 5672
       - name: management
         port: 15672
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: devtools-loki
+  namespace: devtools
+spec:
+  ports:
+    - name: http
+      port: 3100
+---
+apiVersion: v1
+kind: Endpoints
+metadata:
+  name: devtools-loki
+  namespace: devtools
+subsets:
+  - addresses:
+      # Must match DEVTOOLS_LOKI_STATIC_IP in devtools/.env.
+      - ip: 172.19.0.102
+    ports:
+      - name: http
+        port: 3100
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: devtools-minio
+  namespace: devtools
+spec:
+  ports:
+    - name: s3
+      port: 9000
+    - name: console
+      port: 9001
+---
+apiVersion: v1
+kind: Endpoints
+metadata:
+  name: devtools-minio
+  namespace: devtools
+subsets:
+  - addresses:
+      # Must match DEVTOOLS_MINIO_STATIC_IP in devtools/.env.
+      - ip: 172.19.0.103
+    ports:
+      - name: s3
+        port: 9000
+      - name: console
+        port: 9001
