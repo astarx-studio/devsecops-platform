@@ -147,35 +147,52 @@ export function generateDeployTargetsCiYaml(targets: DeploymentTarget[]): string
 export function generateBuildJobsCiYaml(targets: DeploymentTarget[]): string {
   const jobs: string[] = [];
   /** One Kaniko job per image suffix across all targets (dev/stg/prod often share the same app). */
-  const seenImages = new Set<string>();
+  const dockerfileByImage = new Map<string, string>();
+  /** Every deploy-ref CI variable that should trigger this image's build (image may be shared). */
+  const refVarsByImage = new Map<string, Set<string>>();
 
   for (const target of targets) {
-    if (!target.apps?.length) {
+    if (!target.apps?.length || !target.enabled || target.deployRef === 'none') {
       continue;
     }
 
+    const refVar = deployRefVariableName(target.key);
+
     for (const app of target.apps) {
-      if (seenImages.has(app.image)) {
-        continue;
+      if (!dockerfileByImage.has(app.image)) {
+        dockerfileByImage.set(app.image, resolveDockerfile(app.dockerfile));
       }
-      seenImages.add(app.image);
-
-      const dockerfile = resolveDockerfile(app.dockerfile);
-
-      jobs.push(
-        `build:${app.image}:`,
-
-        '  extends: .build-kaniko',
-
-        '  variables:',
-
-        `    KANIKO_DOCKERFILE: "${dockerfile}"`,
-
-        `    KANIKO_IMAGE_NAME: "${app.image}"`,
-
-        '',
-      );
+      if (!refVarsByImage.has(app.image)) {
+        refVarsByImage.set(app.image, new Set());
+      }
+      refVarsByImage.get(app.image)!.add(refVar);
     }
+  }
+
+  // Gate each build job to only the branch(es) whose deploy target actually uses this
+  // image — otherwise every push builds every app's image regardless of branch (the
+  // bug: pushing target B's branch also ran target A's builds, failing when A's
+  // Dockerfile doesn't exist on B's tree).
+  for (const [image, dockerfile] of dockerfileByImage) {
+    jobs.push(
+      `build:${image}:`,
+
+      '  extends: .build-kaniko',
+
+      '  variables:',
+
+      `    KANIKO_DOCKERFILE: "${dockerfile}"`,
+
+      `    KANIKO_IMAGE_NAME: "${image}"`,
+
+      '  rules:',
+    );
+
+    for (const refVar of refVarsByImage.get(image) ?? []) {
+      jobs.push(`    - if: '$CI_COMMIT_BRANCH == $${refVar}'`, '      when: on_success');
+    }
+
+    jobs.push('');
   }
 
   if (jobs.length === 0) {
