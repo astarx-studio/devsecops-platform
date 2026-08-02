@@ -1722,7 +1722,11 @@ externalSecret:
     await this.k8sService.ensureNamespace(target.clusterProfile, target.kubeNamespace);
 
     await this.deleteStaleAppCiScopes(doc, target.key, previousApps, target.apps ?? []);
-    const ciSyncWarnings = await this.syncAllDeploymentWiring(doc);
+    // Commit generated CI config to this target's own ref branch rather than
+    // silently falling back to GitLab's live default branch (see DSOaaS bug:
+    // ref branch setting was ignored for deploy-target CI file commits).
+    const commitBranch = deployRef !== DEPLOY_REF_DISABLED ? deployRef : undefined;
+    const ciSyncWarnings = await this.syncAllDeploymentWiring(doc, commitBranch);
     this.recomputeDeployable(doc);
     await doc.save();
 
@@ -1774,7 +1778,10 @@ externalSecret:
     );
 
     doc.deploymentTargets = targets.filter((t) => t.key !== targetKey);
-    await this.regenerateDeployCiFiles(doc);
+    // Same fix as upsertDeploymentTarget: commit the updated CI config to the
+    // removed target's own ref branch instead of GitLab's live default branch.
+    const commitBranch = target.deployRef !== DEPLOY_REF_DISABLED ? target.deployRef : undefined;
+    await this.regenerateDeployCiFiles(doc, commitBranch);
     this.recomputeDeployable(doc);
     await doc.save();
 

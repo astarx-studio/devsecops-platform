@@ -124,7 +124,12 @@ export class EnvProfileService {
     await doc.save();
     await this.syncCiIndex(doc);
     await this.projectsService.syncVaultAccessCiVariables(doc);
-    await this.projectsService.refreshChartValuesOnGitlab(doc);
+    // Same class of bug as deployment targets: refreshChartValuesOnGitlab falls
+    // back to GitLab's live default branch when no ref is passed in, ignoring
+    // the branches this profile actually applies to. Commit to each of them.
+    for (const branch of new Set(profile.branches)) {
+      await this.projectsService.refreshChartValuesOnGitlab(doc, branch);
+    }
 
     this.logger.log(
       `uploadProfile: project=${projectId} profile=${profileId} phase=${profile.injectionPhase} keys=${keyNames.length}`,
@@ -153,7 +158,11 @@ export class EnvProfileService {
     await doc.save();
     await this.syncCiIndex(doc);
     await this.projectsService.syncVaultAccessCiVariables(doc);
-    await this.projectsService.refreshChartValuesOnGitlab(doc);
+    // Same fix as uploadProfile: commit to the removed profile's own branches
+    // instead of GitLab's live default branch.
+    for (const branch of new Set(profile.branches)) {
+      await this.projectsService.refreshChartValuesOnGitlab(doc, branch);
+    }
 
     return doc;
   }
