@@ -1,0 +1,46 @@
+# =============================================================================
+# Traefik Dynamic Configuration — Custom (non-apps-zone) host → k3d
+# =============================================================================
+# Vanity / marketing hostnames that sit outside *.apps.<DOMAIN>.
+# Hostname override in the Management API only sets the k8s Ingress Host;
+# outer Traefik must also match these names and forward to k3d-ingress
+# (defined in k3d-passthrough.yml).
+#
+# After editing this file on the host, recreate Traefik so the entrypoint
+# re-runs __DOMAIN__ substitution into /etc/traefik/dynamic/:
+#   docker compose up -d --force-recreate traefik
+#
+# __DOMAIN__ is substituted at container start (same as other dynamic files).
+# =============================================================================
+
+http:
+  middlewares:
+    # redirectRegex matches the full request URL (scheme+host+path), not path alone.
+    redirect-apex-to-www:
+      redirectRegex:
+        permanent: true
+        regex: "^https?://[^/]+(.*)"
+        replacement: "https://www.__DOMAIN__${1}"
+
+  routers:
+    # Company profile (compro-fe) production vanity host
+    k3d-custom-www:
+      rule: "Host(`www.__DOMAIN__`)"
+      entryPoints:
+        - websecure
+      service: k3d-ingress
+      priority: 20
+      tls:
+        certResolver: letsencrypt
+
+    # Apex → www (permanent). Avoids a bare-domain 404 once DNS points here.
+    apex-to-www:
+      rule: "Host(`__DOMAIN__`)"
+      entryPoints:
+        - websecure
+      middlewares:
+        - redirect-apex-to-www
+      service: noop@internal
+      priority: 20
+      tls:
+        certResolver: letsencrypt
