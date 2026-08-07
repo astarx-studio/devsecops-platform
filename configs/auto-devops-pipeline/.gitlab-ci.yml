@@ -28,7 +28,9 @@
 #   CHART_REGISTRY_HOST   Helm OCI host (default gitlab:5000 in-stack; external: GITLAB_REGISTRY_DOMAIN)
 #   CHART_REGISTRY_PLAIN_HTTP  auto | true | false
 #   CHART_REGISTRY_USER / CHART_REGISTRY_PASSWORD  Deploy token on auto-devops-chart (instance CI)
-#   EXTRA_HELM_ARGS       Pass extra --set flags to helm upgrade
+#   EXTRA_HELM_ARGS       Pass extra helm flags after the upgrade command
+#   HELM_TIMEOUT          helm --timeout duration (default: 5m). Prefer this over EXTRA_HELM_ARGS
+#                         --timeout — helm keeps the first --timeout on the command line.
 #   HELM_RELEASE_NAME     Helm release name (default CI_PROJECT_NAME; set per-app by Management API)
 #   DEPLOY_DEV_REF        Branch that triggers dev deploy (default: develop)
 #   DEPLOY_STG_REF        Branch that triggers stg deploy (default: staging)
@@ -475,7 +477,7 @@ container_scanning:
         --set project.env="${DEPLOY_ENV}" \
         --set "imagePullSecrets[0].name=gitlab-registry-secret" \
         --atomic \
-        --timeout 5m \
+        --timeout "${HELM_TIMEOUT:-5m}" \
         ${EXTRA_VALUES} \
         ${EXTRA_HELM_ARGS:-}
     - echo "Deployed ${HELM_RELEASE_NAME:-$CI_PROJECT_NAME} to ${DEPLOY_ENV} at https://${APP_HOST}"
