@@ -138,6 +138,126 @@ export class EnvProfileService {
     return profile;
   }
 
+  /**
+   * Reads Vault secret body for one profile. Returns plaintext to authorized callers only.
+   *
+   * @param projectId - Mongo project id
+   * @param profileId - Env profile UUID
+   * @returns Mode plus entries (dotenv) or rawContent (BUILD raw_file)
+   */
+  async getProfileContent(
+    projectId: string,
+    profileId: string,
+  ): Promise<{
+    profileId: string;
+    mode: 'dotenv' | 'raw_file';
+    entries: Array<{ key: string; value: string }>;
+    rawContent?: string;
+  }> {
+    const doc = await this.findProjectOrThrow(projectId);
+    const profile = this.findProfileOrThrow(doc, profileId);
+    const secrets = await this.vaultService.readSecrets(profile.vaultPath);
+
+    if (profile.injectionPhase === 'build' && profile.buildDelivery === 'raw_file') {
+      const rawContent = secrets[ENV_PROFILE_RAW_CONTENT_KEY] ?? '';
+      this.logger.debug(
+        `getProfileContent: project=${projectId} profile=${profileId} mode=raw_file bytes=${Buffer.byteLength(rawContent, 'utf8')}`,
+      );
+      return {
+        profileId,
+        mode: 'raw_file',
+        entries: [],
+        rawContent,
+      };
+    }
+
+    const entries = Object.entries(secrets)
+      .filter(([key]) => key !== ENV_PROFILE_RAW_CONTENT_KEY)
+      .map(([key, value]) => ({ key, value }));
+
+    this.logger.debug(
+      `getProfileContent: project=${projectId} profile=${profileId} mode=dotenv keys=${entries.length}`,
+    );
+
+    return { profileId, mode: 'dotenv', entries };
+  }
+
+  /**
+   * Replaces Vault secret body for an existing profile without allocating a new UUID.
+   * RUNTIME: removes previous keyNames from target paths, then merges the new map.
+   *
+   * @param projectId - Mongo project id
+   * @param profileId - Env profile UUID
+   * @param content - Full replacement body (dotenv or raw file text)
+   * @returns Updated profile metadata
+   */
+  async updateProfileContent(
+    projectId: string,
+    profileId: string,
+    content: string,
+  ): Promise<EnvProfile> {
+    const doc = await this.findProjectOrThrow(projectId);
+    const profiles = doc.envProfiles ?? [];
+    const index = profiles.findIndex((p) => p.id === profileId);
+    if (index < 0) {
+      throw new NotFoundException(`Env profile "${profileId}" not found`);
+    }
+
+    const profile = profiles[index];
+    if (Buffer.byteLength(content ?? '', 'utf8') > ENV_PROFILE_MAX_FILE_BYTES) {
+      throw new BadRequestException(
+        `File exceeds maximum size of ${ENV_PROFILE_MAX_FILE_BYTES} bytes`,
+      );
+    }
+
+    let keyNames: string[];
+
+    if (profile.injectionPhase === 'build' && profile.buildDelivery === 'raw_file') {
+      await this.vaultService.writeSecrets(profile.vaultPath, {
+        [ENV_PROFILE_RAW_CONTENT_KEY]: content,
+      });
+      keyNames = [ENV_PROFILE_RAW_CONTENT_KEY];
+    } else if (profile.injectionPhase === 'build') {
+      const parsed = parseDotenvContent(content);
+      keyNames = Object.keys(parsed);
+      await this.vaultService.writeSecrets(profile.vaultPath, parsed);
+    } else {
+      const parsed = parseDotenvContent(content);
+      keyNames = Object.keys(parsed);
+      await this.removeRuntimeKeysFromTargets(doc, profile);
+      for (const targetKey of profile.deploymentTargetKeys ?? []) {
+        const path = buildRuntimeTargetVaultPath(doc.vaultBasePath, targetKey);
+        const existing = await this.vaultService.readSecrets(path);
+        await this.vaultService.writeSecrets(path, { ...existing, ...parsed });
+        this.logger.debug(
+          `updateProfileContent: merged ${keyNames.length} keys into ${path}`,
+        );
+      }
+      await this.vaultService.writeSecrets(profile.vaultPath, parsed);
+    }
+
+    const updated: EnvProfile = {
+      ...profile,
+      keyNames,
+      updatedAt: new Date(),
+    };
+    profiles[index] = updated;
+    doc.envProfiles = profiles;
+    doc.runtimeEnvEnabled = this.computeRuntimeEnvEnabled(profiles);
+    await doc.save();
+    await this.syncCiIndex(doc);
+    await this.projectsService.syncVaultAccessCiVariables(doc);
+    for (const branch of new Set(updated.branches)) {
+      await this.projectsService.refreshChartValuesOnGitlab(doc, branch);
+    }
+
+    this.logger.log(
+      `updateProfileContent: project=${projectId} profile=${profileId} phase=${updated.injectionPhase} keys=${keyNames.length}`,
+    );
+
+    return updated;
+  }
+
   async deleteProfile(projectId: string, profileId: string): Promise<ProjectDocument> {
     const doc = await this.findProjectOrThrow(projectId);
     const existing = doc.envProfiles ?? [];
@@ -325,5 +445,13 @@ export class EnvProfileService {
       throw new NotFoundException(`Project "${projectId}" not found`);
     }
     return doc;
+  }
+
+  private findProfileOrThrow(doc: ProjectDocument, profileId: string): EnvProfile {
+    const profile = (doc.envProfiles ?? []).find((p) => p.id === profileId);
+    if (!profile) {
+      throw new NotFoundException(`Env profile "${profileId}" not found`);
+    }
+    return profile;
   }
 }

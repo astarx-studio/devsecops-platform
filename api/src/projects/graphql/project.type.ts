@@ -4,6 +4,7 @@ import {
   ClusterProfile,
   DeleteProjectOutcome,
   EnvProfileBuildDelivery,
+  EnvProfileContentMode,
   EnvProfileInjectionPhase,
   Provisioning,
   SonarGateMode,
@@ -113,6 +114,40 @@ export class EnvProfileType {
 
   @Field(() => Date, { nullable: true })
   updatedAt?: Date;
+}
+
+/** One KEY=value pair returned by envProfileContent (plaintext for authorized operators). */
+@ObjectType({ description: 'Single env key/value from a Vault-backed env profile.' })
+export class EnvProfileEntryType {
+  @Field(() => String)
+  key!: string;
+
+  @Field(() => String)
+  value!: string;
+}
+
+/**
+ * Secret body for one env profile. Intentionally returns plaintext to authorized operators
+ * (API key / console admins); list queries remain metadata-only.
+ */
+@ObjectType({ description: 'Env profile secret content from Vault (operator read/edit).' })
+export class EnvProfileContentType {
+  @Field(() => String)
+  profileId!: string;
+
+  @Field(() => EnvProfileContentMode)
+  mode!: EnvProfileContentMode;
+
+  @Field(() => [EnvProfileEntryType], {
+    description: 'Populated when mode is DOTENV.',
+  })
+  entries!: EnvProfileEntryType[];
+
+  @Field(() => String, {
+    nullable: true,
+    description: 'Populated when mode is RAW_FILE (full file body).',
+  })
+  rawContent?: string;
 }
 
 @ObjectType({ description: 'Capability flags set at project provisioning time.' })

@@ -94,6 +94,16 @@ export const QUERIES = {
       templates { id slug description gitlabUrl defaultBranch }
     }
   `,
+  envProfileContent: `
+    query EnvProfileContent($projectId: ID!, $profileId: String!) {
+      envProfileContent(projectId: $projectId, profileId: $profileId) {
+        profileId
+        mode
+        entries { key value }
+        rawContent
+      }
+    }
+  `,
 } as const;
 
 export const MUTATIONS = {
@@ -205,6 +215,29 @@ export const MUTATIONS = {
   deleteEnvProfile: `
     mutation DeleteEnvProfile($projectId: ID!, $profileId: String!) {
       deleteEnvProfile(projectId: $projectId, profileId: $profileId) { ${PROJECT_FIELDS} }
+    }
+  `,
+  updateEnvProfileContent: `
+    mutation UpdateEnvProfileContent(
+      $projectId: ID!
+      $profileId: String!
+      $input: UpdateEnvProfileContentInput!
+    ) {
+      updateEnvProfileContent(projectId: $projectId, profileId: $profileId, input: $input) {
+        id
+        label
+        injectionPhase
+        branches
+        deploymentTargetKeys
+        jobSelector
+        workspacePath
+        filename
+        buildDelivery
+        vaultPath
+        contentType
+        keyNames
+        updatedAt
+      }
     }
   `,
 } as const;

@@ -188,6 +188,17 @@ Monorepo jobs can set `ENV_PROFILE_JOB_SELECTOR` (or `KANIKO_IMAGE_NAME` on buil
 
 For hand-onboarded repos without the API, seed Vault manually as above, or ask an admin to register the project so uploads go through `uploadEnvProfile`.
 
+**Console / GraphQL ops (authorized operators):**
+
+| Operation | Purpose |
+|---|---|
+| `uploadEnvProfile` | Create a new profile (new UUID) from file/paste/per-key content |
+| `envProfileContent` | Read Vault secret body for one profile (plaintext; list stays metadata-only) |
+| `updateEnvProfileContent` | Replace secret body **in place** (same `profileId`; RUNTIME re-merges target paths) |
+| `deleteEnvProfile` | Remove Mongo metadata + Vault secrets |
+
+In Console: **Variables** → **Manage** on a row to view (masked + Reveal) and edit; no need to delete and re-upload to change a value.
+
 ### Step 4 — Push to a trigger branch
 
 The shared pipeline maps branch names to environments by exact equality. By default:

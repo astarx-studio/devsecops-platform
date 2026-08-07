@@ -631,3 +631,17 @@ export class UploadEnvProfileInput {
   @IsOptional()
   contentType?: string;
 }
+
+@InputType({
+  description:
+    'Replace secret body of an existing env profile in place (same profileId; no new UUID).',
+})
+export class UpdateEnvProfileContentInput {
+  @Field(() => String, {
+    description:
+      'Full replacement body. Dotenv KEY=value for RUNTIME / BUILD dotenv_build_args; raw text for BUILD raw_file.',
+  })
+  @IsString()
+  @IsNotEmpty()
+  content!: string;
+}

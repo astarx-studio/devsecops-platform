@@ -42,6 +42,7 @@ export interface SonarGatePolicy {
 
 export type EnvProfileInjectionPhase = "BUILD" | "RUNTIME";
 export type EnvProfileBuildDelivery = "RAW_FILE" | "DOTENV_BUILD_ARGS";
+export type EnvProfileContentMode = "DOTENV" | "RAW_FILE";
 
 export interface EnvProfile {
   id: string;
@@ -57,6 +58,19 @@ export interface EnvProfile {
   contentType?: string | null;
   keyNames: string[];
   updatedAt?: string | null;
+}
+
+export interface EnvProfileEntry {
+  key: string;
+  value: string;
+}
+
+/** Secret body from envProfileContent (plaintext for authorized operators). */
+export interface EnvProfileContent {
+  profileId: string;
+  mode: EnvProfileContentMode;
+  entries: EnvProfileEntry[];
+  rawContent?: string | null;
 }
 
 export interface ProjectSonar {

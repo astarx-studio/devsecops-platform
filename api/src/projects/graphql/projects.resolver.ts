@@ -10,19 +10,21 @@ import { TemplatesService } from '../../templates/templates.service';
 import { EnvProfileService } from '../env/env-profile.service';
 import { SlugService } from '../slug.service';
 import { ProjectsService } from '../projects.service';
-import { DeleteProjectOutcome, Env } from './enums';
+import { DeleteProjectOutcome, Env, EnvProfileContentMode } from './enums';
 import {
   CreateProjectInput,
   ProjectFilterInput,
   MigrateProjectToAutoDevopsInput,
   RegisterGitLabProjectInput,
   UpdateProjectSonarConfigInput,
+  UpdateEnvProfileContentInput,
   UploadEnvProfileInput,
   UpsertDeploymentTargetInput,
 } from './project.inputs';
 import {
   ConfigType,
   DeleteProjectResultType,
+  EnvProfileContentType,
   EnvProfileType,
   ReconcileGitLabProjectsResultType,
   DeploymentTargetType,
@@ -477,5 +479,42 @@ export class ProjectsResolver {
   ): Promise<ProjectType> {
     const doc = await this.envProfileService.deleteProfile(projectId, profileId);
     return this.mapDoc(doc);
+  }
+
+  @Query(() => EnvProfileContentType, {
+    description:
+      'Loads Vault secret body for one env profile (plaintext for authorized operators; list stays metadata-only).',
+  })
+  async envProfileContent(
+    @Args('projectId', { type: () => ID }) projectId: string,
+    @Args('profileId') profileId: string,
+  ): Promise<EnvProfileContentType> {
+    const content = await this.envProfileService.getProfileContent(projectId, profileId);
+    return {
+      profileId: content.profileId,
+      mode:
+        content.mode === 'raw_file'
+          ? EnvProfileContentMode.RAW_FILE
+          : EnvProfileContentMode.DOTENV,
+      entries: content.entries,
+      rawContent: content.rawContent,
+    };
+  }
+
+  @Mutation(() => EnvProfileType, {
+    description:
+      'Replaces env profile secret content in Vault in place (same profileId; updates RUNTIME target merges).',
+  })
+  async updateEnvProfileContent(
+    @Args('projectId', { type: () => ID }) projectId: string,
+    @Args('profileId') profileId: string,
+    @Args('input') input: UpdateEnvProfileContentInput,
+  ): Promise<EnvProfileType> {
+    const profile = await this.envProfileService.updateProfileContent(
+      projectId,
+      profileId,
+      input.content,
+    );
+    return mapEnvProfile(profile);
   }
 }

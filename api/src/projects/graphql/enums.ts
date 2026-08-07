@@ -97,3 +97,15 @@ registerEnumType(EnvProfileBuildDelivery, {
   description:
     'raw_file writes verbatim to workspacePath/filename; dotenv_build_args passes Docker build-args.',
 });
+
+/** How env profile secret content is represented when read/edited by operators. */
+export enum EnvProfileContentMode {
+  DOTENV = 'dotenv',
+  RAW_FILE = 'raw_file',
+}
+
+registerEnumType(EnvProfileContentMode, {
+  name: 'EnvProfileContentMode',
+  description:
+    'dotenv exposes KEY=value entries; raw_file exposes a single opaque file body (BUILD raw_file).',
+});

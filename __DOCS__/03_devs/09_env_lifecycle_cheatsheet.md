@@ -71,13 +71,23 @@ Vault path: `secret/data/<VAULT_PROJECT_PATH>/<targetKey>` for RUNTIME; branch-s
 
 Pods pick up RUNTIME changes via External Secrets Operator + Reloader (~5m or redeploy). BUILD changes require a **new image build**.
 
+### View / edit in Console
+
+1. Open the project → **Variables** → env profiles table.
+2. **Manage** opens the profile details dialog and loads secrets from Vault (masked by default; use Reveal to show plaintext).
+3. Edit **per key** for RUNTIME / BUILD dotenv, or the **full file** textarea for BUILD `raw_file`.
+4. **Save** updates Vault in place (`updateEnvProfileContent`) — no delete + re-upload.
+5. Create still uses **Upload profile** (file, paste, or per-key for dotenv).
+
+List queries remain metadata-only (`keyNames`); reading values requires `envProfileContent` (admins / API key).
+
 ---
 
 ## Common operator tasks
 
 | Task                        | Action                                                                                                                                                                            |
 | --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Rotate app secret           | Console → RUNTIME profile → redeploy or wait for ESO                                                                                                                              |
+| Rotate app secret           | Console → Variables → Manage RUNTIME profile → edit key → Save → redeploy or wait for ESO                                                                                         |
 | Rotate devtools DB password | `ALTER USER` → update console profiles → redeploy infra + backends                                                                                                                |
 | Add deploy target           | Console → Deployment targets (or `upsertDeploymentTarget` API)                                                                                                                    |
 | Gate new app path with SSO  | Edit `traefik/dynamic/oauth2-proxy-apps-gated-paths.yml`, recreate traefik                                                                                                        |
