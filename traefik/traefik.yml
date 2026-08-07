@@ -21,7 +21,8 @@ entryPoints:
     address: ":8082"
   # TCP passthrough for non-HTTP services — see traefik/dynamic/tcp-passthrough.yml.
   # No TLS: raw wire protocols, auth is handled by each service itself.
-  # Env isolation for RabbitMQ is vhost (dev/stg), not separate host ports.
+  # Shared RabbitMQ (devtools-amqp) isolates env via vhost (dev/stg).
+  # CFA in-cluster brokers use separate host ports (cfa-amqp-dev/stg).
   devtools-pg:
     address: ":25432"
   devtools-amqp:
@@ -29,6 +30,11 @@ entryPoints:
   # RabbitMQ Management UI (HTTP :15672 on shared broker)
   devtools-amqp-mgmt:
     address: ":25682"
+  # CFA infra RabbitMQ AMQP (k3d NodePorts 30572/30573)
+  cfa-amqp-dev:
+    address: ":26572"
+  cfa-amqp-stg:
+    address: ":26573"
   devtools-minio-s3:
     address: ":29000"
   web:

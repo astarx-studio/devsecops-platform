@@ -5,10 +5,10 @@
 # meaningless for raw TCP protocols (Postgres wire protocol, AMQP) — auth is
 # handled by the service itself (DB user/password, RabbitMQ credentials).
 #
-# Both backends are plain Docker containers on devops-network
-# (devtools/docker-compose.yml), reachable by container name — no k3d
-# NodePort indirection. Env isolation for RabbitMQ is via vhosts (dev/stg),
-# not separate host ports.
+# Shared DevTools backends are Docker containers on devops-network
+# (devtools/docker-compose.yml), reachable by container name. CFA AMQP uses
+# k3d NodePorts on k3d-dsoaas-server-0 (must match RABBITMQ_NODE_PORT in
+# cfa/infra .gitlab-ci.yml: 30572=dev, 30573=stg).
 # =============================================================================
 
 tcp:
@@ -30,6 +30,18 @@ tcp:
       entryPoints:
         - devtools-amqp-mgmt
       service: devtools-amqp-mgmt
+
+    cfa-amqp-dev:
+      rule: "HostSNI(`*`)"
+      entryPoints:
+        - cfa-amqp-dev
+      service: cfa-amqp-dev
+
+    cfa-amqp-stg:
+      rule: "HostSNI(`*`)"
+      entryPoints:
+        - cfa-amqp-stg
+      service: cfa-amqp-stg
 
     devtools-minio-s3:
       rule: "HostSNI(`*`)"
@@ -53,6 +65,17 @@ tcp:
       loadBalancer:
         servers:
           - address: "devtools-rabbitmq:15672"
+
+    # CFA in-cluster RabbitMQ (helm exposeNodePort) via k3d server NodePort.
+    cfa-amqp-dev:
+      loadBalancer:
+        servers:
+          - address: "k3d-dsoaas-server-0:30572"
+
+    cfa-amqp-stg:
+      loadBalancer:
+        servers:
+          - address: "k3d-dsoaas-server-0:30573"
 
     devtools-minio-s3:
       loadBalancer:
