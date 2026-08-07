@@ -666,8 +666,10 @@ services:
           sed -i "/^[[:space:]]*helper_image = /a\\    pull_policy = [\"always\"]" "$$CFG"
         fi
         sed -i 's|^[[:space:]]*disable_entrypoint_overwrite = .*|    disable_entrypoint_overwrite = false|' "$$CFG"
-        if ! grep -q 'docker.sock' "$$CFG"; then
-          sed -i 's|^\(\s*volumes = \[\)|\1"/var/run/docker.sock:/var/run/docker.sock", |' "$$CFG"
+        # Ensure docker.sock appears exactly once (duplicate mounts fail job prep with
+        # "volume for container path /var/run/docker.sock is already defined").
+        if grep -q '^[[:space:]]*volumes = ' "$$CFG"; then
+          sed -i 's|^[[:space:]]*volumes = .*|    volumes = ["/var/run/docker.sock:/var/run/docker.sock", "/cache", "/certs/client"]|' "$$CFG"
         fi
         # Docker Desktop (Windows) breaks external DNS with 127.0.0.11; use network default resolver.
         sed -i '/^[[:space:]]*dns = /d' "$$CFG"
