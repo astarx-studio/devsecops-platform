@@ -72,7 +72,9 @@ info "Kubeconfigs will be written to: ${KUBECONFIG_DIR}"
 # External runners (and job containers on the host Docker daemon) must use the
 # k3d-published port on the Docker host (default 16443 via k3d-cluster.sh).
 # -----------------------------------------------------------------------------
-KUBE_API_CI_URL="${KUBE_API_CI_URL:-https://host.docker.internal:16443}"
+# Default for this stack's in-network GitLab runner (see docker-compose DOCKER_NETWORK).
+# Override to https://host.docker.internal:16443 only for external / host-network runners.
+KUBE_API_CI_URL="${KUBE_API_CI_URL:-https://k3d-${K3D_CLUSTER_NAME:-dsoaas}-serverlb:6443}"
 CLUSTER_ENDPOINT="${KUBE_API_CI_URL}"
 
 # Fetch cluster CA from the current kubeconfig
