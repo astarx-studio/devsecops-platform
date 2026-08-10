@@ -662,10 +662,18 @@ services:
         else
           sed -i "/^[[:space:]]*\\[runners.docker\\]/a\\    helper_image = \"$$HELPER_IMAGE\"" "$$CFG"
         fi
+        PULL_POLICY="$${GITLAB_RUNNER_PULL_POLICY:-if-not-present}"
+        case "$$PULL_POLICY" in
+          always|if-not-present|never) ;;
+          *)
+            echo "Invalid GITLAB_RUNNER_PULL_POLICY=$$PULL_POLICY (use always|if-not-present|never); defaulting to if-not-present"
+            PULL_POLICY="if-not-present"
+            ;;
+        esac
         if grep -q '^[[:space:]]*pull_policy' "$$CFG"; then
-          sed -i 's|^[[:space:]]*pull_policy = .*|    pull_policy = ["always"]|' "$$CFG"
+          sed -i "s|^[[:space:]]*pull_policy = .*|    pull_policy = [\"$$PULL_POLICY\"]|" "$$CFG"
         else
-          sed -i "/^[[:space:]]*helper_image = /a\\    pull_policy = [\"always\"]" "$$CFG"
+          sed -i "/^[[:space:]]*helper_image = /a\\    pull_policy = [\"$$PULL_POLICY\"]" "$$CFG"
         fi
         sed -i 's|^[[:space:]]*disable_entrypoint_overwrite = .*|    disable_entrypoint_overwrite = false|' "$$CFG"
         # Ensure docker.sock appears exactly once (duplicate mounts fail job prep with
@@ -685,6 +693,7 @@ services:
     environment:
       GITLAB_RUNNER_TOKEN: ${GITLAB_RUNNER_TOKEN}
       GITLAB_RUNNER_CONCURRENT: ${GITLAB_RUNNER_CONCURRENT:-2}
+      GITLAB_RUNNER_PULL_POLICY: ${GITLAB_RUNNER_PULL_POLICY:-if-not-present}
       DOCKER_NETWORK: ${DOCKER_NETWORK}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock

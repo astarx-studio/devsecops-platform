@@ -279,6 +279,9 @@ No additional iptables configuration is needed inside the container.
 | Variable | Purpose |
 |---|---|
 | `GITLAB_RUNNER_TOKEN` | Runner authentication token from GitLab (starts with `glrt-`) |
+| `GITLAB_RUNNER_CONCURRENT` | Max parallel jobs (`concurrent` + `request_concurrency`); enforced on every start |
+| `GITLAB_RUNNER_PULL_POLICY` | Docker executor `pull_policy`: `always`, `if-not-present` (default), or `never` |
+| `GITLAB_RUNNER_IMAGE_RETENTION_DAYS` | Default age (days) for `make prune-docker-host ARGS='--retention-days'` |
 | `DOCKER_NETWORK` | Network name to inject into the runner's `docker-network-mode` |
 
 **Registration behavior:**
@@ -287,6 +290,8 @@ The entrypoint script checks if `GITLAB_RUNNER_TOKEN` equals `FILL_AFTER_STARTUP
 **Operational notes:**
 - After first GitLab boot, retrieve the runner registration token from **GitLab → Admin → Runners** and update `GITLAB_RUNNER_TOKEN` in `.env`. Then restart the `gitlab-runner` container.
 - The reference `config.toml` is at `gitlab-runner/config.toml`. It is not mounted; it documents the expected configuration generated during registration.
+- The entrypoint rewrites `pull_policy` from `GITLAB_RUNNER_PULL_POLICY` on every start. Prefer `if-not-present` on memory-constrained hosts; roll back with `GITLAB_RUNNER_PULL_POLICY=always` and `docker compose up -d --force-recreate gitlab-runner`.
+- The Docker executor uses the **host** Docker engine (`docker.sock`). Job images and layers accumulate in Docker Desktop’s VHDX, not in MinIO. Reclaim with `make prune-docker-host` (see [Disk hygiene](../01_infra/04_operations.md#disk-hygiene-docker-desktop--gitlab-registry)). Schedule `ARGS='--retention-days'` (uses `GITLAB_RUNNER_IMAGE_RETENTION_DAYS`, default 7) so stale job images are dropped and the next CI run re-pulls under `if-not-present`.
 - `privileged: true` is required for Docker-in-Docker builds.
 
 ---

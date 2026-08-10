@@ -172,6 +172,20 @@ This one is different — you can't fill it in before the platform starts, becau
 
 Do **not** use `docker compose restart gitlab-runner` — that doesn't re-read environment variables. Use `up -d` to recreate the container.
 
+### Runner pull policy and image retention
+
+```
+GITLAB_RUNNER_PULL_POLICY=if-not-present
+GITLAB_RUNNER_IMAGE_RETENTION_DAYS=7
+```
+
+| Variable | Purpose |
+|---|---|
+| `GITLAB_RUNNER_PULL_POLICY` | Docker executor `pull_policy`: `always`, `if-not-present` (default), or `never`. Entrypoint writes this into the live runner `config.toml` on every start. |
+| `GITLAB_RUNNER_IMAGE_RETENTION_DAYS` | Age gate for `make prune-docker-host ARGS='--retention-days'` — removes **unused** host images older than N days so the next job re-pulls under `if-not-present`. Default `7`. |
+
+Recreate the runner after changing pull policy: `docker compose up -d --force-recreate gitlab-runner`. Retention prune is scheduled/manual (see [Disk hygiene](04_operations.md#disk-hygiene-docker-desktop--gitlab-registry)); it does not run on runner start.
+
 ---
 
 ## Management API

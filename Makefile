@@ -12,7 +12,7 @@
 SHELL := /usr/bin/bash
 ROOT := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 
-.PHONY: help bootstrap vault-bootstrap update-dso-configs smoke smoke-deploy smoke-cleanup reset backup restore migrate-v1 verify-sonar reset-sonarqube upgrade
+.PHONY: help bootstrap vault-bootstrap update-dso-configs smoke smoke-deploy smoke-cleanup reset backup restore migrate-v1 verify-sonar reset-sonarqube upgrade prune-docker-host gitlab-registry-retention
 
 help:
 	@echo "Targets:"
@@ -27,6 +27,8 @@ help:
 	@echo "  make reset         - ./bootstrap/reset.sh (k3d only; pass ARGS=--all for compose down -v)"
 	@echo "  make backup        - ./bootstrap/backup.sh → backups/platform-<timestamp>.tar.gz"
 	@echo "  make restore       - requires ARCHIVE=backups/platform-....tar.gz (compose stack must be down)"
+	@echo "  make prune-docker-host - reclaim host Docker disk (safe default; ARGS='--images' / '--volumes' / '--retention-days [N]')"
+	@echo "  make gitlab-registry-retention - enable registry cleanup policies (ARGS='--trigger' / '--dry-run')"
 	@echo "  make migrate-v1    - prints __DOCS__/01_infra/07_v1_migration.md (manual operator workflow)"
 	@echo "  make upgrade <svc> [VERSION=<tag>] - guided image upgrade (svc: gitlab). Omit VERSION to use the latest (with confirmation)."
 	@echo "                       e.g. make upgrade gitlab  |  make upgrade gitlab VERSION=18.11.2-ce.0"
@@ -58,6 +60,12 @@ smoke-cleanup:
 
 backup:
 	@cd "$(ROOT)" && bash ./bootstrap/backup.sh
+
+prune-docker-host:
+	@cd "$(ROOT)" && bash ./bootstrap/prune-docker-host.sh $(ARGS)
+
+gitlab-registry-retention:
+	@cd "$(ROOT)" && bash ./bootstrap/gitlab-registry-retention.sh $(ARGS)
 
 restore:
 	@if [ -z "$(ARCHIVE)" ]; then \

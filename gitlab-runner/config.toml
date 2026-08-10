@@ -38,6 +38,7 @@ shutdown_timeout = 0
     # network_mode must match DOCKER_NETWORK in .env (set during runner registration)
     network_mode = "devops-network"
     # Omit dns — 127.0.0.11 breaks outbound resolution on Docker Desktop; network default works.
-    pull_policy = ["always"]
+    # Overridden on start from GITLAB_RUNNER_PULL_POLICY (always|if-not-present|never).
+    pull_policy = ["if-not-present"]
   [runners.cache]
     Type = "local"
