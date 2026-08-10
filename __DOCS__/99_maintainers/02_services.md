@@ -81,14 +81,14 @@ All services share the `devops-network` Docker bridge network. The network name 
 | Image | `postgres:17-alpine` |
 | Service / container name | `postgres` |
 | Host ports | `15433→5432` |
-| Volumes | `./.vols/keycloak-db` → `/var/lib/postgresql/data` (path unchanged for upgrades) |
+| Volumes | Named volume `dsoaas-postgres-data` → `/var/lib/postgresql/data` (ext4 inside Docker VHDX). Legacy bind path `.vols/keycloak-db` may remain as a cold backup after migration — do not delete until verified. |
 | Depends on | — |
 
 Shared PostgreSQL for **Keycloak** (`KC_DB_*`), **SonarQube** (`SONAR_DB_*`), **GitLab Rails** (`GITLAB_DB_*`), and **container registry metadata** (`REGISTRY_DB_*`). On first boot (empty data directory), the image bootstraps operator superuser `${POSTGRES_ADMIN_USER}` / database `postgres`; `postgres/init/01-keycloak-database.sh` through `04-registry-database.sh` create app roles and databases. Application services use app credentials only (not the admin user).
 
 **DNS:** Hostname `postgres`. Legacy alias `keycloak-db` still resolves on `devops-network` if `.env` still has `KC_DB_HOST=keycloak-db`; prefer `KC_DB_HOST=postgres` in new installs (`sample.env`).
 
-**Renaming without data loss:** Safe when the bind-mount path stays `.vols/keycloak-db`. Stop the stack, then `docker compose up -d` — data lives on the host volume, not the container name. Do not delete `.vols/keycloak-db` unless you intend a full DB reset.
+**Renaming without data loss:** Data lives in the Docker named volume `dsoaas-postgres-data` (see `docker-compose.yml` `volumes.postgres-data`). Stop the stack, then `docker compose up -d` — do not run `docker compose down -v` unless you intend to destroy the DB. A leftover `.vols/keycloak-db` directory is only a pre-migration cold copy if present.
 
 **App databases on compose up:** `postgres-keycloak-init`, `postgres-sonar-init`, `postgres-gitlab-init`, and `postgres-registry-init` create roles, databases, and (for GitLab) required extensions idempotently as `${POSTGRES_ADMIN_USER}`. Fresh installs also run `postgres/init/01-keycloak-database.sh` through `04-registry-database.sh` when the data directory is empty.
 
@@ -463,7 +463,7 @@ Two containers share this image: **`oauth2-proxy`** (operator tier, port 4180) a
 |---|---|
 | Image | `sonarqube:community` |
 | Host ports | — (Traefik `https://${SONARQUBE_DOMAIN}`) |
-| Volumes | `./.vols/sonarqube/data`, `extensions`, `logs`, `conf/sonar.properties` (generated) |
+| Volumes | Named volume `dsoaas-sonarqube-data` → `/opt/sonarqube/data`; bind `extensions`, `logs`, `conf/sonar.properties`. Legacy `.vols/sonarqube/data` may remain as cold backup after migration. |
 | Depends on | `postgres` (healthy), `postgres-sonar-init`, `sonarqube-config-init` (completed) |
 
 **Key environment variables:**
@@ -490,7 +490,7 @@ Two containers share this image: **`oauth2-proxy`** (operator tier, port 4180) a
 
 **Traefik:** TLS termination only (no ForwardAuth on Sonar — authentication is SAML inside SonarQube).
 
-**Backup / DR:** Back up the shared PostgreSQL volume (`.vols/keycloak-db`) **and** `.vols/sonarqube/data` (search index). Restore both together on the same Sonar version.
+**Backup / DR:** Back up the shared PostgreSQL Docker volume (`dsoaas-postgres-data`, or a dump via `pg_dump`/`pg_dumpall`) **and** Sonar data volume `dsoaas-sonarqube-data` (search index). Restore both together on the same Sonar version.
 
 **CI integration:** Shared pipeline job `sonar:scan` in `configs/auto-devops-pipeline`. Runners use `SONAR_HOST_URL_INTERNAL`; humans use `SONARQUBE_EXTERNAL_URL`. See [CI/CD internals](06_ci_cd.md#sonarqube) and [Manual onboarding Sonar](../03_devs/06_manual_onboarding.md#sonarqube-opt-in).
 

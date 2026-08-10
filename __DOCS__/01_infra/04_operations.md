@@ -87,7 +87,7 @@ All persistent data is stored under `.vols/` in the project root. This folder is
 - `.vols/gitlab/` — GitLab repositories, registry images, uploads, and configuration
 - `.vols/gitlab-runner/` — GitLab Runner configuration and build cache
 - `.vols/vault/` — OpenBao secrets storage
-- `.vols/keycloak-db/` — Keycloak database (users, realm configuration, OIDC clients)
+- `.vols/keycloak-db/` — legacy cold copy of shared PostgreSQL (if present after migration); live data is Docker volume `dsoaas-postgres-data`
 - `.vols/mongo/` — MongoDB data (Management API registry)
 - `.vols/traefik/` — ACME certificate storage (your Let's Encrypt certificates)
 

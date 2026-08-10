@@ -16,6 +16,13 @@ networks:
     driver: bridge
     name: ${DOCKER_NETWORK}
 
+# Named volumes (ext4 inside Docker Desktop VHDX — prefer over Windows bind mounts for DBs).
+volumes:
+  postgres-data:
+    name: dsoaas-postgres-data
+  sonarqube-data:
+    name: dsoaas-sonarqube-data
+
 # ==========================================================================
 # SERVICES
 # ==========================================================================
@@ -167,7 +174,9 @@ services:
   # POSTGRES — Shared PostgreSQL (Keycloak, SonarQube, GitLab, registry metadata)
   # ========================================================================
   # Bootstrap: POSTGRES_ADMIN_* → superuser on DB postgres; app DBs via init scripts.
-  # Data directory remains .vols/keycloak-db for upgrades from older layouts.
+  # Data: named volume `dsoaas-postgres-data` (ext4 inside Docker VHDX). Avoids Windows
+  # 9p/NTFS bind-mount WAL ENOMEM under memory pressure. Cold backup may remain at
+  # .vols/keycloak-db after migration (do not delete until verified).
   # DNS: postgres (service name). Alias keycloak-db keeps old KC_DB_HOST working.
   postgres:
     image: postgres:17-alpine
@@ -200,7 +209,7 @@ services:
       VAULT_DB_USER: ${VAULT_DB_USER:-openbao}
       VAULT_DB_PASSWORD: ${VAULT_DB_PASSWORD:?set VAULT_DB_PASSWORD in .env}
     volumes:
-      - ./.vols/keycloak-db:/var/lib/postgresql/data
+      - postgres-data:/var/lib/postgresql/data
       - ./postgres/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_ADMIN_USER} -d postgres"]
@@ -1244,7 +1253,7 @@ services:
       # OutOfMemoryError during report processing and cascading ES CancellationException on refresh.
       SONAR_CE_JAVAADDITIONALOPTS: "-javaagent:/opt/sonarqube/extensions/plugins/sonarqube-community-branch-plugin.jar=ce -Xmx1g -Xms512m"
     volumes:
-      - ./.vols/sonarqube/data:/opt/sonarqube/data
+      - sonarqube-data:/opt/sonarqube/data
       - ./.vols/sonarqube/extensions:/opt/sonarqube/extensions
       - ./.vols/sonarqube/logs:/opt/sonarqube/logs
       - ./.vols/sonarqube/conf/sonar.properties:/opt/sonarqube/conf/sonar.properties:ro
