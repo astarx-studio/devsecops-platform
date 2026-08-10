@@ -24,6 +24,7 @@
 #   KANIKO_DOCKERFILE     Dockerfile path relative to repo root (default: Dockerfile)
 #   KANIKO_IMAGE_NAME     Optional registry path suffix for monorepos, e.g. "admin"
 #                         → pushes to $CI_REGISTRY_IMAGE/admin:$CI_COMMIT_SHORT_SHA-$CI_COMMIT_REF_SLUG
+#   KANIKO_CACHE          "true" (default) | "false" — disable remote cache repo to limit registry growth
 #   CHART_VERSION         Pin a chart version  (default: latest stable)
 #   CHART_REGISTRY_HOST   Helm OCI host (default gitlab:5000 in-stack; external: GITLAB_REGISTRY_DOMAIN)
 #   CHART_REGISTRY_PLAIN_HTTP  auto | true | false
@@ -93,7 +94,8 @@ variables:
   # auto | true | false — auto uses plain HTTP only for gitlab:5000
   CHART_REGISTRY_PLAIN_HTTP: "auto"
   CHART_VERSION: "0.2.3"
-  # Kaniko cache bucket inside GitLab registry
+  # Kaniko cache bucket inside GitLab registry (set KANIKO_CACHE=false to skip)
+  KANIKO_CACHE: "true"
   DOCKER_DRIVER: overlay2
   # Container-Scanning target — the image built and pushed by Kaniko.
   # Without this, the template defaults to Auto DevOps vars that are not set
@@ -198,14 +200,18 @@ prepare-build-env:
         cp -a "${STAGED_WS}/." "${CI_PROJECT_DIR}/"
         echo "Applied BUILD raw_file profile(s) from prepare-build-env artifacts"
       fi
+      CACHE_ARGS=""
+      case "${KANIKO_CACHE:-true}" in
+        true|TRUE|yes|YES|1) CACHE_ARGS="--cache=true --cache-copy-layers=false --cache-repo=${KANIKO_CACHE_REPO}" ;;
+        *) echo "kaniko: KANIKO_CACHE=${KANIKO_CACHE:-} — remote cache disabled" ;;
+      esac
+      # shellcheck disable=SC2086
       /kaniko/executor \
         --context="${CI_PROJECT_DIR}" \
         --dockerfile="${KANIKO_DOCKERFILE}" \
         --destination="${KANIKO_DEST_SHA}" \
         --destination="${KANIKO_DEST_LATEST}" \
-        --cache=true \
-        --cache-copy-layers=false \
-        --cache-repo="${KANIKO_CACHE_REPO}" \
+        ${CACHE_ARGS} \
         "$@"
   rules:
     - if: '$CI_COMMIT_BRANCH'
@@ -381,6 +387,29 @@ container_scanning:
     - echo "${KUBECONFIG_B64}" | base64 -d > /tmp/kube/config
     - chmod 600 /tmp/kube/config
     - export KUBECONFIG=/tmp/kube/config
+    # In-stack runners share devops-network with k3d-*-serverlb. host.docker.internal:16443
+    # often TLS-times-out on Docker Desktop Windows; prefer the compose DNS name :6443.
+    - |
+      set -eu
+      _kc=/tmp/kube/config
+      _server="$(grep -E '^\s*server:' "${_kc}" | awk '{print $2; exit}')"
+      _in_stack_api="https://k3d-dsoaas-serverlb:6443"
+      if [ -n "${KUBE_API_INTERNAL_URL:-}" ]; then
+        _in_stack_api="${KUBE_API_INTERNAL_URL}"
+      fi
+      if command -v wget >/dev/null 2>&1; then
+        _probe() { wget -q -O /dev/null --timeout=3 --no-check-certificate "$1" 2>/dev/null; }
+      else
+        _probe() { curl -sk --connect-timeout 3 -o /dev/null "$1" 2>/dev/null; }
+      fi
+      if _probe "${_in_stack_api}/livez" || _probe "${_in_stack_api}/"; then
+        if [ "${_server}" != "${_in_stack_api}" ]; then
+          echo "Rewriting kubeconfig server ${_server:-<empty>} -> ${_in_stack_api} (in-stack k3d)"
+          sed -i "s|server: .*|server: ${_in_stack_api}|" "${_kc}"
+        fi
+      else
+        echo "kubeconfig server remains ${_server:-<empty>} (in-stack API ${_in_stack_api} not reachable)"
+      fi
     # CHART_REGISTRY_USER / CHART_REGISTRY_PASSWORD: instance CI variables (deploy token on auto-devops-chart).
     - |
       set -eu
