@@ -318,6 +318,31 @@ These values come from your email provider. They're shared between GitLab and Ke
 
 If you're not ready to configure SMTP yet, you can leave these as-is and configure them later. GitLab and Keycloak will still start up normally — they'll just fail silently if they try to send an email.
 
+The host **disk watchdog** reuses the same `SMTP_*` values (see [Disk watchdog](04_operations.md#disk-watchdog-failsafe)). Recipients are `WATCHDOG_NOTIFY_EMAILS` (comma-separated), not GitLab’s own notify list.
+
+---
+
+## Disk watchdog
+
+```
+WATCHDOG_WARN_FREE_GB=80
+WATCHDOG_SHUTDOWN_FREE_GB=50
+WATCHDOG_NOTIFY_EMAILS=ops@yourdomain.com,oncall@yourdomain.com
+WATCHDOG_DRAIN_SECONDS=3600
+WATCHDOG_GITLAB_STOP_TIMEOUT=900
+WATCHDOG_STOP_TIMEOUT=180
+WATCHDOG_DATA_STOP_TIMEOUT=600
+WATCHDOG_EDGE_STOP_TIMEOUT=120
+```
+
+`WATCHDOG_WARN_FREE_GB` — email a **warning** once when free space on the repo volume drops to this many GiB (or below), and stay there until space recovers above the warn line.
+
+`WATCHDOG_SHUTDOWN_FREE_GB` — start **graceful shutdown** at this many GiB free (must be ≤ warn). Quiesce → drain → ordered stop.
+
+`WATCHDOG_NOTIFY_EMAILS` — comma-separated To: list. Events: warning, shutdown-init, shutdown-failing, shutdown-successful.
+
+Timeouts are seconds and default **relaxed** (hour-long drain, 15 min GitLab stop). Raise them if Kaniko jobs routinely run longer than `WATCHDOG_DRAIN_SECONDS`.
+
 ---
 
 ## Logging

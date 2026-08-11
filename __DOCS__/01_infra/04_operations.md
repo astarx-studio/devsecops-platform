@@ -88,7 +88,7 @@ All persistent data is stored under `.vols/` in the project root. This folder is
 - `.vols/gitlab-runner/` — GitLab Runner configuration and build cache
 - `.vols/vault/` — OpenBao secrets storage
 - `.vols/keycloak-db/` — legacy cold copy of shared PostgreSQL (if present after migration); live data is Docker volume `dsoaas-postgres-data`
-- `.vols/mongo/` — MongoDB data (Management API registry)
+- `.vols/mongo/` — legacy cold copy of MongoDB (if present after migration); live data is Docker volume `dsoaas-mongo-data`
 - `.vols/traefik/` — ACME certificate storage (your Let's Encrypt certificates)
 
 Treat this entire folder as sensitive. Anyone with access to these files can potentially extract secrets or impersonate users.
@@ -132,6 +132,7 @@ CI job **artifacts** live in MinIO and stay small (short `expire_in` in pipeline
 |---|---|---|
 | Docker Desktop VHDX | `%LOCALAPPDATA%\Docker\wsl\disk\docker_data.vhdx` | Job images, k3d, unrelated local images/volumes |
 | GitLab Container Registry | `.vols/gitlab/data/gitlab-rails/shared/registry` | Kaniko app images + `${image}/cache` layers |
+| Mongo WiredTiger journal | named volume `dsoaas-mongo-data` (`/data/db/journal`) | WAL leak on NTFS bind mounts; live data must stay on a named volume |
 | Platform backups | `backups/` | Full `.vols` archives |
 
 Task Manager **System** (PID 4) often shows high disk during builds: WSL2 VHDX I/O and NTFS registry writes are attributed to the kernel, not `Docker Desktop`.
@@ -162,6 +163,45 @@ Optimize-VHD -Path "$env:LOCALAPPDATA\Docker\wsl\disk\docker_data.vhdx" -Mode Fu
 
 If `Optimize-VHD` is unavailable, use Docker Desktop → **Settings → Resources → Resource Saver / Clean / Compact** (wording varies by version), or [Docker’s disk reclaim docs](https://docs.docker.com/desktop/settings-and-maintenance/reclaim-disk/).
 
+### Disk watchdog (failsafe)
+
+GitLab CE has no maintenance mode. A hard `compose stop` while a push is in Gitaly quarantine is how default branches went missing. The host watchdog **blocks new work, waits, then stops services in order**.
+
+This section is the **Compose-host (Windows) backend** only. Linux Compose, Kubernetes, and the shared policy contract are [milestone 05 — failsafe backends](../XX_milestone/05_failsafe_backends.md).
+
+Must run on the **host** (Git Bash / Task Scheduler). A container `df` sees the Docker VHDX, not `C:` where `.vols/gitlab` lives.
+
+```bash
+make watchdog                      # one check (safe to schedule every 1–2 min)
+make watchdog ARGS='--loop 120'    # long-running
+make watchdog ARGS='--dry-run'
+make watchdog ARGS='--test-email'  # SMTP + WATCHDOG_NOTIFY_EMAILS
+make watchdog ARGS='--clear'       # after a trip; then docker compose up -d
+```
+
+Two tiers (`.env`, GiB free on the repo filesystem):
+
+| Var | Default | Action |
+|---|---|---|
+| `WATCHDOG_WARN_FREE_GB` | `80` | Email **warning** once per excursion |
+| `WATCHDOG_SHUTDOWN_FREE_GB` | `50` | Quiesce → drain → ordered stop |
+
+Emails (same `SMTP_*` as GitLab/Keycloak) to `WATCHDOG_NOTIFY_EMAILS`: warning, shutdown-init, shutdown-failing (drain timeout or a `compose stop` group failed), shutdown-successful.
+
+Shutdown sequence (timeouts are env, defaults are slow on purpose):
+
+1. **Quiesce** — SIGQUIT `gitlab-runner`; Traefik catch-all 503
+2. **Drain** — wait up to `WATCHDOG_DRAIN_SECONDS` (default **3600**) for `runner-*` and `git-receive-pack`
+3. **Stop** — runner → gitlab (`WATCHDOG_GITLAB_STOP_TIMEOUT`, default **900**) → apps → MinIO → mongo/postgres (`WATCHDOG_DATA_STOP_TIMEOUT`) → IdP → Traefik
+
+State: `.vols/watchdog.state` (`ok` / `warned` / `draining` / `stopped`). The watchdog **never** brings the stack back up.
+
+Every tick also runs `make gitaly-promote-incoming` so leftover `tmp_objdir-incoming-*` objects are merged even when disk is healthy (this is the “empty branches / stuck MR” bug).
+
+Windows Task Scheduler (logged-on user, so Docker Desktop is available):
+
+Use `bootstrap/watchdog-hidden.vbs` (wscript, window style 0) so Task Scheduler does not flash a CMD window every tick. `watchdog.cmd` remains the real entrypoint.
+
 ### Reduce Defender I/O amplification (local ops)
 
 Windows Defender realtime scanning of the VHDX and `.vols` registry blobs can multiply disk traffic. Optional **local** exclusions (do not commit machine-specific paths into the stack):
@@ -189,20 +229,46 @@ Default policy (Auto DevOps–friendly):
 |---|---|---|
 | `enabled` | `true` | Run on cadence |
 | `cadence` | `1d` | Daily evaluation |
-| `keep_n` | `10` | Keep newest N tags (GitLab allows 1\|5\|10\|25\|50\|100 only) |
-| `older_than` | `14d` | Only delete tags older than this |
+| `keep_n` | `5` | Keep newest N tags **per project** (GitLab allows 1\|5\|10\|25\|50\|100 only; not a platform-wide cap) |
+| `older_than` | `7d` | Only delete tags older than this |
 | `name_regex` | `.*` | Candidates for deletion |
 | `name_regex_keep` | `latest-.*` | Protect Kaniko branch tip tags (`latest-develop`, etc.) |
 
 UI equivalent: **Settings → Packages and registries → Container registry → Clean up image tags**.
 
-**Space reclaim timeline:** policy deletes eligible tags → manifests become unreferenced → online GC removes blobs (often within ~24–48h). Tags newer than `older_than` are kept even if there are many of them. Monitor with:
+**Space reclaim timeline:** policy deletes eligible tags → manifests become unreferenced → online GC removes blobs (often within ~24–48h). Tags newer than `older_than` are kept even if there are many of them. There is no GitLab setting for “100 tags across the whole platform.” Monitor with:
 
 ```bash
 docker exec gitlab gitlab-ctl registry-database gc-stats
 ```
 
 Pipeline control: set CI variable `KANIKO_CACHE=false` on a project to disable Kaniko remote cache pushes when disk is tight (slower builds, less registry growth). Re-seed pipelines with `make update-dso-configs` after template changes.
+
+### Mongo WiredTiger journal (prevents named-volume / `.vols` blow-up)
+
+Logical Management API data is tiny. Disk growth is almost always `WiredTigerLog.*` (100MB each). On a **Windows NTFS bind mount**, WiredTiger does not archive logs after checkpoint — that is what produced the ~300G leak. Live data is the named volume **`dsoaas-mongo-data`** (ext4 in the Docker VHDX), same pattern as Postgres. A leftover `.vols/mongo` directory is only a pre-migration cold copy.
+
+**Do not delete journal files while `mongod` is running.** They are a sequential WAL; removing a subset corrupts recovery.
+
+Runtime bound (`mongo/mongod.conf`): `log=(archive=true)`, `checkpoint=(wait=60,log_size=256MB)`, cache 1GB.
+
+**Reclaim** when file count **> 100** or any log is **older than 7 days** (should not happen on the named volume):
+
+```bash
+./bootstrap/mongo-journal-retention.sh            # report; exit 1 if over limit
+./bootstrap/mongo-journal-retention.sh --apply    # clean-stop mongo, wipe journal, start
+```
+
+`--apply` stops `mongo` (Management API is down for that window), refuses to unlink logs if `mongod.lock` is still non-empty, then recreates the container. After a clean stop every journal file is obsolete — the script deletes all `WiredTigerLog.*`, not “last 100”, because a hole in the log sequence is unsafe.
+
+`make backup` also writes `backups/mongo-<stamp>.archive.gz` (`mongodump`) because the named volume is not inside `.vols/`.
+
+Monitor:
+
+```bash
+docker exec mongo sh -c 'ls /data/db/journal/WiredTigerLog.* | wc -l'
+docker exec mongo du -sh /data/db/journal
+```
 
 ### Restoring
 

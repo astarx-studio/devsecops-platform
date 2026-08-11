@@ -5,6 +5,7 @@
 > **Status**: Proposed (not yet scheduled)
 > **Audience**: Platform maintainers, future-Phase planners
 > **Depends on**: [Platform operability milestone](03_platform_operability.md) — `dsoctl` and the sealed config model are prerequisites
+> **Related**: [Host failsafe backends](05_failsafe_backends.md) — disk warn/shutdown is the same *policy* in every mode; the *mechanism* is a backend (compose stop vs scale). Not a substitute for this milestone.
 > **Cross-references**: [Infra prereqs](../01_infra/01_prereqs.md), [Bootstrap](../01_infra/03_bootstrap.md), [Architecture](../99_maintainers/01_architecture.md), [Networking](../99_maintainers/05_networking.md)
 
 The platform currently runs its control-plane services (Keycloak, Vault, GitLab, Management API, Traefik, etc.) on a single Docker host via Docker Compose. That model is correct for minimal deployments — it's simple to bootstrap, cheap to operate, and has no cluster management overhead. But it has a hard ceiling: one host, no horizontal scaling, no HA, no live migration.
@@ -543,6 +544,8 @@ Should `dsoaas-platform` include cert-manager as a sub-chart, or require operato
 - [ ] Write `dsoctl migrate volume` (copies `.vols/` data to PVCs via a temporary Job)
 - [ ] Write `dsoctl migrate verify` (post-migration smoke tests)
 - [ ] Write `__DOCS__/XX_milestone/` or dedicated `__DOCS__/01_infra/08_compose_to_k8s.md` migration guide
+
+Disk warn/shutdown is **not** a track here — [milestone 05](05_failsafe_backends.md) owns the policy + backends. Chart work in Track A should expose `failsafe:` values when that backend lands.
 
 ---
 
