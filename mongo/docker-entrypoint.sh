@@ -4,8 +4,8 @@ set -eu
 
 if [ -f /data/db/.auth-enabled ]; then
   echo "[mongo] Authentication enabled (.auth-enabled present)"
-  exec mongod --auth --bind_ip_all "$@"
+  exec mongod --auth --bind_ip_all --config /etc/mongod.conf "$@"
 fi
 
 echo "[mongo] Running without --auth until mongo-init completes"
-exec mongod --bind_ip_all "$@"
+exec mongod --bind_ip_all --config /etc/mongod.conf "$@"

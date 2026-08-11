@@ -48,8 +48,27 @@ dump_shared_pg() {
   done
 }
 
+dump_mongo() {
+  local stamp="${1:?stamp required}"
+  if ! command -v docker >/dev/null 2>&1; then
+    return 0
+  fi
+  if ! docker inspect mongo >/dev/null 2>&1; then
+    return 0
+  fi
+  if [[ "$(docker inspect -f '{{.State.Running}}' mongo 2>/dev/null || true)" != "true" ]]; then
+    return 0
+  fi
+  local out="${DST_DIR}/mongo-${stamp}.archive.gz"
+  log "Dumping MongoDB (admin mongodump) → ${out}"
+  docker exec mongo sh -c \
+    'mongodump -u "$MONGO_ADMIN_USER" -p "$MONGO_ADMIN_PASSWORD" --authenticationDatabase admin --archive --gzip' \
+    >"${out}"
+}
+
 mkdir -p "${DST_DIR}"
 dump_shared_pg "${STAMP}"
+dump_mongo "${STAMP}"
 log "Creating ${ARCHIVE}..."
 
 members=()

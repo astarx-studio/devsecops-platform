@@ -65,12 +65,12 @@ All services share the `devops-network` Docker bridge network. The network name 
 |---|---|
 | Image | `mongo:7` |
 | Host ports | — |
-| Volumes | `./.vols/mongo` → `/data/db` |
+| Volumes | Named volume `dsoaas-mongo-data` → `/data/db` (ext4 inside Docker VHDX). Legacy bind path `.vols/mongo` may remain as a cold copy after migration. |
 | Depends on | — |
 
 **Health check:** `mongosh` admin ping. Interval 15s, timeout 5s, 3 retries, 20s start period.
 
-**Operational notes:** Primary data store for the Management API (projects, audit log, catalog metadata).
+**Operational notes:** Primary data store for the Management API (projects, audit log, catalog metadata). WiredTiger settings live in `mongo/mongod.conf` (archive journal after checkpoint, 1GB cache). Do not bind-mount `/data/db` on Windows NTFS — journal archive fails and logs leak. If `/data/db/journal` grows past 100 files or 7 days, run `./bootstrap/mongo-journal-retention.sh --apply`. Never delete `WiredTigerLog.*` while mongod is running.
 
 ---
 

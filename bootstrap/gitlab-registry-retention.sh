@@ -5,9 +5,10 @@
 # Optional maintainer script (not part of greenfield bootstrap).
 # Requires GITLAB_ROOT_TOKEN + GITLAB_DOMAIN in .env (repo root).
 #
-# Default policy (Auto DevOps-friendly):
-#   - cadence 1d, keep_n 10 (GitLab allows 1|5|10|25|50|100 only),
-#     delete tags older than 14d matching .*
+# Default policy (Auto DevOps-friendly, disk-tight):
+#   - cadence 1d, keep_n 5 per project (GitLab allows 1|5|10|25|50|100 only;
+#     policy is per image repo, not platform-wide),
+#     delete tags older than 7d matching .*
 #   - name_regex_keep: latest-.*  (branch tip mirrors from Kaniko)
 #
 # Usage:
@@ -48,8 +49,8 @@ POLICY_JSON='{
   "container_expiration_policy_attributes": {
     "enabled": true,
     "cadence": "1d",
-    "keep_n": 10,
-    "older_than": "14d",
+    "keep_n": 5,
+    "older_than": "7d",
     "name_regex": ".*",
     "name_regex_keep": "latest-.*"
   }

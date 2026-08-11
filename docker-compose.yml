@@ -22,6 +22,8 @@ volumes:
     name: dsoaas-postgres-data
   sonarqube-data:
     name: dsoaas-sonarqube-data
+  mongo-data:
+    name: dsoaas-mongo-data
 
 # ==========================================================================
 # SERVICES
@@ -119,7 +121,9 @@ services:
   # ========================================================================
   # Stores Project documents, AuditLog, and catalog metadata (Templates,
   # Configs). The Management API uses this as its primary data store in v2.
-  # Data persisted in .vols/mongo (gitignored).
+  # Data: named volume `dsoaas-mongo-data` (ext4 inside Docker VHDX).
+  # Windows NTFS bind mounts (.vols/mongo) make WiredTiger skip journal archive
+  # and leak 100MB WiredTigerLog.* files. Cold copy may remain at .vols/mongo.
   mongo:
     image: mongo:7
     container_name: mongo
@@ -132,8 +136,9 @@ services:
       MONGO_ADMIN_USER: ${MONGO_ADMIN_USER:-}
       MONGO_ADMIN_PASSWORD: ${MONGO_ADMIN_PASSWORD:-}
     volumes:
-      - ./.vols/mongo:/data/db
+      - mongo-data:/data/db
       - ./mongo/docker-entrypoint.sh:/docker-entrypoint.sh:ro
+      - ./mongo/mongod.conf:/etc/mongod.conf:ro
     healthcheck:
       test:
         [
@@ -164,7 +169,7 @@ services:
     volumes:
       - ./mongo/run-init-ensure-auth.sh:/scripts/run-init-ensure-auth.sh:ro
       - ./mongo/init-ensure-auth.js:/scripts/init-ensure-auth.js:ro
-      - ./.vols/mongo:/data/db
+      - mongo-data:/data/db
     depends_on:
       mongo:
         condition: service_healthy

@@ -299,7 +299,7 @@ docker compose up -d postgres keycloak
 
 ### MongoDB empty after volume wipe
 
-If `.vols/mongo` is deleted, the Management API registry is gone. Restore from backup or re-import projects via your normal provisioning flow (`createProject` GraphQL mutation).
+If the Docker volume `dsoaas-mongo-data` is removed (`docker compose down -v` or `docker volume rm`), the Management API registry is gone. Restore `backups/mongo-*.archive.gz` with `mongorestore --archive --gzip`, or re-import projects via `createProject`. A leftover `.vols/mongo` is only a pre-migration cold copy.
 
 ### Management API fails to connect to GitLab
 
@@ -323,4 +323,4 @@ curl -H "PRIVATE-TOKEN: <token>" http://localhost:80/api/v4/projects
 If users are redirected in a loop:
 1. Verify `OAUTH2_PROXY_COOKIE_SECRET` is a valid 16/24/32-byte base64 string.
 2. Verify `OAUTH2_PROXY_COOKIE_DOMAINS` matches `.devops.yourdomain.com` (note the leading dot).
-3. Clear 
+3. Clear
