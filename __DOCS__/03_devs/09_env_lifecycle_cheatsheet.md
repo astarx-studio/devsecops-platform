@@ -52,9 +52,9 @@ docker compose -p devtools -f devtools/docker-compose.yml up -d
 | `DEVTOOLS_RMQ_USER` / `DEVTOOLS_RMQ_PASSWORD` | RabbitMQ admin (sample `admin` / `change-me`)        |
 | `DEVTOOLS_RMQ_STATIC_IP`                      | k8s bridge target (default `172.19.0.101`)           |
 
-Laptop / LAN: `psql -h <platform-host> -p 25432 -d cfa_dev`; AMQP `localhost:25672` vhost `dev`/`stg`; Management UI `http://localhost:25682/`.
+Laptop / LAN: `psql -h <platform-host> -p 25432 -d cfa_dev`; MySQL `localhost:23306` db `esa_dev`; AMQP `localhost:25672` vhost `dev`/`stg`; Management UI `http://localhost:25682/`.
 
-External (vpnedge LB): Postgres `25432`, RabbitMQ AMQP `25672`, Management UI `25682`. Guides: [Shared Postgres](10_shared_devtools_postgres.md), [Shared RabbitMQ](11_shared_devtools_rabbitmq.md). Maintainer: [devtools stack](../99_maintainers/02_services.md#devtools-stack-shared-postgres).
+External (vpnedge LB): Postgres `25432`, MySQL `23306`, RabbitMQ AMQP `25672`, Management UI `25682`. Guides: [Shared Postgres](10_shared_devtools_postgres.md), [Shared MySQL](14_shared_devtools_mysql.md), [Shared RabbitMQ](11_shared_devtools_rabbitmq.md). Maintainer: [devtools stack](../99_maintainers/02_services.md#devtools-stack-shared-postgres).
 
 **Password rotation:** Postgres — use `ALTER USER` inside the running container (editing `.env` alone does not change an existing password). RabbitMQ — change the user password via `rabbitmqctl` / Management UI, then update `devtools/.env` for next recreate. After either rotation, update console RUNTIME profiles that embed the password and redeploy affected k8s releases.
 

@@ -3,12 +3,15 @@
 #
 # Prerequisites:
 #   - gcloud authenticated with compute.instanceAdmin + image create rights
-#   - Live VM already configured (WireGuard, vpn-edge-nat, FORWARD_TCP including 25432)
+#   - Live VM already configured (WireGuard, vpn-edge-nat, FORWARD_TCP)
 #   - Run from the repo root (or set REPO_ROOT)
 #
 # Usage:
 #   ./edge/gcp/create-image-and-template.sh
 #   ./edge/gcp/create-image-and-template.sh --no-stop   # image while VM keeps running (force)
+#
+# Clones Spot / can-ip-forward from the live instance so MIG recreate stays a
+# NAT edge (do not bake a STANDARD template without IP forwarding).
 #
 # Docs: __DOCS__/99_maintainers/10_gcp_edge_template.md
 set -euo pipefail
@@ -17,21 +20,21 @@ PROJECT="${GCP_PROJECT:-yada-technology}"
 ZONE="${GCP_ZONE:-asia-southeast2-a}"
 INSTANCE="${GCP_EDGE_INSTANCE:-yada-tunnel-managed-68bh}"
 IMAGE_FAMILY="${GCP_EDGE_IMAGE_FAMILY:-vpn-edge}"
-TEMPLATE_NAME="${GCP_EDGE_TEMPLATE:-vpn-edge-devtools-v1}"
+TEMPLATE_NAME="${GCP_EDGE_TEMPLATE:-vpn-edge-devtools-v4}"
 TAGS="${GCP_EDGE_TAGS:-custom-ssh,http-server,https-server,lb-health-check,wireguard-tunnel}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 STARTUP_SCRIPT="${SCRIPT_DIR}/startup-script.sh"
 DATE_TAG="$(date +%Y%m%d)"
-IMAGE_NAME="${IMAGE_FAMILY}-devtools-v1-${DATE_TAG}"
+IMAGE_NAME="${GCP_EDGE_IMAGE_NAME:-${TEMPLATE_NAME}-${DATE_TAG}}"
 
 STOP_INSTANCE=1
 for arg in "$@"; do
   case "${arg}" in
     --no-stop) STOP_INSTANCE=0 ;;
     -h|--help)
-      sed -n '2,20p' "$0"
+      sed -n '2,22p' "$0"
       exit 0
       ;;
   esac
@@ -49,10 +52,43 @@ MACHINE_TYPE="$(gcloud compute instances describe "${INSTANCE}" \
 DISK_SIZE="$(gcloud compute instances describe "${INSTANCE}" \
   --project="${PROJECT}" --zone="${ZONE}" \
   --format='value(disks[0].diskSizeGb)')"
+CAN_IP_FORWARD="$(gcloud compute instances describe "${INSTANCE}" \
+  --project="${PROJECT}" --zone="${ZONE}" \
+  --format='value(canIpForward)')"
+PROVISIONING="$(gcloud compute instances describe "${INSTANCE}" \
+  --project="${PROJECT}" --zone="${ZONE}" \
+  --format='value(scheduling.provisioningModel)')"
+TERMINATION_ACTION="$(gcloud compute instances describe "${INSTANCE}" \
+  --project="${PROJECT}" --zone="${ZONE}" \
+  --format='value(scheduling.instanceTerminationAction)')"
+
 [[ -n "${MACHINE_TYPE}" ]] || die "Could not read machine type for ${INSTANCE}"
 [[ -n "${DISK_SIZE}" ]] || die "Could not read disk size for ${INSTANCE}"
 
 log "Source instance=${INSTANCE} zone=${ZONE} machine=${MACHINE_TYPE} disk=${DISK_SIZE}G"
+log "Live flags: canIpForward=${CAN_IP_FORWARD:-false} provisioning=${PROVISIONING:-STANDARD} termination=${TERMINATION_ACTION:-}"
+
+TEMPLATE_FLAGS=()
+if [[ "${CAN_IP_FORWARD}" == "True" || "${CAN_IP_FORWARD}" == "true" ]]; then
+  TEMPLATE_FLAGS+=(--can-ip-forward)
+fi
+
+# Spot / preemptible live VM — keep the same model so MIG repair matches production.
+case "${PROVISIONING}" in
+  SPOT)
+    TEMPLATE_FLAGS+=(--provisioning-model=SPOT)
+    TEMPLATE_FLAGS+=(--maintenance-policy=TERMINATE)
+    TEMPLATE_FLAGS+=(--no-restart-on-failure)
+    if [[ -n "${TERMINATION_ACTION}" ]]; then
+      TEMPLATE_FLAGS+=(--instance-termination-action="${TERMINATION_ACTION}")
+    else
+      TEMPLATE_FLAGS+=(--instance-termination-action=STOP)
+    fi
+    ;;
+  *)
+    log "Live instance is not SPOT (provisioning=${PROVISIONING:-STANDARD}) — template will be STANDARD"
+    ;;
+esac
 
 if [[ "${STOP_INSTANCE}" -eq 1 ]]; then
   log "Stopping ${INSTANCE} for a consistent image (use --no-stop to skip)..."
@@ -90,7 +126,7 @@ if gcloud compute instance-templates describe "${TEMPLATE_NAME}" \
   die "Template ${TEMPLATE_NAME} already exists. Delete it or set GCP_EDGE_TEMPLATE to a new name."
 fi
 
-log "Creating instance template ${TEMPLATE_NAME}..."
+log "Creating instance template ${TEMPLATE_NAME} (${TEMPLATE_FLAGS[*]:-standard})..."
 gcloud compute instance-templates create "${TEMPLATE_NAME}" \
   --project="${PROJECT}" \
   --machine-type="${MACHINE_TYPE}" \
@@ -101,7 +137,8 @@ gcloud compute instance-templates create "${TEMPLATE_NAME}" \
   --tags="${TAGS}" \
   --metadata-from-file=startup-script="${STARTUP_SCRIPT}" \
   --scopes=https://www.googleapis.com/auth/devstorage.read_only,https://www.googleapis.com/auth/logging.write,https://www.googleapis.com/auth/monitoring.write,https://www.googleapis.com/auth/service.management.readonly,https://www.googleapis.com/auth/servicecontrol,https://www.googleapis.com/auth/trace.append \
-  --network=default
+  --network=default \
+  "${TEMPLATE_FLAGS[@]}"
 
 log "Done."
 log "  Image:    ${IMAGE_NAME} (family ${IMAGE_FAMILY})"

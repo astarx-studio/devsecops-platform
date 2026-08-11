@@ -37,6 +37,8 @@ entryPoints:
     address: ":26573"
   devtools-minio-s3:
     address: ":29000"
+  devtools-mysql:
+    address: ":23306"
   web:
     address: ":80"
     # Large multipart uploads (e.g. Transcriptor) need > default 60s readTimeout.

@@ -49,6 +49,12 @@ tcp:
         - devtools-minio-s3
       service: devtools-minio-s3
 
+    devtools-mysql:
+      rule: "HostSNI(`*`)"
+      entryPoints:
+        - devtools-mysql
+      service: devtools-mysql
+
   services:
     devtools-pg:
       loadBalancer:
@@ -81,3 +87,8 @@ tcp:
       loadBalancer:
         servers:
           - address: "devtools-minio:9000"
+
+    devtools-mysql:
+      loadBalancer:
+        servers:
+          - address: "devtools-mysql:3306"

@@ -1,5 +1,5 @@
 # =============================================================================
-# devtools stack — shared Postgres + RabbitMQ + MinIO + logging
+# devtools stack — shared Postgres + MySQL + RabbitMQ + MinIO + logging
 # (Loki/Grafana/Alloy) for app teams on this host.
 #
 # Independent Compose project (deliberately separate from the main platform
@@ -16,6 +16,7 @@
 #   Postgres  → logical DBs created by project-specific scripts in
 #               postgres-init/ (gitignored; copy from *.sample.sh)
 #   RabbitMQ  → vhosts dev / stg  (created by rabbitmq-init/ensure-vhosts.sh)
+#   MySQL     → users admin (ALL) + esa_dev (esa_dev.*); DBs via mysql-init
 #   MinIO     → users admin (root) + cfa (readwrite); buckets cfa-dev / cfa-stg
 #   Logging   → Loki labels (namespace / app / container); Grafana UI via
 #               https://${GRAFANA_DOMAIN} + oidc-auth-devtools (admins+users)
@@ -52,6 +53,52 @@ services:
     networks:
       devops-network:
         ipv4_address: ${DEVTOOLS_PG_STATIC_IP:-172.19.0.100}
+
+  # Shared MySQL. Root is bootstrap-only; app accounts admin + esa_dev come
+  # from mysql-init/ensure-users.sh (idempotent, safe to re-run).
+  devtools-mysql:
+    image: mysql:8.4
+    container_name: devtools-mysql
+    restart: unless-stopped
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    environment:
+      MYSQL_DATABASE: ${DEVTOOLS_MYSQL_DB:-devtools}
+      MYSQL_ROOT_PASSWORD: ${DEVTOOLS_MYSQL_ROOT_PASSWORD:?set DEVTOOLS_MYSQL_ROOT_PASSWORD in devtools/.env}
+    volumes:
+      - ./.vols/mysql:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-p${DEVTOOLS_MYSQL_ROOT_PASSWORD:?set DEVTOOLS_MYSQL_ROOT_PASSWORD in devtools/.env}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks:
+      devops-network:
+        ipv4_address: ${DEVTOOLS_MYSQL_STATIC_IP:-172.19.0.104}
+
+  devtools-mysql-init:
+    image: mysql:8.4
+    container_name: devtools-mysql-init
+    depends_on:
+      devtools-mysql:
+        condition: service_healthy
+    restart: "no"
+    environment:
+      MYSQL_HOST: devtools-mysql
+      MYSQL_DATABASE: ${DEVTOOLS_MYSQL_DB:-devtools}
+      MYSQL_ROOT_PASSWORD: ${DEVTOOLS_MYSQL_ROOT_PASSWORD:?set DEVTOOLS_MYSQL_ROOT_PASSWORD in devtools/.env}
+      DEVTOOLS_MYSQL_ADMIN_USER: ${DEVTOOLS_MYSQL_ADMIN_USER:-admin}
+      DEVTOOLS_MYSQL_ADMIN_PASSWORD: ${DEVTOOLS_MYSQL_ADMIN_PASSWORD:?set DEVTOOLS_MYSQL_ADMIN_PASSWORD in devtools/.env}
+      DEVTOOLS_MYSQL_ESA_USER: ${DEVTOOLS_MYSQL_ESA_USER:-esa_dev}
+      DEVTOOLS_MYSQL_ESA_PASSWORD: ${DEVTOOLS_MYSQL_ESA_PASSWORD:?set DEVTOOLS_MYSQL_ESA_PASSWORD in devtools/.env}
+      DEVTOOLS_MYSQL_ESA_DB: ${DEVTOOLS_MYSQL_ESA_DB:-esa_dev}
+    volumes:
+      - ./mysql-init/ensure-users.sh:/ensure-users.sh:ro
+    entrypoint: ["/bin/sh", "/ensure-users.sh"]
+    networks:
+      - devops-network
 
   # Shared RabbitMQ broker. Env isolation is vhost (dev/stg), not separate
   # containers. Admin user comes from RABBITMQ_DEFAULT_* on first empty volume.

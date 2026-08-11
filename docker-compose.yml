@@ -69,6 +69,7 @@ services:
       - "26572:26572" # CFA infra RabbitMQ AMQP (k3d NodePort 30572 / ns=dev)
       - "26573:26573" # CFA infra RabbitMQ AMQP (k3d NodePort 30573 / ns=stg)
       - "29000:29000" # DevTools shared MinIO S3 API (TCP passthrough)
+      - "23306:23306" # DevTools shared MySQL (TCP passthrough)
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./traefik/traefik.yml:/etc/traefik/traefik-template.yml:ro

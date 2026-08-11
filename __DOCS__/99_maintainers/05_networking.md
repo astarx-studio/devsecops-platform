@@ -45,6 +45,7 @@ graph LR
 | `10443` | traefik | HTTPS entry |
 | `18080` | traefik | Dashboard (no TLS on host) |
 | `25432` | traefik (TCP passthrough) | devtools shared Postgres — see [devtools stack](02_services.md#devtools-stack-shared-postgres) |
+| `23306` | traefik (TCP passthrough) | devtools shared MySQL |
 | `25672` | traefik (TCP passthrough) | devtools shared RabbitMQ AMQP (vhosts `dev`/`stg`) |
 | `25682` | traefik (TCP passthrough) | devtools shared RabbitMQ Management UI |
 | `15433` | postgres | PostgreSQL (Keycloak + Sonar databases) |
@@ -379,7 +380,7 @@ sudo nft list table ip vpnedge
 
 ### Adding a shared-tool TCP forward
 
-Repeatable checklist when exposing another home Traefik TCP service through the VPN edge (today: **devtools Postgres `25432`**, **devtools RabbitMQ AMQP `25672`**, **Management UI `25682`**):
+Repeatable checklist when exposing another home Traefik TCP service through the VPN edge (today: **devtools Postgres `25432`**, **devtools MySQL `23306`**, **devtools RabbitMQ AMQP `25672`**, **Management UI `25682`**):
 
 1. **Home:** publish the port on Traefik (`traefik/traefik.yml` entrypoint + `traefik/dynamic/tcp-passthrough.yml` + compose `ports:`) if it is not already exposed.
 2. **Edge:** add `public:dest` to `FORWARD_TCP` in `edge/vpn-edge/forward-ports.env` (and update `forward-ports.sample.env`).

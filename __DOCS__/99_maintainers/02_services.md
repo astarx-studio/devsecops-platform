@@ -539,9 +539,9 @@ Uses `SONARQUBE_INTERNAL_URL` (`http://sonarqube:9000`) from inside the stack. R
 
 ---
 
-## DevTools stack (shared Postgres + RabbitMQ + MinIO + logging)
+## DevTools stack (shared Postgres + MySQL + RabbitMQ + MinIO + logging)
 
-`devtools/` is a **separate, independent** Docker Compose project — not part of `docker-compose.yml`, not started by `make bootstrap`, and not required for a normal `docker compose up`. It exists to give app teams deploying into the k3d cluster (currently: CFA's `backend-sample1`/`backend-sample2` and **Hasura** on dev/stg) shared Postgres + RabbitMQ for their app-level connections, instead of standing up per-project infrastructure.
+`devtools/` is a **separate, independent** Docker Compose project — not part of `docker-compose.yml`, not started by `make bootstrap`, and not required for a normal `docker compose up`. It exists to give app teams deploying into the k3d cluster (currently: CFA's `backend-sample1`/`backend-sample2` and **Hasura** on dev/stg, plus ESA MySQL) shared Postgres + MySQL + RabbitMQ for their app-level connections, instead of standing up per-project infrastructure.
 
 | Field | Postgres | RabbitMQ |
 |---|---|---|
@@ -558,8 +558,11 @@ Uses `SONARQUBE_INTERNAL_URL` (`http://sonarqube:9000`) from inside the stack. R
 
 - `devtools-postgres.devtools.svc.cluster.local:5432`
 - `devtools-rabbitmq.devtools.svc.cluster.local:5672` (AMQP) / `:15672` (Management UI)
+- `devtools-mysql.devtools.svc.cluster.local:3306`
 
 Apply once, after both the devtools compose stack and the k3d cluster are up — not part of the mandatory bootstrap chain.
+
+**MySQL:** `devtools-mysql` at static IP `172.19.0.104`. Bootstrap root from `DEVTOOLS_MYSQL_ROOT_PASSWORD`; app users **`admin`** (ALL) and **`esa_dev`** (`esa_dev.*`) via `devtools/mysql-init/ensure-users.sh`. TCP `:23306`. In-cluster: `devtools-mysql.devtools.svc.cluster.local:3306`. See [14_shared_devtools_mysql.md](../03_devs/14_shared_devtools_mysql.md).
 
 **MinIO:** `devtools-minio` at static IP `172.19.0.103`. Root user `admin`; service user `cfa` + buckets `cfa-dev`/`cfa-stg` via `devtools/minio-init/ensure-users.sh`. Console `https://${DEVTOOLS_MINIO_CONSOLE_DOMAIN}` (`oidc-auth-devtools`); S3 API `https://${DEVTOOLS_MINIO_API_DOMAIN}` (no SSO) and TCP `:29000`. In-cluster: `devtools-minio.devtools.svc.cluster.local:9000`. See [13_shared_devtools_minio.md](../03_devs/13_shared_devtools_minio.md).
 
@@ -573,7 +576,8 @@ Apply once, after both the devtools compose stack and the k3d cluster are up —
 | RabbitMQ AMQP | `25672` | `devtools-amqp` |
 | RabbitMQ Management UI | `25682` | `devtools-amqp-mgmt` |
 | MinIO S3 API | `29000` | `devtools-minio-s3` |
+| MySQL | `23306` | `devtools-mysql` |
 
-**External (vpnedge) access:** the edge VM DNATs public TCP ports from `FORWARD_TCP` in `edge/vpn-edge/forward-ports.env` (Postgres **25432**, RabbitMQ AMQP **25672**, Management UI **25682**, MinIO S3 **29000**). Traffic typically arrives via the passthrough NLB IP (see [GCP edge template](10_gcp_edge_template.md)). Developer guides: [Shared Postgres](../03_devs/10_shared_devtools_postgres.md), [Shared RabbitMQ](../03_devs/11_shared_devtools_rabbitmq.md).
+**External (vpnedge) access:** the edge VM DNATs public TCP ports from `FORWARD_TCP` in `edge/vpn-edge/forward-ports.env` (Postgres **25432**, RabbitMQ AMQP **25672**, Management UI **25682**, MinIO S3 **29000**, MySQL **23306**). Traffic typically arrives via the passthrough NLB IP (see [GCP edge template](10_gcp_edge_template.md)). Developer guides: [Shared Postgres](../03_devs/10_shared_devtools_postgres.md), [Shared RabbitMQ](../03_devs/11_shared_devtools_rabbitmq.md), [Shared MySQL](../03_devs/14_shared_devtools_mysql.md).
 
 **Security note:** rotate the default bootstrap credentials in `devtools/.env` before use in anything beyond a personal sandbox — there is no IP allowlisting on these TCP ports by default (auth is service user/password only). Optional GCP firewall `--source-ranges` can restrict who reaches the edge.
