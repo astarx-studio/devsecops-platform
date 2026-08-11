@@ -389,6 +389,8 @@ container_scanning:
     - export KUBECONFIG=/tmp/kube/config
     # In-stack runners share devops-network with k3d-*-serverlb. host.docker.internal:16443
     # often TLS-times-out on Docker Desktop Windows; prefer the compose DNS name :6443.
+    # Prefer curl: alpine wget treats k3s /livez HTTP 401 as failure (exit 6) even when
+    # the API is up, which skips the rewrite and then kubectl OpenAPI-times-out.
     - |
       set -eu
       _kc=/tmp/kube/config
@@ -397,12 +399,14 @@ container_scanning:
       if [ -n "${KUBE_API_INTERNAL_URL:-}" ]; then
         _in_stack_api="${KUBE_API_INTERNAL_URL}"
       fi
-      if command -v wget >/dev/null 2>&1; then
-        _probe() { wget -q -O /dev/null --timeout=3 --no-check-certificate "$1" 2>/dev/null; }
-      else
-        _probe() { curl -sk --connect-timeout 3 -o /dev/null "$1" 2>/dev/null; }
-      fi
-      if _probe "${_in_stack_api}/livez" || _probe "${_in_stack_api}/"; then
+      _probe() {
+        if command -v curl >/dev/null 2>&1; then
+          curl -sk --connect-timeout 3 -o /dev/null "$1"
+        else
+          wget -q -O /dev/null --timeout=3 --no-check-certificate "$1"
+        fi
+      }
+      if _probe "${_in_stack_api}/livez" || _probe "${_in_stack_api}/version" || _probe "${_in_stack_api}/"; then
         if [ "${_server}" != "${_in_stack_api}" ]; then
           echo "Rewriting kubeconfig server ${_server:-<empty>} -> ${_in_stack_api} (in-stack k3d)"
           sed -i "s|server: .*|server: ${_in_stack_api}|" "${_kc}"
