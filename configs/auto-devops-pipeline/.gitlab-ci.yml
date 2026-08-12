@@ -356,9 +356,14 @@ sonar:scan:
   extends: .sonar-scan
   allow_failure: false
 
-# Advisory on Free/CE; do not block deploy when the scanner cannot reach the image.
+# Container Scanning (GitLab template) expects one CS_IMAGE at $CI_REGISTRY_IMAGE:tag.
+# Monorepo / API-generated builds push $CI_REGISTRY_IMAGE/<name>:tag instead, so the
+# default job always fails to pull and only burns a runner slot. Disabled here
+# (job does not enter the pipeline). Re-enable per image with an explicit CS_IMAGE
+# when you add custom scan jobs — see __DOCS__/03_devs/07_monorepo_multi_app_ci.md.
 container_scanning:
-  allow_failure: true
+  rules:
+    - when: never
 
 # =============================================================================
 # .deploy-helm — base hidden job for all environment deployments.
