@@ -38,6 +38,7 @@ set -eu
 root=/var/opt/gitlab/git-data/repositories
 found=0
 moved=0
+dup=0
 for d in $(find "$root" -type d -name "tmp_objdir-incoming-*" 2>/dev/null); do
   found=$((found+1))
   repo=$(echo "$d" | sed "s#/objects/tmp_objdir-incoming-.*##")
@@ -46,18 +47,26 @@ for d in $(find "$root" -type d -name "tmp_objdir-incoming-*" 2>/dev/null); do
   if [ "${DRY}" = "1" ]; then
     continue
   fi
-  find "$d" -type f 2>/dev/null | while read -r f; do
+  # Avoid pipe-subshell so counts stick; process substitution keeps loop in this shell.
+  while IFS= read -r f; do
     rel=${f#$d/}
     case "$rel" in pack/*|info/*) continue ;; esac
     dest="$repo/objects/$rel"
     mkdir -p "$(dirname "$dest")"
     if [ ! -f "$dest" ]; then
       mv "$f" "$dest"
+      moved=$((moved+1))
       echo "MOVED $rel"
+    else
+      rm -f "$f"
+      dup=$((dup+1))
+      echo "DUP_REMOVED $rel"
     fi
-  done
+  done < <(find "$d" -type f 2>/dev/null)
+  find "$d" -type d -empty -delete 2>/dev/null || true
+  rmdir "$d" 2>/dev/null || rm -rf "$d" 2>/dev/null || true
 done
-echo "SUMMARY dirs=$found"
+echo "SUMMARY dirs=$found moved=$moved dup_removed=$dup leftover=$(find "$root" -type d -name "tmp_objdir-incoming-*" 2>/dev/null | wc -l | tr -d " ")"
 '
 
 if [[ "${DRY_RUN}" -eq 1 ]]; then
