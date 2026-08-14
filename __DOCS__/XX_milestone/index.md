@@ -15,6 +15,8 @@ When writing a new milestone, start from **[00_template.md](00_template.md)**.
 - **[Platform operability — sealed config, credential lifecycle & `dsoctl`](03_platform_operability.md)** — Replace the flat `.env`-centric config model with Vault-backed sealed secrets, per-service AppRole policies, zero-downtime credential rotation, and an operator CLI (`dsoctl`). _Status: Proposed._
 - **[Deployment models — Compose-native and Kubernetes-native](04_deployment_models.md)** — Two first-class, functionally identical deployment modes: Docker Compose (minimal, current) and Kubernetes (scalable, Helm umbrella chart). Same `dsoctl` UX for both; supported migration path between them. _Status: Proposed. Depends on milestone 03._
 - **[Host failsafe policy and deployment backends](05_failsafe_backends.md)** — Same warn → drain → stop → SMTP policy on Compose (Windows shipped, Linux not) and Kubernetes/cloud (not started). Gitaly quarantine recover stays a tick. _Status: Proposed (Compose-host partial). Related to milestone 04._
+- **[Sonar native branch analysis](06_sonar_native_branch_analysis.md)** — Retire per-branch Sonar project keys; one Sonar project per GitLab project using the community branch plugin (`sonar.branch.name`). _Status: Proposed._
+- **[Idle deployment retention (dev / stg)](07_idle_deployment_retention.md)** — `helm uninstall` non-prod releases with no successful deploy for 14d (dev) / 30d (stg); prod always excluded. _Status: Proposed._
 
 ---
 
