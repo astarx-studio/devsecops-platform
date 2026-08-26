@@ -18,7 +18,8 @@
 image:
   repository: ""         # set by pipeline: $CI_REGISTRY_IMAGE
   tag: ""                # set by pipeline: $CI_COMMIT_SHORT_SHA
-  pullPolicy: IfNotPresent
+  # Always pull so same-tag rebuilds (e.g. Vault BUILD bake changes) replace running pods.
+  pullPolicy: Always
 
 # -- Number of pod replicas
 replicaCount: 1
