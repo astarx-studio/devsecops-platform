@@ -553,6 +553,7 @@ Uses `SONARQUBE_INTERNAL_URL` (`http://sonarqube:9000`) from inside the stack. R
 | Init | Tracked sample: `devtools/postgres-init/00-init-envs.sample.sh`. **Project-specific** scripts (e.g. CFA `00-init-cfa-envs.sh` creating `cfa_dev`/`cfa_stg`) are **gitignored** and stay on the operator host only — keep the stack generic. App schemas (migrations) stay in each project's repo/CI. | `devtools/rabbitmq-init/ensure-vhosts.sh` (one-shot compose service after broker healthy; creates vhosts `dev`/`stg` + admin permissions) |
 | Volume | `devtools/.vols/postgres` | `devtools/.vols/rabbitmq` |
 | Bootstrap user | `DEVTOOLS_PG_USER` / `DEVTOOLS_PG_PASSWORD` | `DEVTOOLS_RMQ_USER` / `DEVTOOLS_RMQ_PASSWORD` (sample: `admin` / `change-me`) |
+| Idle timeouts | `idle_session_timeout` 10min / `idle_in_transaction_session_timeout` 5min (`DEVTOOLS_PG_IDLE_*`). Stops Navicat/JDBC leaks filling `max_connections` (100). | n/a |
 
 **k3d bridge (`devtools/k8s-bridge.yaml` + `devtools/apply-k8s-bridge.sh`):** both containers are plain Docker, not k8s workloads, so pods can't resolve them by container name across the node/pod network boundary. The bridge creates a `devtools` namespace with selector-less Services + manually-authored Endpoints at the static IPs:
 

@@ -16,6 +16,7 @@ Maintainer internals: [devtools stack](../99_maintainers/02_services.md#devtools
 | Databases | Project-owned logical DBs on this host today: `cfa_dev`, `cfa_stg` (plus maintenance DB `devtools`). Created by a **local** operator init script under `devtools/postgres-init/` (not part of the generic DSOaaS git tree — see `00-init-envs.sample.sh`) |
 | Superuser (bootstrap) | From platform `devtools/.env` (`DEVTOOLS_PG_USER` / `DEVTOOLS_PG_PASSWORD`) — sample defaults are `devtools` / `change-me` |
 | Schemas | CFA schemas come from the CFA `db-core` migration CI; do not invent a second schema source |
+| Idle timeout | Server closes sessions idle **10 minutes** with no open transaction (`idle_session_timeout`). Idle-in-transaction is **5 minutes**. Navicat / DBeaver will drop; reconnect. App pools should set idle timeout ≤ 10 minutes so they recycle cleanly instead of leaking slots (`max_connections` is 100). |
 
 Also exposed via the same edge path: [Shared devtools RabbitMQ](11_shared_devtools_rabbitmq.md) (AMQP + Management UI; vhosts `dev` / `stg`).
 

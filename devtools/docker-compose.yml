@@ -40,6 +40,14 @@ services:
       POSTGRES_DB: ${DEVTOOLS_PG_DB:-devtools}
       POSTGRES_USER: ${DEVTOOLS_PG_USER:?set DEVTOOLS_PG_USER in devtools/.env}
       POSTGRES_PASSWORD: ${DEVTOOLS_PG_PASSWORD:?set DEVTOOLS_PG_PASSWORD in devtools/.env}
+    # Reclaim leaked GUI/JDBC idle sessions (Navicat via Traefik :25432 is the usual
+    # offender). Pools reconnect; apps should set pool maxIdleTime <= this timeout.
+    command:
+      - postgres
+      - -c
+      - idle_session_timeout=${DEVTOOLS_PG_IDLE_SESSION_TIMEOUT:-10min}
+      - -c
+      - idle_in_transaction_session_timeout=${DEVTOOLS_PG_IDLE_IN_TX_TIMEOUT:-5min}
     volumes:
       - ./.vols/postgres:/var/lib/postgresql/data
       # Project-specific *.sh here are gitignored; only *.sample.sh is tracked.

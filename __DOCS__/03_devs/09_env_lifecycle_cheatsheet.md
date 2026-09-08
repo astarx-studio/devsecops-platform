@@ -49,6 +49,8 @@ docker compose -p devtools -f devtools/docker-compose.yml up -d
 | `DEVTOOLS_PG_USER` / `DEVTOOLS_PG_PASSWORD`   | Postgres bootstrap superuser                         |
 | `DEVTOOLS_PG_DB`                              | Maintenance DB name                                  |
 | `DEVTOOLS_PG_STATIC_IP`                       | k8s bridge target (default `172.19.0.100`)           |
+| `DEVTOOLS_PG_IDLE_SESSION_TIMEOUT`            | Drop idle sessions (default `10min`)                 |
+| `DEVTOOLS_PG_IDLE_IN_TX_TIMEOUT`              | Drop idle-in-transaction (default `5min`)            |
 | `DEVTOOLS_RMQ_USER` / `DEVTOOLS_RMQ_PASSWORD` | RabbitMQ admin (sample `admin` / `change-me`)        |
 | `DEVTOOLS_RMQ_STATIC_IP`                      | k8s bridge target (default `172.19.0.101`)           |
 
