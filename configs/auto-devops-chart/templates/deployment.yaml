@@ -20,9 +20,15 @@ spec:
     metadata:
       labels:
         {{- include "dsoaas-app.selectorLabels" . | nindent 8 }}
-      {{- with .Values.podAnnotations }}
+      {{- if or .Values.podAnnotations .Values.deploy.id }}
       annotations:
+        # Pipeline sets dsoaas-deploy-id so same-tag image rebuilds roll pods.
+        {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- if .Values.deploy.id }}
+        dsoaas-deploy-id: {{ .Values.deploy.id | quote }}
+        {{- end }}
       {{- end }}
     spec:
       {{- with .Values.imagePullSecrets }}

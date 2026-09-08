@@ -17,8 +17,13 @@
 # -- Container image
 image:
   repository: ""         # set by pipeline: $CI_REGISTRY_IMAGE
-  tag: ""                # set by pipeline: $CI_COMMIT_SHORT_SHA
-  # Always pull so same-tag rebuilds (e.g. Vault BUILD bake changes) replace running pods.
+  tag: ""                # set by pipeline: $CI_COMMIT_SHORT_SHA[-$CI_COMMIT_REF_SLUG]
+  # Optional immutable digest (sha256:…). When set, chart prefers repository@digest
+  # over tag so same-tag rebuilds always change the pod template.
+  digest: ""
+  # Always pull so tag-only deploys still fetch the newest digest from the registry.
+  # Pair with pipeline podAnnotations.dsoaas-deploy-id (and preferably image.digest)
+  # so helm rolls pods when content changes under a reused tag.
   pullPolicy: Always
 
 # -- Number of pod replicas
@@ -87,8 +92,13 @@ extraEnv: []
 # - name: SOME_VAR
 #   value: "some-value"
 
-# -- Pod annotations
+# -- Pod annotations (pipeline also sets dsoaas-deploy-id via --set-string)
 podAnnotations: {}
+
+# -- Deploy metadata (optional; pipeline prefers podAnnotations.dsoaas-deploy-id)
+deploy:
+  # When set, written as pod annotation dsoaas-deploy-id to force rollout.
+  id: ""
 
 # -- Service account
 serviceAccount:

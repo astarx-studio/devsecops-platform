@@ -93,7 +93,7 @@ variables:
   CHART_REGISTRY_HOST: "gitlab:5000"
   # auto | true | false — auto uses plain HTTP only for gitlab:5000
   CHART_REGISTRY_PLAIN_HTTP: "auto"
-  CHART_VERSION: "0.2.3"
+  CHART_VERSION: "0.2.4"
   # Kaniko cache bucket inside GitLab registry (set KANIKO_CACHE=false to skip)
   KANIKO_CACHE: "true"
   DOCKER_DRIVER: overlay2
@@ -211,8 +211,24 @@ prepare-build-env:
         --dockerfile="${KANIKO_DOCKERFILE}" \
         --destination="${KANIKO_DEST_SHA}" \
         --destination="${KANIKO_DEST_LATEST}" \
+        --digest-file=/tmp/kaniko-digest.txt \
         ${CACHE_ARGS} \
         "$@"
+      DIGEST="$(tr -d '[:space:]' < /tmp/kaniko-digest.txt)"
+      mkdir -p "${CI_PROJECT_DIR}/.dsoaas"
+      {
+        echo "DSOAAS_IMAGE_REPOSITORY=${IMAGE_BASE}"
+        echo "DSOAAS_IMAGE_TAG=${IMAGE_TAG}"
+        echo "DSOAAS_IMAGE_DIGEST=${DIGEST}"
+      } > "${CI_PROJECT_DIR}/.dsoaas/image-digest.env"
+      echo "kaniko: wrote image digest ${DIGEST} for ${KANIKO_DEST_SHA}"
+  artifacts:
+    when: on_success
+    expire_in: 1 day
+    paths:
+      - .dsoaas/image-digest.env
+    reports:
+      dotenv: .dsoaas/image-digest.env
   rules:
     - if: '$CI_COMMIT_BRANCH'
 
@@ -468,17 +484,24 @@ container_scanning:
       echo "Helm chart registry: ${CHART_REGISTRY_HOST} (login=${HELM_LOGIN_HOST}, oci=${CHART_OCI_REF}, plain_http=${CHART_REGISTRY_PLAIN_HTTP})"
       echo "${CHART_REGISTRY_PASSWORD}" | helm registry login "${HELM_LOGIN_HOST}" \
         --username "${CHART_REGISTRY_USER}" --password-stdin ${HELM_LOGIN_EXTRA}
-    # Create / refresh a Kubernetes docker-registry pull secret so the cluster can
-    # pull the project's image from the private GitLab registry.  The CI job token
-    # (CI_REGISTRY_USER / CI_REGISTRY_PASSWORD) is valid for the duration of the
-    # job and is sufficient to seed the local image cache on the first pull.
-    # Subsequent runs use the cached image (imagePullPolicy=IfNotPresent) so they
-    # are unaffected by token expiry.
+    # Create / refresh a Kubernetes docker-registry pull secret.
+    # Prefer durable instance vars K8S_REGISTRY_PULL_USER / K8S_REGISTRY_PULL_PASSWORD
+    # (read_registry PAT or deploy token). Fall back to the job token so greenfield
+    # deploys still work; job tokens expire, so Always pulls after deploy need the
+    # durable credentials.
     - |
+      set -eu
+      PULL_USER="${K8S_REGISTRY_PULL_USER:-${CI_REGISTRY_USER}}"
+      PULL_PASS="${K8S_REGISTRY_PULL_PASSWORD:-${CI_REGISTRY_PASSWORD}}"
+      if [ -n "${K8S_REGISTRY_PULL_USER:-}" ]; then
+        echo "Using durable K8S_REGISTRY_PULL_* credentials for gitlab-registry-secret"
+      else
+        echo "WARN: K8S_REGISTRY_PULL_* unset — using job token (expires; set instance CI vars for Always pulls)"
+      fi
       kubectl create secret docker-registry gitlab-registry-secret \
         --docker-server="${CI_REGISTRY}" \
-        --docker-username="${CI_REGISTRY_USER}" \
-        --docker-password="${CI_REGISTRY_PASSWORD}" \
+        --docker-username="${PULL_USER}" \
+        --docker-password="${PULL_PASS}" \
         --namespace="${KUBE_NAMESPACE:-$DEPLOY_ENV}" \
         --dry-run=client -o yaml | kubectl apply -f -
   script:
@@ -505,11 +528,24 @@ container_scanning:
       # Fall back to DEPLOY_ENV if KUBE_NAMESPACE is not env-scoped by the API,
       # so the deploy always lands in the correct namespace.
       RELEASE_NAME="${HELM_RELEASE_NAME:-$CI_PROJECT_NAME}"
+      # Prefer digest from Kaniko dotenv when present — immutable ref forces a
+      # pod-template change even if the tag string is reused. Always + deploy-id
+      # remain as belt-and-suspenders for tag-only deploys / older charts.
+      IMAGE_REPO="${DSOAAS_IMAGE_REPOSITORY:-${CI_REGISTRY_IMAGE}}"
+      IMAGE_TAG="${DSOAAS_IMAGE_TAG:-${CI_COMMIT_SHORT_SHA}-${CI_COMMIT_REF_SLUG}}"
+      DIGEST_ARGS=""
+      if [ -n "${DSOAAS_IMAGE_DIGEST:-}" ]; then
+        echo "Deploying immutable digest ${DSOAAS_IMAGE_DIGEST}"
+        DIGEST_ARGS="--set image.digest=${DSOAAS_IMAGE_DIGEST}"
+      fi
       helm upgrade --install "${RELEASE_NAME}" "${CHART_OCI_REF}" \
         --version "${CHART_VERSION}" ${HELM_PLAIN_HTTP_FLAG} \
         --namespace "${KUBE_NAMESPACE:-$DEPLOY_ENV}" \
-        --set image.repository="${CI_REGISTRY_IMAGE}" \
-        --set image.tag="${CI_COMMIT_SHORT_SHA}-${CI_COMMIT_REF_SLUG}" \
+        --set image.repository="${IMAGE_REPO}" \
+        --set image.tag="${IMAGE_TAG}" \
+        --set image.pullPolicy=Always \
+        ${DIGEST_ARGS} \
+        --set-string "podAnnotations.dsoaas-deploy-id=${CI_PIPELINE_ID}-${CI_JOB_ID}" \
         --set ingress.host="${APP_HOST}" \
         --set project.path="${VAULT_PROJECT_PATH}" \
         --set project.env="${DEPLOY_ENV}" \

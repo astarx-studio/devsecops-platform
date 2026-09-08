@@ -40,14 +40,16 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
 {{/*
-Image reference: combines repository and tag.
-Both are required and must be provided by the pipeline.
+Image reference: repository@digest when digest is set (immutable, forces
+rollout on content change), otherwise repository:tag.
 */}}
 {{- define "dsoaas-app.image" -}}
-{{- if and .Values.image.repository .Values.image.tag -}}
+{{- if and .Values.image.repository .Values.image.digest -}}
+{{ .Values.image.repository }}@{{ .Values.image.digest }}
+{{- else if and .Values.image.repository .Values.image.tag -}}
 {{ .Values.image.repository }}:{{ .Values.image.tag }}
 {{- else -}}
-{{- fail "image.repository and image.tag are required" -}}
+{{- fail "image.repository and image.tag (or image.digest) are required" -}}
 {{- end -}}
 {{- end }}
 

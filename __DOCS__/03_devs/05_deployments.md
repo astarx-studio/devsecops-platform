@@ -10,6 +10,8 @@ When the Management API provisions a **deployable** project, it writes Auto DevO
 
 The **`dsoaas-app`** Helm chart defaults the Service **`targetPort` to 80** so clusters do not need per-repo port overrides. Use **`EXPOSE 80`** and set your process to listen on port **80** inside the container (for Node, `ENV PORT=80` is typical). Older templates that listen on **3000** should either switch to 80 or override chart values consistently. Ingress maps HTTP from inner Traefik to that Service port.
 
+Images default to **`imagePullPolicy: Always`**. Deploys also stamp a unique `dsoaas-deploy-id` annotation so a rebuild that reuses the same tag still rolls pods and pulls the newest digest (important for Vite/BUILD bake fixes).
+
 ---
 
 ## Hostnames

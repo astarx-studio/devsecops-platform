@@ -298,6 +298,17 @@ The chart’s `ExternalSecret` **`dataFrom.extract.key`** must match the **full 
 
 Private images on the cluster require a **`docker-registry`** secret (or equivalent) in the target namespace, built from registry credentials the cluster understands. The deploy job often needs **`kubectl`** (for example an Alpine-based image with `kubectl` + `helm` installed) to create that secret and to run **`helm upgrade`**. Align `imagePullSecrets` in chart values with the secret name the job creates.
 
+### Same-tag image rebuilds (`imagePullPolicy: Always` + deploy-id + digest)
+
+Application tags are often **reused** (e.g. `<shortsha>-development` after a Vault BUILD bake change). Platform defaults keep clusters on the newest digest:
+
+1. **`image.pullPolicy: Always`** (chart `0.2.4` default; deploy also `--set image.pullPolicy=Always`) so new pods pull from the registry instead of a stale node cache.
+2. **`podAnnotations.dsoaas-deploy-id=${CI_PIPELINE_ID}-${CI_JOB_ID}`** on every `helm upgrade` so the pod template always diffs — otherwise Helm skips restart when the tag string is unchanged.
+3. **Kaniko `--digest-file` → `DSOAAS_IMAGE_DIGEST` dotenv** so deploy can set `image.digest` (repository@sha256:…) when available — immutable and forces a template change.
+4. **Durable pull credentials** via instance CI vars **`K8S_REGISTRY_PULL_USER` / `K8S_REGISTRY_PULL_PASSWORD`** (`read_registry` PAT or deploy token). Job tokens expire; without these, `Always` pulls after deploy fail with `401`. The deploy job still falls back to the job token when the durable vars are unset.
+
+Published chart version: **`0.2.4`** (`CHART_VERSION` in auto-devops-pipeline).
+
 ### Helm releases stuck in `pending-install` / `pending-upgrade` / `pending-rollback`
 
 If a prior Helm operation was interrupted, the release can remain **pending** and block upgrades. Add a **pre-flight** in the deploy job: detect pending states and **`helm rollback`**, **`helm uninstall`**, or manual cleanup before `helm upgrade --install`.
