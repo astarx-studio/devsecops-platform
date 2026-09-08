@@ -4,11 +4,13 @@
 
 .ci-http-tools:
   before_script:
+    # IMPORTANT: never `exit 0` here — GitLab runs before_script+script in one shell;
+    # exiting would skip remaining steps (Hasura install, migrate, deploy) and still
+    # mark the job green. Use a no-op continue when tools are already present.
     - |
       if command -v curl >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
-        exit 0
-      fi
-      if command -v apk >/dev/null 2>&1; then
+        echo "load-vault-env: curl and jq already present"
+      elif command -v apk >/dev/null 2>&1; then
         n=0
         until apk add --no-cache curl jq bash; do
           n=$((n + 1))
@@ -44,10 +46,10 @@
     - !reference [.ci-http-tools, before_script]
     - |
       set -euo pipefail
+      # Do not `exit 0` when Vault is unset — that aborts the rest of the job shell.
       if [ -z "${VAULT_ADDR:-}" ] || [ -z "${VAULT_TOKEN:-}" ] || [ -z "${VAULT_PROJECT_PATH:-}" ]; then
         echo "load-vault-env: Vault CI vars not set — skipping"
-        exit 0
-      fi
+      else
       mkdir -p /tmp
       install -m 755 /dev/stdin /tmp/load-vault-env.sh <<'DSOAAS_LOAD_VAULT_ENV_EOF'
       #!/usr/bin/env sh
@@ -199,4 +201,5 @@
         . "${EXPORTS_FILE}"
         set +a
         echo "load-vault-env: sourced shell exports from BUILD dotenv profiles"
+      fi
       fi
