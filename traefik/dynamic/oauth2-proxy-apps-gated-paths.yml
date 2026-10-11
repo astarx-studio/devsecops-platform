@@ -44,6 +44,18 @@ http:
       priority: 100
 
     # -------------------------------------------------------------------------
+    # Qestor web UI — whole host is the SPA (API lives on qestor-api.* and
+    # stays ungated for app JWT / tooling). Require platform Keycloak groups
+    # admins|users before the browser reaches the app.
+    # -------------------------------------------------------------------------
+    gated-qestor-dev-ui:
+      rule: "Host(`qestor.dev.apps.__DOMAIN__`) && PathPrefix(`/`)"
+      entryPoints:
+        - websecure
+      service: oauth2-proxy-apps-upstream
+      priority: 100
+
+    # -------------------------------------------------------------------------
     # Template — copy for the next app that needs a gated path. Replace
     # <name>, <host>, and <path-prefix>; duplicate per environment as needed.
     # -------------------------------------------------------------------------
