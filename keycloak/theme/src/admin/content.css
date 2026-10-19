@@ -659,8 +659,36 @@ main .pf-v5-c-table :where(td, th) {
     overflow-wrap: anywhere;
 }
 
-.pf-v5-c-menu {
-    box-shadow: 0 8px 24px color-mix(in srgb, #000 28%, transparent);
+.pf-v5-c-menu,
+.MuiMenu-paper,
+.MuiPopover-paper {
+    border: 0;
+    border-radius: 10px;
+    overflow: hidden;
+    background-color: var(--platform-surface);
+    box-shadow:
+        0 0 0 1px var(--platform-line),
+        0 8px 24px color-mix(in srgb, #000 28%, transparent);
+}
+
+.pf-v5-c-menu:has(.pf-v5-c-menu) {
+    overflow: visible;
+}
+
+.pf-v5-c-menu__content,
+.pf-v5-c-menu__list,
+.pf-v5-c-menu__list-item,
+.pf-v5-c-menu__item,
+.MuiMenuItem-root {
+    border-radius: 0;
+    outline: none;
+    box-shadow: none;
+}
+
+.pf-v5-c-menu__item:focus,
+.pf-v5-c-menu__item:focus-visible,
+.MuiMenuItem-root.Mui-focusVisible {
+    outline: none;
 }
 
 /*

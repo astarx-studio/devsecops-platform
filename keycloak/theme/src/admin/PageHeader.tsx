@@ -9,7 +9,7 @@
 
 // @ts-nocheck
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import AppBar from "@mui/material/AppBar";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
@@ -17,28 +17,156 @@ import IconButton from "@mui/material/IconButton";
 import Menu from "@mui/material/Menu";
 import MenuItem from "@mui/material/MenuItem";
 import Stack from "@mui/material/Stack";
+import TextField from "@mui/material/TextField";
 import Toolbar from "@mui/material/Toolbar";
 import Typography from "@mui/material/Typography";
+import ArrowDropDownIcon from "@mui/icons-material/ArrowDropDown";
 import DarkModeIcon from "@mui/icons-material/DarkMode";
 import LightModeIcon from "@mui/icons-material/LightMode";
 import MenuIcon from "@mui/icons-material/Menu";
 import { useTranslation } from "react-i18next";
-import { Link } from "react-router-dom";
-import { useEnvironment } from "../shared/keycloak-ui-shared";
+import { Link, useNavigate } from "react-router-dom";
+import { useEnvironment, useFetch } from "../shared/keycloak-ui-shared";
 import logoLight from "../assets/logo-light.png";
 import logoDark from "../assets/logo-dark.png";
 import faviconLight from "../assets/favicon-light.ico";
 import faviconDark from "../assets/favicon-dark.ico";
 import { applyPlatformFavicon, type PlatformMode } from "../theme/colorMode";
+import { useAdminClient } from "./admin-client";
 import { PageHeaderClearCachesModal } from "./PageHeaderClearCachesModal";
 import { HelpHeader } from "./components/help-enabler/HelpHeader";
 import { useAccess } from "./context/access/Access";
+import { fetchAdminUI } from "./context/auth/admin-ui-endpoint";
 import { useRealm } from "./context/realm-context/RealmContext";
 import { useWhoAmI } from "./context/whoami/WhoAmI";
 import { toDashboard } from "./dashboard/routes/Dashboard";
 import type { Environment } from "./environment-types";
 import { useIsFeatureDisabled, Feature } from "./utils/useIsFeatureEnabled";
 import { setPlatformAdminMode } from "./colorScheme";
+
+type RealmChoice = {
+    name: string;
+    displayName?: string;
+};
+
+const RealmSwitch = () => {
+    const { realm } = useRealm();
+    const { adminClient } = useAdminClient();
+    const navigate = useNavigate();
+    const [anchor, setAnchor] = useState<HTMLElement | null>(null);
+    const [query, setQuery] = useState("");
+    const [realms, setRealms] = useState<RealmChoice[]>([]);
+
+    useFetch(
+        async () => {
+            try {
+                return await fetchAdminUI<RealmChoice[]>(
+                    adminClient,
+                    "ui-ext/realms/names",
+                    {
+                        first: "0",
+                        max: "100",
+                        search: ""
+                    }
+                );
+            } catch {
+                return [];
+            }
+        },
+        setRealms,
+        [realm]
+    );
+
+    const choices = useMemo(() => {
+        const byName = new Map<string, RealmChoice>();
+        byName.set(realm, { name: realm });
+        for (const item of realms) {
+            if (item?.name) {
+                byName.set(item.name, item);
+            }
+        }
+        const needle = query.trim().toLowerCase();
+        return [...byName.values()]
+            .filter(item => !needle || item.name.toLowerCase().includes(needle))
+            .sort((a, b) => a.name.localeCompare(b.name));
+    }, [realm, realms, query]);
+
+    return (
+        <>
+            <Button
+                color="inherit"
+                variant="outlined"
+                size="small"
+                data-testid="realm-switcher"
+                aria-label="Switch realm"
+                aria-haspopup="listbox"
+                aria-expanded={Boolean(anchor)}
+                endIcon={<ArrowDropDownIcon />}
+                onClick={event => setAnchor(event.currentTarget)}
+                sx={{
+                    ml: 1.5,
+                    borderColor: "divider",
+                    textTransform: "none",
+                    maxWidth: { xs: 140, sm: 240 },
+                    flexShrink: 1
+                }}
+            >
+                <Box
+                    component="span"
+                    sx={{ overflow: "hidden", textOverflow: "ellipsis" }}
+                >
+                    {realm}
+                </Box>
+            </Button>
+            <Menu
+                anchorEl={anchor}
+                open={Boolean(anchor)}
+                onClose={() => {
+                    setAnchor(null);
+                    setQuery("");
+                }}
+            >
+                {realms.length > 6 && (
+                    <MenuItem
+                        disableRipple
+                        sx={{
+                            cursor: "default",
+                            "&:hover": { backgroundColor: "transparent" }
+                        }}
+                        onKeyDown={event => event.stopPropagation()}
+                    >
+                        <TextField
+                            autoFocus
+                            size="small"
+                            placeholder="Find a realm"
+                            value={query}
+                            onChange={event => setQuery(event.target.value)}
+                            onClick={event => event.stopPropagation()}
+                            onKeyDown={event => event.stopPropagation()}
+                            sx={{ width: 220 }}
+                        />
+                    </MenuItem>
+                )}
+                {choices.map(item => (
+                    <MenuItem
+                        key={item.name}
+                        selected={item.name === realm}
+                        onClick={() => {
+                            setAnchor(null);
+                            setQuery("");
+                            if (item.name !== realm) {
+                                navigate(toDashboard({ realm: item.name }));
+                            }
+                        }}
+                    >
+                        {item.name}
+                    </MenuItem>
+                ))}
+                {choices.length === 0 && <MenuItem disabled>No matching realm</MenuItem>}
+            </Menu>
+        </>
+    );
+};
 
 type HeaderProps = {
     mode: PlatformMode;
@@ -96,8 +224,7 @@ export const Header = ({ mode, onToggleMode, onOpenNav }: HeaderProps) => {
                         display: "flex",
                         alignItems: "center",
                         color: "inherit",
-                        textDecoration: "none",
-                        flexGrow: 1
+                        textDecoration: "none"
                     }}
                 >
                     <Box
@@ -108,6 +235,8 @@ export const Header = ({ mode, onToggleMode, onOpenNav }: HeaderProps) => {
                     />
                     <Typography variant="h6">YADA DSOaaS</Typography>
                 </Box>
+                <RealmSwitch />
+                <Box sx={{ flexGrow: 1 }} />
                 <Stack direction="row" spacing={0.5} sx={{ alignItems: "center" }}>
                     <HelpHeader />
                     <IconButton

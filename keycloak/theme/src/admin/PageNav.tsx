@@ -9,7 +9,6 @@
 
 // @ts-nocheck
 
-import Chip from "@mui/material/Chip";
 import List from "@mui/material/List";
 import ListItemButton from "@mui/material/ListItemButton";
 import ListItemText from "@mui/material/ListItemText";
@@ -86,7 +85,7 @@ export const PageNav = () => {
     const { componentTypes } = useServerInfo();
     const isFeatureEnabled = useIsFeatureEnabled();
     const pages = componentTypes?.["org.keycloak.services.ui.extend.UiPageProvider"];
-    const { realm, realmRepresentation } = useRealm();
+    const { realmRepresentation } = useRealm();
 
     const showManage = hasSomeAccess("view-realm", "query-groups", "query-users", "query-clients", "query-organizations", "view-events");
     const showConfigure = hasSomeAccess("view-realm", "query-clients", "view-identity-providers");
@@ -95,17 +94,6 @@ export const PageNav = () => {
 
     return (
         <Stack component="nav" sx={{ py: 2, color: "var(--platform-text)" }}>
-            <Stack spacing={0.5} sx={{ px: 2, mb: 2 }}>
-                <Typography variant="subtitle1" sx={{ fontWeight: 700, overflowWrap: "anywhere" }}>
-                    YADA DSOaaS
-                </Typography>
-                <Stack direction="row" spacing={1} sx={{ alignItems: "center", flexWrap: "wrap" }}>
-                    <Typography variant="body2" data-testid="currentRealm" sx={{ fontWeight: 600, overflowWrap: "anywhere" }}>
-                        {realm}
-                    </Typography>
-                    <Chip size="small" label={t("currentRealm")} />
-                </Stack>
-            </Stack>
             {showManageRealm && (
                 <NavSection>
                     <LeftNav title={t("manageRealms")} path="/realms" />
@@ -113,9 +101,10 @@ export const PageNav = () => {
             )}
             {showManage && (
                 <NavSection title={t("manage")}>
-                    {isFeatureEnabled(Feature.Organizations) && realmRepresentation.organizationsEnabled && (
-                        <LeftNav title="organizations" path="/organizations" />
-                    )}
+                    {isFeatureEnabled(Feature.Organizations) &&
+                        realmRepresentation.organizationsEnabled && (
+                            <LeftNav title="organizations" path="/organizations" />
+                        )}
                     <LeftNav title="clients" path="/clients" />
                     <LeftNav title="clientScopes" path="/client-scopes" />
                     <LeftNav title="realmRoles" path="/roles" />
@@ -129,15 +118,21 @@ export const PageNav = () => {
                 <NavSection title={t("configure")}>
                     <LeftNav title="realmSettings" path="/realm-settings" />
                     <LeftNav title="authentication" path="/authentication" />
-                    {isFeatureEnabled(Feature.AdminFineGrainedAuthzV2) && realmRepresentation.adminPermissionsEnabled && (
-                        <LeftNav title="permissions" path="/permissions" />
-                    )}
+                    {isFeatureEnabled(Feature.AdminFineGrainedAuthzV2) &&
+                        realmRepresentation.adminPermissionsEnabled && (
+                            <LeftNav title="permissions" path="/permissions" />
+                        )}
                     <LeftNav title="identityProviders" path="/identity-providers" />
                     <LeftNav title="userFederation" path="/user-federation" />
                     {showWorkflows && <LeftNav title="workflows" path="/workflows" />}
                     {isFeatureEnabled(Feature.DeclarativeUI) &&
                         pages?.map(page => (
-                            <LeftNav key={page.id} title={page.id} path={toPage({ providerId: page.id }).pathname!} id="/page-section" />
+                            <LeftNav
+                                key={page.id}
+                                title={page.id}
+                                path={toPage({ providerId: page.id }).pathname!}
+                                id="/page-section"
+                            />
                         ))}
                 </NavSection>
             )}
