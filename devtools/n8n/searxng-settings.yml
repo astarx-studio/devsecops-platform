@@ -1,0 +1,6 @@
+# SearXNG for the n8n assistant. JSON is required; the stock image serves HTML only.
+use_default_settings: true
+search:
+  formats:
+    - html
+    - json

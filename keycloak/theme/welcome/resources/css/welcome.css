@@ -1,0 +1,151 @@
+html,
+body {
+    min-height: 100%;
+    margin: 0;
+    background: var(--platform-bg) !important;
+    background-attachment: fixed !important;
+    color: var(--platform-text);
+    font-family: var(--platform-font, "Segoe UI", system-ui, sans-serif);
+}
+
+.welcome {
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 32px 16px;
+    box-sizing: border-box;
+}
+
+.welcome-card {
+    width: 100%;
+    max-width: 440px;
+    box-sizing: border-box;
+    padding: 32px;
+    border-radius: var(--platform-radius, 12px);
+    background: var(--platform-surface);
+    color: var(--platform-text);
+    border-top: 4px solid var(--platform-secondary);
+    box-shadow: 0 8px 24px rgba(20, 16, 28, 0.18);
+}
+
+.welcome-brand {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.welcome-brand-mark {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-size: 1.25rem;
+    font-weight: 650;
+}
+
+.welcome-brand img {
+    width: 36px;
+    height: 36px;
+    object-fit: contain;
+}
+
+.welcome-logo-dark {
+    display: none;
+}
+
+[data-platform-mode="dark"] .welcome-logo-light {
+    display: none;
+}
+
+[data-platform-mode="dark"] .welcome-logo-dark {
+    display: inline;
+}
+
+.welcome-mode {
+    width: 40px;
+    height: 40px;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: transparent;
+    color: var(--platform-text);
+    cursor: pointer;
+}
+
+.welcome-mode svg {
+    width: 22px;
+    height: 22px;
+    fill: currentColor;
+}
+
+.welcome-mode svg.is-off {
+    display: none;
+}
+
+.welcome-paths {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin-top: 24px;
+}
+
+.welcome-path {
+    display: block;
+    text-decoration: none;
+    border-radius: 8px;
+    padding: 14px 16px;
+}
+
+.welcome-path strong {
+    display: block;
+    font-size: 1rem;
+}
+
+.welcome-path span {
+    display: block;
+    margin-top: 4px;
+    font-size: 0.875rem;
+}
+
+.welcome-path-employee {
+    background: var(--platform-brand);
+    color: var(--platform-brand-contrast);
+}
+
+.welcome-path-admin {
+    background: transparent;
+    color: var(--platform-secondary-contrast);
+    border: 1px solid var(--platform-secondary);
+}
+
+[data-platform-mode="dark"] .welcome-path-admin {
+    color: var(--platform-secondary);
+}
+
+.welcome-form {
+    margin-top: 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.welcome-form input {
+    font: inherit;
+    padding: 12px;
+    border-radius: 8px;
+    border: 1px solid var(--platform-line);
+    background: var(--platform-surface);
+    color: var(--platform-text);
+}
+
+.welcome-form button {
+    font: inherit;
+    font-weight: 650;
+    padding: 12px;
+    border: 0;
+    border-radius: 8px;
+    background: var(--platform-brand);
+    color: var(--platform-brand-contrast);
+    cursor: pointer;
+}

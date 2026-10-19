@@ -18,10 +18,13 @@ import {
   RegisterGitLabProjectInput,
   UpdateProjectSonarConfigInput,
   UpdateEnvProfileContentInput,
+  UpdateEnvProfileMetadataInput,
   UploadEnvProfileInput,
   UpsertDeploymentTargetInput,
 } from './project.inputs';
 import {
+  AppContainerLogsType,
+  AuditLogType,
   ConfigType,
   DeleteProjectResultType,
   EnvProfileContentType,
@@ -299,13 +302,22 @@ export class ProjectsResolver {
 
   @Mutation(() => Boolean, {
     description:
-      'Deletes SonarQube analysis projects for the given branches (best-effort). Does not remove GitLab SONAR_TOKEN.',
+      'Deletes SonarQube analysis projects for the given branches (best-effort). ' +
+      'When pruneAllowlist is true (default), those branches are removed from the Mongo allowlist and GitLab CI. ' +
+      'An empty allowlist also clears SONAR_TOKEN in GitLab CI (Vault copy is kept for reuse).',
   })
   async deleteSonarProjects(
     @Args('id', { type: () => ID }) id: string,
     @Args('branches', { type: () => [String] }) branches: string[],
+    @Args('pruneAllowlist', {
+      type: () => Boolean,
+      nullable: true,
+      defaultValue: true,
+      description: 'Remove branches from the allowlist and resync CI. Default true.',
+    })
+    pruneAllowlist?: boolean,
   ): Promise<boolean> {
-    await this.projectsService.deleteSonarProjects(id, branches);
+    await this.projectsService.deleteSonarProjects(id, branches, pruneAllowlist ?? true);
     return true;
   }
 
@@ -357,7 +369,8 @@ export class ProjectsResolver {
   }
 
   @Mutation(() => ProjectType, {
-    description: 'Overrides the application hostname for a deployment target.',
+    description:
+      'Sets the primary app hostname for a deployment target (apps[0].host and appHost) and updates APP_HOST CI scopes. Prefer upsertDeploymentTarget when editing the full app list.',
   })
   async setDeploymentTargetHostname(
     @Args('id', { type: () => ID }) id: string,
@@ -371,8 +384,9 @@ export class ProjectsResolver {
   @Mutation(() => DeleteProjectResultType, {
     description:
       'Unregisters a project: tears down K8s/Vault/Sonar, then deletes GitLab. ' +
-      'Archives the registry row only when GitLab, Kubernetes, or Vault resources still exist ' +
-      '(use forceGitLabDelete to purge registry before GitLab delete). Removes the Mongo row when nothing remains.',
+      'Archives the registry row when GitLab, Kubernetes, Vault, or Sonar resources still exist. ' +
+      'Archived rows are not proof that teardown finished — retry runs platform cleanup unless skipPlatformCleanup is true. ' +
+      'Removes the Mongo row when nothing remains.',
   })
   async deleteProject(
     @Args('id', { type: () => ID }) id: string,
@@ -383,9 +397,18 @@ export class ProjectsResolver {
       description: 'Purge container registry and packages before GitLab project delete.',
     })
     forceGitLabDelete?: boolean,
+    @Args('skipPlatformCleanup', {
+      type: () => Boolean,
+      nullable: true,
+      defaultValue: false,
+      description:
+        'Skip K8s/Vault/Sonar teardown (GitLab-only retry). Default false, including for archived projects.',
+    })
+    skipPlatformCleanup?: boolean,
   ): Promise<DeleteProjectResultType> {
     const result = await this.projectsService.deleteProject(id, {
       forceGitLabDelete: forceGitLabDelete ?? false,
+      skipPlatformCleanup: skipPlatformCleanup ?? false,
     });
 
     return {
@@ -406,7 +429,11 @@ export class ProjectsResolver {
     @Args('id', { type: () => ID }) id: string,
     @Args('input', { nullable: true }) input?: MigrateProjectToAutoDevopsInput,
   ): Promise<ProjectType> {
-    const doc = await this.projectsService.migrateProjectToAutoDevops(id, input?.branchOptions);
+    const doc = await this.projectsService.migrateProjectToAutoDevops(
+      id,
+      input?.branchOptions,
+      input?.unpin ?? false,
+    );
     return this.mapDoc(doc);
   }
 
@@ -424,8 +451,8 @@ export class ProjectsResolver {
 
   @Mutation(() => ProjectType, {
     description:
-      'Overrides the application hostname for a specific environment. ' +
-      'Updates MongoDB, hostnameOverrides, appHosts, and the APP_HOST CI variable.',
+      'Legacy alias of setDeploymentTargetHostname for dev/stg/prod keys. ' +
+      'Writes apps[0].host so later reads do not mask the override.',
   })
   async setHostnameOverride(
     @Args('id', { type: () => ID }) id: string,
@@ -434,6 +461,59 @@ export class ProjectsResolver {
   ): Promise<ProjectType> {
     const doc = await this.projectsService.setHostnameOverride(id, env, hostname);
     return this.mapDoc(doc);
+  }
+
+  @Query(() => [AuditLogType], {
+    description:
+      'Recent lifecycle audit events (newest first). Actor is api-key or oidc user when known. No secret values.',
+  })
+  async auditLogs(
+    @Args('projectId', { type: () => ID, nullable: true }) projectId?: string,
+    @Args('limit', { type: () => Int, nullable: true, defaultValue: 50 }) limit?: number,
+  ): Promise<AuditLogType[]> {
+    const rows = await this.projectsService.listAuditLogs(projectId, limit ?? 50);
+    return rows.map((row) => ({
+      id: String(row._id),
+      eventType: row.eventType,
+      projectId: row.projectId,
+      gitlabPath: row.gitlabPath,
+      effectiveSlug: row.effectiveSlug,
+      actor: row.actor,
+      metadata: row.metadata,
+      createdAt: row.createdAt ? row.createdAt.toISOString() : undefined,
+    }));
+  }
+
+  @Query(() => AppContainerLogsType, {
+    description:
+      'Tails logs for the Helm release of one app on a deployment target. ' +
+      'Namespace and cluster are taken from the project record.',
+  })
+  appContainerLogs(
+    @Args('id', { type: () => ID }) id: string,
+    @Args('targetKey') targetKey: string,
+    @Args('appName', { nullable: true }) appName?: string,
+    @Args('tailLines', { type: () => Int, nullable: true, defaultValue: 100 }) tailLines?: number,
+    @Args('previous', { type: () => Boolean, nullable: true, defaultValue: false })
+    previous?: boolean,
+    @Args('container', { nullable: true }) container?: string,
+    @Args('follow', {
+      type: () => Boolean,
+      nullable: true,
+      defaultValue: false,
+      description: 'Live refresh. Skips the audit write so a tail does not record every poll.',
+    })
+    follow?: boolean,
+  ): Promise<AppContainerLogsType> {
+    return this.projectsService.readAppContainerLogs(
+      id,
+      targetKey,
+      appName,
+      tailLines ?? 100,
+      previous === true,
+      container,
+      follow === true,
+    );
   }
 
   @Query(() => [EnvProfileType], {
@@ -493,9 +573,7 @@ export class ProjectsResolver {
     return {
       profileId: content.profileId,
       mode:
-        content.mode === 'raw_file'
-          ? EnvProfileContentMode.RAW_FILE
-          : EnvProfileContentMode.DOTENV,
+        content.mode === 'raw_file' ? EnvProfileContentMode.RAW_FILE : EnvProfileContentMode.DOTENV,
       entries: content.entries,
       rawContent: content.rawContent,
     };
@@ -515,6 +593,19 @@ export class ProjectsResolver {
       profileId,
       input.content,
     );
+    return mapEnvProfile(profile);
+  }
+
+  @Mutation(() => EnvProfileType, {
+    description:
+      'Updates env profile metadata (label, branches, targets, build path) without a new profile id.',
+  })
+  async updateEnvProfileMetadata(
+    @Args('projectId', { type: () => ID }) projectId: string,
+    @Args('profileId') profileId: string,
+    @Args('input') input: UpdateEnvProfileMetadataInput,
+  ): Promise<EnvProfileType> {
+    const profile = await this.envProfileService.updateProfileMetadata(projectId, profileId, input);
     return mapEnvProfile(profile);
   }
 }

@@ -30,6 +30,6 @@ import { SlugService } from './slug.service';
   ],
   controllers: [ProjectsController],
   providers: [ProjectsService, SlugService, EnvProfileService, ProjectsResolver],
-  exports: [ProjectsService, EnvProfileService],
+  exports: [ProjectsService, EnvProfileService, SlugService],
 })
 export class ProjectsModule {}

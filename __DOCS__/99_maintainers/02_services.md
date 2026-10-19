@@ -10,47 +10,49 @@ All services share the `devops-network` Docker bridge network. The network name 
 
 ## Startup order summary
 
-| Boot phase | Services |
-|---|---|
-| Phase 1 — immediate | `traefik`, `mongo`, `postgres` |
-| Phase 2 — after postgres healthy | `postgres-keycloak-init`, `postgres-sonar-init`, `postgres-vault-init`, `postgres-gitlab-init`, `postgres-registry-init`, `vault`, `keycloak`, `sonarqube-config-init`, `sonarqube` (first boot may take several minutes), then `sonarqube-init` (must exit 0) |
-| Phase 3 — after keycloak healthy | `oauth2-proxy` |
-| Phase 4 — after vault started | `vault-prod-bootstrap` (init, unseal, KV), then `vault-oidc-init` (after vault healthy + keycloak healthy) |
-| Phase 5 — after mongo + vault bootstrap + OIDC init | `api` |
-| Phase 5b — after api healthy | `console` |
-| Phase 6 — long-running stack | `gitlab`, `minio`, `minio-init` (see `depends_on` in `docker-compose.yml`) |
-| Phase 7 — after gitlab healthy | `gitlab-runner` |
-| Profile-gated (manual) | `cloudflared` (`--profile cftunnel`), `wireguard` (`--profile vpnedge`) |
+| Boot phase                                          | Services                                                                                                                                                                                                                                                       |
+| --------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Phase 1 — immediate                                 | `traefik`, `mongo`, `postgres`                                                                                                                                                                                                                                 |
+| Phase 2 — after postgres healthy                    | `postgres-keycloak-init`, `postgres-sonar-init`, `postgres-vault-init`, `postgres-gitlab-init`, `postgres-registry-init`, `vault`, `keycloak`, `sonarqube-config-init`, `sonarqube` (first boot may take several minutes), then `sonarqube-init` (must exit 0) |
+| Phase 3 — after keycloak healthy                    | `oauth2-proxy`                                                                                                                                                                                                                                                 |
+| Phase 4 — after vault started                       | `vault-prod-bootstrap` (init, unseal, KV), then `vault-oidc-init` (after vault healthy + keycloak healthy)                                                                                                                                                     |
+| Phase 5 — after mongo + vault bootstrap + OIDC init | `api`                                                                                                                                                                                                                                                          |
+| Phase 5b — after api healthy                        | `console`                                                                                                                                                                                                                                                      |
+| Phase 6 — long-running stack                        | `gitlab`, `minio`, `minio-init` (see `depends_on` in `docker-compose.yml`)                                                                                                                                                                                     |
+| Phase 7 — after gitlab healthy                      | `gitlab-runner`                                                                                                                                                                                                                                                |
+| Profile-gated (manual)                              | `cloudflared` (`--profile cftunnel`), `wireguard` (`--profile vpnedge`)                                                                                                                                                                                        |
 
 ---
 
 ## traefik
 
-| Field | Value |
-|---|---|
-| Image | `traefik:v3.6` |
-| Host ports | `10080→80`, `10443→443`, `18080→8080` (dashboard) |
-| Volumes | Docker socket (read-only), `./traefik/traefik.yml` → `/etc/traefik/traefik-template.yml` (template), `./traefik/dynamic/` (file provider), `./.vols/traefik/certs/` (ACME state) |
-| Depends on | — |
+| Field      | Value                                                                                                                                                                            |
+| ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Image      | `traefik:v3.6`                                                                                                                                                                   |
+| Host ports | `10080→80`, `10443→443`, `18080→8080` (dashboard)                                                                                                                                |
+| Volumes    | Docker socket (read-only), `./traefik/traefik.yml` → `/etc/traefik/traefik-template.yml` (template), `./traefik/dynamic/` (file provider), `./.vols/traefik/certs/` (ACME state) |
+| Depends on | —                                                                                                                                                                                |
 
 **Entrypoint processing:** The container uses a custom entrypoint (`/bin/sh -c`) that:
+
 1. Runs `sed` to substitute `__DOMAIN__` and `__ACME_EMAIL__` placeholders in the template, writing the result to `/etc/traefik/traefik.yml` inside the container.
 2. Runs `touch` + `chmod 600` on `acme.json` (Windows Docker bind mounts don't preserve Unix permissions).
 3. Execs `traefik --configFile=/etc/traefik/traefik.yml`.
 
 **Key environment variables:**
 
-| Variable | Purpose |
-|---|---|
-| `DOMAIN` | Base domain — substituted into `__DOMAIN__` placeholders in the template |
-| `ACME_EMAIL` | Let's Encrypt registration email — substituted into `__ACME_EMAIL__` |
-| `CF_DNS_API_TOKEN` | Cloudflare API token for ACME DNS-01 challenge |
+| Variable           | Purpose                                                                  |
+| ------------------ | ------------------------------------------------------------------------ |
+| `DOMAIN`           | Base domain — substituted into `__DOMAIN__` placeholders in the template |
+| `ACME_EMAIL`       | Let's Encrypt registration email — substituted into `__ACME_EMAIL__`     |
+| `CF_DNS_API_TOKEN` | Cloudflare API token for ACME DNS-01 challenge                           |
 
 **Health check:** `traefik healthcheck --ping` via the `:8082/ping` endpoint. Interval 15s, timeout 5s, 3 retries, 10s start period.
 
 **Network aliases:** All service domains are added as aliases on `devops-network` so internal DNS resolves identically to external. See `docker-compose.yml` for the full list.
 
 **Operational notes:**
+
 - `traefik.yml` on disk is a **template** with `__DOMAIN__` and `__ACME_EMAIL__` placeholders. It is never read directly by Traefik — the entrypoint produces the real config at `/etc/traefik/traefik.yml` inside the container.
 - On Windows Docker, `acme.json` permissions don't persist across restarts. The entrypoint script handles `chmod 600` automatically at every start.
 - ACME DNS challenge uses `propagation.delayBeforeChecks: 60` (waits 60s after creating the TXT record before requesting Let's Encrypt validation).
@@ -61,12 +63,12 @@ All services share the `devops-network` Docker bridge network. The network name 
 
 ## mongo
 
-| Field | Value |
-|---|---|
-| Image | `mongo:7` |
-| Host ports | — |
-| Volumes | Named volume `dsoaas-mongo-data` → `/data/db` (ext4 inside Docker VHDX). Legacy bind path `.vols/mongo` may remain as a cold copy after migration. |
-| Depends on | — |
+| Field      | Value                                                                                                                                              |
+| ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Image      | `mongo:7`                                                                                                                                          |
+| Host ports | —                                                                                                                                                  |
+| Volumes    | Named volume `dsoaas-mongo-data` → `/data/db` (ext4 inside Docker VHDX). Legacy bind path `.vols/mongo` may remain as a cold copy after migration. |
+| Depends on | —                                                                                                                                                  |
 
 **Health check:** `mongosh` admin ping. Interval 15s, timeout 5s, 3 retries, 20s start period.
 
@@ -76,13 +78,13 @@ All services share the `devops-network` Docker bridge network. The network name 
 
 ## postgres
 
-| Field | Value |
-|---|---|
-| Image | `postgres:17-alpine` |
-| Service / container name | `postgres` |
-| Host ports | `15433→5432` |
-| Volumes | Named volume `dsoaas-postgres-data` → `/var/lib/postgresql/data` (ext4 inside Docker VHDX). Legacy bind path `.vols/keycloak-db` may remain as a cold backup after migration — do not delete until verified. |
-| Depends on | — |
+| Field                    | Value                                                                                                                                                                                                        |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Image                    | `postgres:17-alpine`                                                                                                                                                                                         |
+| Service / container name | `postgres`                                                                                                                                                                                                   |
+| Host ports               | `15433→5432`                                                                                                                                                                                                 |
+| Volumes                  | Named volume `dsoaas-postgres-data` → `/var/lib/postgresql/data` (ext4 inside Docker VHDX). Legacy bind path `.vols/keycloak-db` may remain as a cold backup after migration — do not delete until verified. |
+| Depends on               | —                                                                                                                                                                                                            |
 
 Shared PostgreSQL for **Keycloak** (`KC_DB_*`), **SonarQube** (`SONAR_DB_*`), **GitLab Rails** (`GITLAB_DB_*`), and **container registry metadata** (`REGISTRY_DB_*`). On first boot (empty data directory), the image bootstraps operator superuser `${POSTGRES_ADMIN_USER}` / database `postgres`; `postgres/init/01-keycloak-database.sh` through `04-registry-database.sh` create app roles and databases. Application services use app credentials only (not the admin user).
 
@@ -102,31 +104,33 @@ Shared PostgreSQL for **Keycloak** (`KC_DB_*`), **SonarQube** (`SONAR_DB_*`), **
 
 ## keycloak
 
-| Field | Value |
-|---|---|
-| Image | `quay.io/keycloak/keycloak:26.6` |
-| Host ports | — |
-| Volumes | `./keycloak/realm-export.json` → `/opt/keycloak/data/import-template/realm-export.json` (template) |
-| Depends on | `postgres` (healthy) |
+| Field      | Value                                                                                              |
+| ---------- | -------------------------------------------------------------------------------------------------- |
+| Image      | `dsoaas-keycloak:26.6`, built from `keycloak/Dockerfile` (`FROM quay.io/keycloak/keycloak:26.6` plus `platform-theme.jar`) |
+| Host ports | —                                                                                                  |
+| Volumes    | `./keycloak/realm-export.json` → `/opt/keycloak/data/import-template/realm-export.json` (template) |
+| Depends on | `postgres` (healthy)                                                                               |
 
 **Entrypoint processing:** Like Traefik, Keycloak uses a custom entrypoint (`/bin/sh -c`) that:
+
 1. Creates `/opt/keycloak/data/import/`.
 2. Runs `sed` to substitute `${VAR}` placeholders (domain names, SMTP settings) in the template, writing to `/opt/keycloak/data/import/realm-export.json`.
 3. Execs `kc.sh start-dev --import-realm`.
 
 **Key environment variables:**
 
-| Variable | Purpose |
-|---|---|
-| `KC_DB` | `postgres` |
-| `KC_DB_URL` | JDBC URL for `postgres` service |
-| `KC_DB_USERNAME` / `KC_DB_PASSWORD` | Database credentials |
-| `KC_HOSTNAME` | External hostname (prefixed with `https://`) |
-| `KC_HOSTNAME_STRICT` | `false` (allows non-matching hostnames) |
-| `KC_HTTP_ENABLED` | `true` (TLS terminated at Traefik) |
-| `KC_PROXY_HEADERS` | `xforwarded` (trusts `X-Forwarded-*` headers from Traefik) |
-| `KC_BOOTSTRAP_ADMIN_USERNAME` / `KC_BOOTSTRAP_ADMIN_PASSWORD` | Initial admin credentials |
-| `GITLAB_DOMAIN`, `VAULT_DOMAIN`, `API_DOMAIN`, `OAUTH_DOMAIN`, `TRAEFIK_DOMAIN` | Substituted into `realm-export.json` template |
+| Variable                                                                                    | Purpose                                                       |
+| ------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
+| `KC_DB`                                                                                     | `postgres`                                                    |
+| `KC_DB_URL`                                                                                 | JDBC URL for `postgres` service                               |
+| `KC_DB_USERNAME` / `KC_DB_PASSWORD`                                                         | Database credentials                                          |
+| `KC_HOSTNAME`                                                                               | External hostname (prefixed with `https://`)                  |
+| `KC_HOSTNAME_STRICT`                                                                        | `false` (allows non-matching hostnames)                       |
+| `KC_HTTP_ENABLED`                                                                           | `true` (TLS terminated at Traefik)                            |
+| `KC_PROXY_HEADERS`                                                                          | `xforwarded` (trusts `X-Forwarded-*` headers from Traefik)    |
+| `KC_SPI_THEME__WELCOME_THEME`                                                               | `platform` (server welcome page; not per realm)               |
+| `KC_BOOTSTRAP_ADMIN_USERNAME` / `KC_BOOTSTRAP_ADMIN_PASSWORD`                               | Initial admin credentials                                     |
+| `GITLAB_DOMAIN`, `VAULT_DOMAIN`, `API_DOMAIN`, `OAUTH_DOMAIN`, `TRAEFIK_DOMAIN`             | Substituted into `realm-export.json` template                 |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM_NAME`, `SMTP_FROM_EMAIL` | Substituted into `realm-export.json` template for SMTP config |
 
 **Command:** `start-dev --import-realm` (dev mode, suitable for single-server deployment)
@@ -134,8 +138,11 @@ Shared PostgreSQL for **Keycloak** (`KC_DB_*`), **SonarQube** (`SONAR_DB_*`), **
 **Health check:** HTTP check on `:9000/health/ready`. Interval 15s, timeout 10s, 5 retries, 60s start period.
 
 **Operational notes:**
+
 - `realm-export.json` on disk is a **template** with `${VAR}` placeholders. The entrypoint runs `sed` to produce the actual import file inside the container.
-- Realm import runs once on first start. If you modify `realm-export.json` after the realm already exists, it will not be re-imported automatically. You must either delete `.vols/keycloak-db` (destructive) or use the admin console / CLI to apply changes manually.
+- Realm import runs once on first start. If you modify `realm-export.json` after the realm already exists, it will not be re-imported automatically. You must either delete the Keycloak data (destructive) or use the admin console / CLI to apply changes manually. Account console scope repair for an existing realm: `bash bootstrap/patch-keycloak-account.sh` (see [Keycloak administration](../02_admin/03_keycloak.md#account-console-profile-and-password-reset)). Theme selection for an existing realm: `bash bootstrap/patch-keycloak-theme.sh` (see [Keycloak administration](../02_admin/03_keycloak.md#platform-theme)). Profile photo attribute for an existing realm: `bash bootstrap/patch-keycloak-profile-picture.sh`.
+- `start-dev` loads `/opt/keycloak/providers/platform-theme.jar` without a separate `kc.sh build`. A theme change still needs `docker compose build keycloak` and a container recreate.
+- The Keycloak image keeps its Apache-2.0 `NOTICE`. The platform UI does not use the Keycloak logo or wordmark.
 - The bootstrap admin account is created automatically. After initial setup, create a permanent admin user via the admin console and optionally disable the bootstrap account.
 - Keycloak is not exposed directly via a host port. Browser traffic uses the public `Host` header on **Traefik** (`https://${KEYCLOAK_DOMAIN}`), which reverse-proxies to `http://keycloak:8080`.
 
@@ -143,20 +150,20 @@ Shared PostgreSQL for **Keycloak** (`KC_DB_*`), **SonarQube** (`SONAR_DB_*`), **
 
 ## vault
 
-| Field | Value |
-|---|---|
-| Image | `openbao/openbao:2` |
-| Host ports | `18200→8200` |
-| Volumes | `./vault/config.hcl` → `/vault/prod-config/config.hcl` (read-only) |
-| Depends on | `postgres` (healthy), `postgres-vault-init` (completed) |
+| Field      | Value                                                              |
+| ---------- | ------------------------------------------------------------------ |
+| Image      | `openbao/openbao:2`                                                |
+| Host ports | `18200→8200`                                                       |
+| Volumes    | `./vault/config.hcl` → `/vault/prod-config/config.hcl` (read-only) |
+| Depends on | `postgres` (healthy), `postgres-vault-init` (completed)            |
 
 **Key environment variables:**
 
-| `.env` variable | Compose mapping | Purpose |
-|---|---|---|
-| `VAULT_DB_*` | `BAO_PG_CONNECTION_URL` | PostgreSQL storage on shared `postgres` |
+| `.env` variable    | Compose mapping         | Purpose                                                      |
+| ------------------ | ----------------------- | ------------------------------------------------------------ |
+| `VAULT_DB_*`       | `BAO_PG_CONNECTION_URL` | PostgreSQL storage on shared `postgres`                      |
 | `VAULT_ROOT_TOKEN` | API + bootstrap scripts | Root token from `operator init` (see `vault-prod-bootstrap`) |
-| `VAULT_ADDR` | `VAULT_ADDR` | Internal URL `http://vault:8200` |
+| `VAULT_ADDR`       | `VAULT_ADDR`            | Internal URL `http://vault:8200`                             |
 
 **Command:** `server -config=/vault/prod-config/config.hcl` (production mode, PostgreSQL storage, Shamir seal).
 
@@ -174,25 +181,26 @@ Shared PostgreSQL for **Keycloak** (`KC_DB_*`), **SonarQube** (`SONAR_DB_*`), **
 
 ## cloudflared
 
-| Field | Value |
-|---|---|
-| Image | `cloudflare/cloudflared:latest` |
-| Host ports | — |
-| Volumes | — |
-| Profiles | `cftunnel` (only starts with `docker compose --profile cftunnel up -d`) |
-| Depends on | `traefik` (healthy) |
+| Field      | Value                                                                   |
+| ---------- | ----------------------------------------------------------------------- |
+| Image      | `cloudflare/cloudflared:latest`                                         |
+| Host ports | —                                                                       |
+| Volumes    | —                                                                       |
+| Profiles   | `cftunnel` (only starts with `docker compose --profile cftunnel up -d`) |
+| Depends on | `traefik` (healthy)                                                     |
 
 **Command:** `tunnel --metrics 0.0.0.0:60123 run`
 
 **Key environment variables:**
 
-| Variable | Purpose |
-|---|---|
+| Variable       | Purpose                                      |
+| -------------- | -------------------------------------------- |
 | `TUNNEL_TOKEN` | Authenticates the agent to Cloudflare's edge |
 
 **Health check:** None defined in compose. The image is distroless (no shell, wget, or curl). The metrics endpoint at `:60123/ready` is available for external monitoring. Tunnel health is observable via: `docker logs cloudflared | grep "Registered"`.
 
 **Operational notes:**
+
 - This service is **profile-gated**. It does not start with a regular `docker compose up -d`. You must explicitly activate the profile: `docker compose --profile cftunnel up -d`.
 - If `TUNNEL_TOKEN` is missing or invalid, the container enters a restart loop. Check `docker logs cloudflared` for authentication errors.
 - The tunnel routing table (which hostnames go to which service) is configured in the Cloudflare dashboard under **Zero Trust → Networks → Tunnels**. Configure `*.devops.{DOMAIN}` → `https://traefik:443` with "No TLS Verify" enabled.
@@ -202,15 +210,15 @@ Shared PostgreSQL for **Keycloak** (`KC_DB_*`), **SonarQube** (`SONAR_DB_*`), **
 
 ## wireguard
 
-| Field | Value |
-|---|---|
-| Image | `lscr.io/linuxserver/wireguard:latest` |
-| Profile | `vpnedge` (only starts with `docker compose --profile vpnedge up -d`) |
-| Host ports | `${WIREGUARD_SERVER_PORT:-51820}→51820/udp` |
-| Volumes | `./.vols/wireguard` → `/config` (server config + generated `peer_edge` client files) |
-| Capabilities | `NET_ADMIN`, `SYS_MODULE` |
-| Sysctls | `net.ipv4.conf.all.src_valid_mark=1` |
-| Depends on | — |
+| Field        | Value                                                                                |
+| ------------ | ------------------------------------------------------------------------------------ |
+| Image        | `lscr.io/linuxserver/wireguard:latest`                                               |
+| Profile      | `vpnedge` (only starts with `docker compose --profile vpnedge up -d`)                |
+| Host ports   | `${WIREGUARD_SERVER_PORT:-51820}→51820/udp`                                          |
+| Volumes      | `./.vols/wireguard` → `/config` (server config + generated `peer_edge` client files) |
+| Capabilities | `NET_ADMIN`, `SYS_MODULE`                                                            |
+| Sysctls      | `net.ipv4.conf.all.src_valid_mark=1`                                                 |
+| Depends on   | —                                                                                    |
 
 **Purpose:** WireGuard **server** at home. The cloud **edge** VM runs a **client** using `peer_edge/peer_edge.conf` from this volume, then applies **`edge/vpn-edge/apply-nat.sh`** to forward public TCP to **`HOME_TRAFFIC_IP`** (the Docker host’s LAN address). See [05_networking.md — VPN edge ingress](05_networking.md#vpn-edge-ingress-wireguard).
 
@@ -219,12 +227,15 @@ Shared PostgreSQL for **Keycloak** (`KC_DB_*`), **SonarQube** (`SONAR_DB_*`), **
 **Health check:** None. Use `docker logs wireguard` and `docker exec wireguard wg show`.
 
 **The auto-generated `wg0.conf`** (under `.vols/wireguard/wg_confs/wg0.conf`) includes the canonical LinuxServer `PostUp` rule that masquerades decrypted tunnel traffic onto the Docker bridge so return packets find their way back to the container:
+
 ```
 PostUp = iptables -A FORWARD -i %i -j ACCEPT; iptables -A FORWARD -o %i -j ACCEPT; iptables -t nat -A POSTROUTING -o eth+ -j MASQUERADE
 ```
+
 No additional iptables configuration is needed inside the container.
 
 **Operational notes:**
+
 - This service is **profile-gated** — use `docker compose --profile vpnedge up -d`.
 - **Docker Desktop / WSL2:** `HOME_TRAFFIC_IP` in `forward-ports.env` on the edge VM must be the **WSL2 instance's IPv4** (where Docker actually listens), not the Windows LAN address. Check with `ip -4 route get 1.1.1.1` inside WSL2. If inbound UDP to the container fails at the WSL2 layer, run WireGuard natively in WSL2 with the same keys; see [05_networking.md](05_networking.md).
 - Verify a healthy deployment: `docker exec wireguard wg show` (recent handshake, transfer counting) and `docker exec wireguard iptables -t nat -L POSTROUTING -nv` (MASQUERADE rule with non-zero packet count).
@@ -233,30 +244,31 @@ No additional iptables configuration is needed inside the container.
 
 ## gitlab
 
-| Field | Value |
-|---|---|
-| Image | `gitlab/gitlab-ce:18.10.1-ce.0` |
-| Host ports | `12222→22` (SSH git) |
-| Volumes | `./.vols/gitlab/config`, `./.vols/gitlab/logs`, `./.vols/gitlab/data` |
+| Field      | Value                                                                                     |
+| ---------- | ----------------------------------------------------------------------------------------- |
+| Image      | `gitlab/gitlab-ce:19.5.0-ce.0`                                                            |
+| Host ports | `12222→22` (SSH git)                                                                      |
+| Volumes    | `./.vols/gitlab/config`, `./.vols/gitlab/logs`, `./.vols/gitlab/data`                     |
 | Depends on | `postgres` (healthy), `postgres-gitlab-init`, `postgres-registry-init`, `minio` (healthy) |
 
 **Databases:** Rails uses shared `postgres` (`GITLAB_DB_*`, default database `gitlabhq_production`). Container registry metadata uses a separate database (`REGISTRY_DB_*`, default `registry`) on the same host. Embedded Omnibus PostgreSQL is disabled (`postgresql['enable'] = false`). Fresh installs: empty DBs are created by `postgres-gitlab-init` / `postgres-registry-init` on first `compose up`. Upgrading from embedded PostgreSQL requires a planned cutover (logical dump/restore of `gitlabhq_production`, then registry metadata import per [GitLab docs](https://docs.gitlab.com/administration/packages/container_registry_metadata_database/)) before relying on this layout.
 
 **Key environment variables (via `GITLAB_OMNIBUS_CONFIG` and `.env`):**
 
-| Config key | Purpose |
-|---|---|
-| `external_url` | Public HTTPS URL (e.g. `https://gitlab.devops.yourdomain.com`) |
-| `gitlab_rails['db_*']` | External Rails PostgreSQL on service `postgres` |
-| `registry['database']` | External registry metadata PostgreSQL; `REGISTRY_DB_ENABLED=true` only after metadata import |
-| `gitlab_rails['omniauth_*']` | OmniAuth OIDC config pointing to Keycloak |
-| `registry_external_url` | Container registry public URL |
-| `gitlab_rails['smtp_*']` | SMTP config for email notifications |
-| `gitlab_rails['gitlab_shell_ssh_port']` | Maps to host port 12222 |
+| Config key                              | Purpose                                                                                      |
+| --------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `external_url`                          | Public HTTPS URL (e.g. `https://gitlab.devops.yourdomain.com`)                               |
+| `gitlab_rails['db_*']`                  | External Rails PostgreSQL on service `postgres`                                              |
+| `registry['database']`                  | External registry metadata PostgreSQL; `REGISTRY_DB_ENABLED=true` only after metadata import |
+| `gitlab_rails['omniauth_*']`            | OmniAuth OIDC config pointing to Keycloak                                                    |
+| `registry_external_url`                 | Container registry public URL                                                                |
+| `gitlab_rails['smtp_*']`                | SMTP config for email notifications                                                          |
+| `gitlab_rails['gitlab_shell_ssh_port']` | Maps to host port 12222                                                                      |
 
 **Health check:** `curl --fail http://localhost/-/health`. Interval 30s, timeout 10s, 5 retries, **300s start period**.
 
 **Operational notes:**
+
 - GitLab is the slowest service to start. Do not consider the stack ready until GitLab's health check passes.
 - OIDC SSO via Keycloak uses the `gitlab` client configured in the `devops` realm. If Keycloak is not yet running when GitLab first starts, users can still log in with the local root account.
 - The root account credentials are set via `GITLAB_ROOT_PASSWORD` (first boot only). After that, use the admin console or API.
@@ -267,27 +279,28 @@ No additional iptables configuration is needed inside the container.
 
 ## gitlab-runner
 
-| Field | Value |
-|---|---|
-| Image | `gitlab/gitlab-runner:latest` |
-| Host ports | — |
-| Volumes | Docker socket (`/var/run/docker.sock`), `./.vols/gitlab-runner/config`, `./.vols/gitlab-runner/cache` |
-| Depends on | `gitlab` (healthy) |
+| Field      | Value                                                                                                 |
+| ---------- | ----------------------------------------------------------------------------------------------------- |
+| Image      | `gitlab/gitlab-runner:v19.5.0`                                                                        |
+| Host ports | —                                                                                                     |
+| Volumes    | Docker socket (`/var/run/docker.sock`), `./.vols/gitlab-runner/config`, `./.vols/gitlab-runner/cache` |
+| Depends on | `gitlab` (healthy)                                                                                    |
 
 **Key environment variables:**
 
-| Variable | Purpose |
-|---|---|
-| `GITLAB_RUNNER_TOKEN` | Runner authentication token from GitLab (starts with `glrt-`) |
-| `GITLAB_RUNNER_CONCURRENT` | Max parallel jobs (`concurrent` + `request_concurrency`); enforced on every start |
-| `GITLAB_RUNNER_PULL_POLICY` | Docker executor `pull_policy`: `always`, `if-not-present` (default), or `never` |
-| `GITLAB_RUNNER_IMAGE_RETENTION_DAYS` | Default age (days) for `make prune-docker-host ARGS='--retention-days'` |
-| `DOCKER_NETWORK` | Network name to inject into the runner's `docker-network-mode` |
+| Variable                             | Purpose                                                                           |
+| ------------------------------------ | --------------------------------------------------------------------------------- |
+| `GITLAB_RUNNER_TOKEN`                | Runner authentication token from GitLab (starts with `glrt-`)                     |
+| `GITLAB_RUNNER_CONCURRENT`           | Max parallel jobs (`concurrent` + `request_concurrency`); enforced on every start |
+| `GITLAB_RUNNER_PULL_POLICY`          | Docker executor `pull_policy`: `always`, `if-not-present` (default), or `never`   |
+| `GITLAB_RUNNER_IMAGE_RETENTION_DAYS` | Default age (days) for `make prune-docker-host ARGS='--retention-days'`           |
+| `DOCKER_NETWORK`                     | Network name to inject into the runner's `docker-network-mode`                    |
 
 **Registration behavior:**
 The entrypoint script checks if `GITLAB_RUNNER_TOKEN` equals `FILL_AFTER_STARTUP`. If so, it loops indefinitely (runner is not yet registered). Once a real token is supplied and the volume at `.vols/gitlab-runner/config/config.toml` does not exist, it runs `gitlab-runner register` with Docker executor settings and then starts the runner.
 
 **Operational notes:**
+
 - After first GitLab boot, retrieve the runner registration token from **GitLab → Admin → Runners** and update `GITLAB_RUNNER_TOKEN` in `.env`. Then restart the `gitlab-runner` container.
 - The reference `config.toml` is at `gitlab-runner/config.toml`. It is not mounted; it documents the expected configuration generated during registration.
 - The entrypoint rewrites `pull_policy` from `GITLAB_RUNNER_PULL_POLICY` on every start. Prefer `if-not-present` on memory-constrained hosts; roll back with `GITLAB_RUNNER_PULL_POLICY=always` and `docker compose up -d --force-recreate gitlab-runner`.
@@ -298,36 +311,69 @@ The entrypoint script checks if `GITLAB_RUNNER_TOKEN` equals `FILL_AFTER_STARTUP
 
 ## api (Management API)
 
-| Field | Value |
-|---|---|
-| Image | Built from `./api/Dockerfile` |
-| Host ports | `13000→3000` |
-| Volumes | — |
-| Depends on | `mongo` (healthy), `vault` (healthy) |
+| Field      | Value                                                                          |
+| ---------- | ------------------------------------------------------------------------------ |
+| Image      | Built from `./api/Dockerfile`                                                  |
+| Host ports | `127.0.0.1:13000→3000` (GraphQL); `${DSOAAS_MCP_PORT:-13010}→13010` (MCP only) |
+| Volumes    | —                                                                              |
+| Depends on | `mongo` (healthy), `vault` (healthy)                                           |
 
 **Key environment variables:**
 
-| Variable | Purpose |
-|---|---|
-| `DOMAIN` | Base domain (e.g. `yourdomain.com`) |
-| `GITLAB_URL` | Internal GitLab URL (`http://gitlab`) |
-| `GITLAB_ROOT_TOKEN` | GitLab API token |
-| `GITLAB_TEMPLATE_GROUP_ID` | Numeric GitLab group ID for templates |
-| `GITLAB_CONFIG_GROUP_ID` | Numeric GitLab group ID for shared CI configs |
-| `GITLAB_DOMAIN` | External GitLab hostname |
-| `MONGO_URL` | MongoDB connection string |
-| `MONGO_DB_NAME` | MongoDB database name |
-| `KUBECONFIG_DIR` | Host path mounted for per-env kubeconfigs |
-| `VAULT_URL` | Internal Vault URL (`http://vault:8200`) |
-| `VAULT_ROOT_TOKEN` | Vault root token (Management API) |
-| `OIDC_ISSUER_URL` | External Keycloak issuer URL |
-| `OIDC_JWKS_URL` | Internal Keycloak JWKS endpoint |
-| `OIDC_AUDIENCE` | Expected `aud` claim in JWT (e.g. `management-api`) |
-| `API_KEY` | Optional static API key for `X-API-Key` auth |
-| `NODE_ENV` | `production` in production |
-| `LOG_LEVEL` | `info` by default |
+| Variable                   | Purpose                                                                              |
+| -------------------------- | ------------------------------------------------------------------------------------ |
+| `DOMAIN`                   | Base domain (e.g. `yourdomain.com`)                                                  |
+| `GITLAB_URL`               | Internal GitLab URL (`http://gitlab`)                                                |
+| `GITLAB_ROOT_TOKEN`        | GitLab API token                                                                     |
+| `GITLAB_TEMPLATE_GROUP_ID` | Numeric GitLab group ID for templates                                                |
+| `GITLAB_CONFIG_GROUP_ID`   | Numeric GitLab group ID for shared CI configs                                        |
+| `GITLAB_DOMAIN`            | External GitLab hostname                                                             |
+| `MONGO_URL`                | MongoDB connection string                                                            |
+| `MONGO_DB_NAME`            | MongoDB database name                                                                |
+| `KUBECONFIG_DIR`           | Host path mounted for per-env kubeconfigs                                            |
+| `VAULT_URL`                | Internal Vault URL (`http://vault:8200`)                                             |
+| `VAULT_ROOT_TOKEN`         | Vault root token (Management API)                                                    |
+| `OIDC_ISSUER_URL`          | External Keycloak issuer URL                                                         |
+| `OIDC_JWKS_URL`            | Internal Keycloak JWKS endpoint                                                      |
+| `OIDC_AUDIENCE`            | Expected `aud` claim in JWT (e.g. `management-api`)                                  |
+| `API_KEY`                  | Optional static API key for `X-API-Key` auth. Not accepted by the MCP listener.      |
+| `MCP_DOMAIN`               | Public hostname (`mcp.devops.<DOMAIN>`). Traefik TLS to container port `13010` only. |
+| `MCP_PORT` / `MCP_HOST`    | In-container MCP listener (`13010` / `0.0.0.0`).                                     |
+| `DSOAAS_MCP_PORT`          | Host port published to container `13010`                                             |
+| `DSOAAS_MCP_PUBLISH`       | Host bind for that port (`0.0.0.0` or `127.0.0.1`)                                   |
+| `DSOAAS_MCP_PUBLIC_URL`    | Optional override of the console URL. Default `https://${MCP_DOMAIN}/mcp`.           |
+| `NODE_ENV`                 | `production` in production                                                           |
+| `LOG_LEVEL`                | `info` by default                                                                    |
 
 **Health check:** `node -e "require('http').get('http://127.0.0.1:3000/health', r => process.exit(r.statusCode === 200 ? 0 : 1))"`. Interval 15s, timeout 5s, 3 retries, 15s start period.
+
+**MCP:** `POST /mcp` on the dedicated listener. Streamable HTTP JSON. `GET /mcp` stays open as an SSE stream so IDE clients finish the handshake and refresh `tools/list`; it carries no data. Each key has one scope; a higher scope includes the tools below it. `tools/list` returns only the tools that scope allows. Mongo collection `mcp_access_keys` stores SHA-256 and the scope; the raw `dsoas_…` token is returned once. Operators create and revoke keys on the console **MCP** tab.
+
+| Scope         | Tools                                                                                                                                                                                                                                              |
+| ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `read`        | `platform_health`, `list_projects`, `get_project`, `list_audit_logs`, `slug_available`, `list_templates`, `get_template`, `list_configs`, `get_config`, `list_env_profiles`. Env profiles expose key names only.                                   |
+| `read_secret` | Read, plus `get_env_profile_content` (Vault body; audited as `env.profile.revealed`).                                                                                                                                                              |
+| `operate`     | Read secrets, plus hostname, pin, env create/update, `create_project`, `register_gitlab_project`, `upsert_deployment_target`, Sonar config and provision, Auto DevOps migration, and template/config create or file update. No delete or teardown. |
+| `full`        | Operate, plus `delete_project`, `remove_deployment_target`, `delete_env_profile`, `delete_sonar_projects`, `reconcile_gitlab_projects`, `delete_template`, `delete_config`.                                                                        |
+
+MCP does not issue or revoke access keys. That stays on the console **MCP** tab. Platform control (`dsoctl`, Vault unseal, `.env` rotation) is not an API operation.
+
+Existing keys with no stored scope behave as `read`. New keys default to `read`. Cursor example:
+
+```json
+{
+  "mcpServers": {
+    "dsoaas": {
+      "url": "https://mcp.devops.yourdomain.com/mcp",
+      "headers": {
+        "Authorization": "Bearer dsoas_…"
+      }
+    }
+  }
+}
+```
+
+Create and revoke are audited as `mcp.key.created` and `mcp.key.revoked` (prefix and name only).
 
 **Build:** Multi-stage Dockerfile. Final image is Node 20 Alpine with a non-root `appuser`. See `api/Dockerfile`.
 
@@ -335,12 +381,12 @@ The entrypoint script checks if `GITLAB_RUNNER_TOKEN` equals `FILL_AFTER_STARTUP
 
 ## console (Operator UI)
 
-| Field | Value |
-|---|---|
-| Image | Built from `./console/Dockerfile` |
-| Host ports | `13001→3001` |
-| Volumes | — |
-| Depends on | `api` (healthy) |
+| Field      | Value                             |
+| ---------- | --------------------------------- |
+| Image      | Built from `./console/Dockerfile` |
+| Host ports | `13001→3001`                      |
+| Volumes    | —                                 |
+| Depends on | `api` (healthy)                   |
 
 **Public URL:** `https://${CONSOLE_DOMAIN}` (e.g. `console.devops.yourdomain.com`).
 
@@ -348,14 +394,31 @@ The entrypoint script checks if `GITLAB_RUNNER_TOKEN` equals `FILL_AFTER_STARTUP
 
 **Key environment variables:**
 
-| Variable | Purpose |
-|---|---|
-| `CONSOLE_DOMAIN` | Traefik router hostname |
-| `CONSOLE_PORT` | Listen port inside container (default `3001`) |
-| `CONSOLE_HOST` | Bind address (default `0.0.0.0`) |
-| `MANAGEMENT_API_GRAPHQL_URL` | Internal GraphQL URL (`http://api:3000/graphql` in compose) |
-| `API_KEY` | Server-side only; forwarded as `X-API-Key` to the Management API |
-| `NODE_ENV` | `production` in production |
+| Variable                                         | Purpose                                                          |
+| ------------------------------------------------ | ---------------------------------------------------------------- |
+| `CONSOLE_DOMAIN`                                 | Traefik router hostname                                          |
+| `CONSOLE_PORT`                                   | Listen port inside container (default `3001`)                    |
+| `CONSOLE_HOST`                                   | Bind address (default `0.0.0.0`)                                 |
+| `MANAGEMENT_API_GRAPHQL_URL`                     | Internal GraphQL URL (`http://api:3000/graphql` in compose)      |
+| `API_KEY`                                        | Server-side only; forwarded as `X-API-Key` to the Management API |
+| `GITLAB_DOMAIN` / `VAULT_DOMAIN` / `APPS_DOMAIN` | Deep links only (no secrets)                                     |
+| `NODE_ENV`                                       | `production` in production                                       |
+
+**Operator contract (frozen write set):**
+
+- Health chip is **mongo + vault only**. `status=ok` does not mean GitLab, Kubernetes, Keycloak, or SonarQube are up.
+- `publishable` is set at create/register and is not editable later. `effectiveSlug` and `helmReleaseName` are immutable.
+- Env profile **content** and **metadata** (label, branches, runtime targets) can both be updated in place. Metadata no longer requires delete+recreate.
+- Sonar delete prunes the allowlist and GitLab CI. An empty allowlist also removes GitLab `SONAR_TOKEN`. The Vault copy of the token is kept.
+- Hostname changes belong on `apps[].host` (deployment target dialog). `setDeploymentTargetHostname` writes that same field.
+- `pinnedV1` blocks Auto DevOps migrate until the operator unpins (console asks for the slug).
+- **Archive is not teardown.** If delete leaves GitLab, Kubernetes, Vault, or Sonar, the row is archived and `gitlabDeleteError` explains what remains. Retry from the console runs platform cleanup again. Pass `skipPlatformCleanup: true` only for a GitLab-only retry. Dangling resources after archive means the job is **not done** — finish in GitLab/kubectl/Vault if the API retry still reports remainders.
+- Audit query: `auditLogs(projectId, limit)`. The console **Logs** area and a project **Audit** tab list events (project, MCP key, and reconcile). Actor is `api-key` for console BFF calls until per-operator OIDC is forwarded. Reveal events do not store secret values.
+- App container logs: `appContainerLogs(id, targetKey, appName, tailLines, previous, container, follow)`. Namespace and cluster come from the stored deployment target. Pods are selected by `app.kubernetes.io/instance=<helm release>`. Tail is clamped to 100–500 lines (default 100) and 256 KB per container, at most 8 pods. The console App logs view follows by polling about every 2 seconds and keeps the view at the bottom. `follow: true` skips the audit write; opening or refreshing the view is still `app.logs.read` and does not store the log text. Output can contain whatever the process printed.
+- Management API host port is bound to `127.0.0.1:13000` (Traefik still reaches the container on the Docker network). Prefer `VAULT_ROLE_ID` + `VAULT_SECRET_ID` over `VAULT_ROOT_TOKEN`. Optional `OIDC_REQUIRED_GROUP` checks bearer tokens only.
+- Do not add platform control (unseal, `.env` rotation, `dsoctl`) to this UI until this write set is explicitly unfrozen.
+- Accessibility: skip link to `#main`, labeled tabs and search fields, `aria-pressed` filter chips, named tables, and a visible focus ring. On viewports below `md`, the project list and detail stack and the page scrolls instead of locking both panes to the viewport.
+- MCP keys are issued and revoked on the console **MCP** tab. The browser receives the token once; it is not stored in the console.
 
 **Health check:** `wget -qO- http://127.0.0.1:3001/api/health`. Interval 15s, timeout 5s, 3 retries, 20s start period.
 
@@ -365,12 +428,12 @@ The entrypoint script checks if `GITLAB_RUNNER_TOKEN` equals `FILL_AFTER_STARTUP
 
 ## postgres-vault-init
 
-| Field | Value |
-|---|---|
-| Image | `postgres:17-alpine` |
-| Host ports | — |
-| Volumes | `./postgres/init-ensure-vault-db.sh` |
-| Depends on | `postgres` (healthy) |
+| Field      | Value                                |
+| ---------- | ------------------------------------ |
+| Image      | `postgres:17-alpine`                 |
+| Host ports | —                                    |
+| Volumes    | `./postgres/init-ensure-vault-db.sh` |
+| Depends on | `postgres` (healthy)                 |
 
 One-shot. Creates `${VAULT_DB_USER}` / `${VAULT_DB_NAME}` on shared PostgreSQL (idempotent). First empty cluster also runs `postgres/init/05-vault-database.sh`.
 
@@ -378,12 +441,12 @@ One-shot. Creates `${VAULT_DB_USER}` / `${VAULT_DB_NAME}` on shared PostgreSQL (
 
 ## vault-prod-bootstrap
 
-| Field | Value |
-|---|---|
-| Image | `openbao/openbao:2` |
-| Host ports | — |
-| Volumes | `./vault/init-prod-bootstrap.sh`, `./.vols/vault` → `/work` |
-| Depends on | `vault` (started), `postgres-vault-init` (completed) |
+| Field      | Value                                                       |
+| ---------- | ----------------------------------------------------------- |
+| Image      | `openbao/openbao:2`                                         |
+| Host ports | —                                                           |
+| Volumes    | `./vault/init-prod-bootstrap.sh`, `./.vols/vault` → `/work` |
+| Depends on | `vault` (started), `postgres-vault-init` (completed)        |
 
 One-shot. Runs [`vault/init-prod-bootstrap.sh`](../../vault/init-prod-bootstrap.sh): `operator init` (first boot), unseal from `/work/unseal-keys`, enable KV v2 at `secret/`. Invoked by `make bootstrap`, `make vault-bootstrap`, or `docker compose run --rm vault-prod-bootstrap`.
 
@@ -391,12 +454,12 @@ One-shot. Runs [`vault/init-prod-bootstrap.sh`](../../vault/init-prod-bootstrap.
 
 ## vault-oidc-init
 
-| Field | Value |
-|---|---|
-| Image | `openbao/openbao:2` |
-| Host ports | — |
-| Volumes | `./vault/init-oidc.sh`, `./.vols/vault` → `/work` (read-only, for `root-token`) |
-| Depends on | `vault-prod-bootstrap` (completed), `vault` (healthy), `keycloak` (healthy) |
+| Field      | Value                                                                           |
+| ---------- | ------------------------------------------------------------------------------- |
+| Image      | `openbao/openbao:2`                                                             |
+| Host ports | —                                                                               |
+| Volumes    | `./vault/init-oidc.sh`, `./.vols/vault` → `/work` (read-only, for `root-token`) |
+| Depends on | `vault-prod-bootstrap` (completed), `vault` (healthy), `keycloak` (healthy)     |
 
 One-shot service. Runs `/init-oidc.sh`:
 
@@ -416,39 +479,40 @@ Users authenticating via OIDC who belong to the Keycloak `admins` group automati
 
 ## oauth2-proxy
 
-| Field | Value |
-|---|---|
-| Image | `quay.io/oauth2-proxy/oauth2-proxy:latest` |
-| Host ports | — |
-| Volumes | — |
-| Depends on | `keycloak` (healthy) |
+| Field      | Value                                      |
+| ---------- | ------------------------------------------ |
+| Image      | `quay.io/oauth2-proxy/oauth2-proxy:latest` |
+| Host ports | —                                          |
+| Volumes    | —                                          |
+| Depends on | `keycloak` (healthy)                       |
 
 Two containers share this image: **`oauth2-proxy`** (operator tier, port 4180) and **`oauth2-proxy-apps`** (dev/stg app zones, port 4181).
 
 **Key environment variables:**
 
-| Variable | Purpose |
-|---|---|
-| `OAUTH2_PROXY_OIDC_ISSUER_URL` | Internal Keycloak issuer (`http://keycloak:8080/realms/devops`) |
-| `OAUTH2_PROXY_CLIENT_ID` | `oauth2-proxy` or `oauth2-proxy-apps` (Keycloak client) |
-| `OAUTH2_PROXY_CLIENT_SECRET` | Client secret from Keycloak (`KC_CLIENT_SECRET_OAUTH2_PROXY` / `_APPS`) |
-| `OAUTH2_PROXY_COOKIE_SECRET` | 32-byte random secret for cookie encryption (separate per instance) |
-| `OAUTH2_PROXY_COOKIE_DOMAINS` | `.yourdomain.com` (base `DOMAIN`, covers app subdomains) |
-| `OAUTH2_PROXY_REDIRECT_URL` | `https://${OAUTH_DOMAIN}` or `https://${OAUTH_APPS_DOMAIN}` + `/oauth2/callback` |
-| `OAUTH2_PROXY_WHITELIST_DOMAINS` | `.yourdomain.com` |
-| `OAUTH2_PROXY_EMAIL_DOMAINS` | `*` (allow all email domains) |
-| `OAUTH2_PROXY_HTTP_ADDRESS` | `0.0.0.0:4180` (operator) or `4181` (apps) |
-| `OAUTH2_PROXY_REVERSE_PROXY` | `true` (trusts X-Forwarded headers from Traefik) |
-| `OAUTH2_PROXY_SET_XAUTHREQUEST` | `true` (sets X-Auth-Request-* headers) |
-| `OAUTH2_PROXY_SKIP_PROVIDER_BUTTON` | `true` (skips the "Sign in with..." button, redirects immediately) |
-| `OAUTH2_PROXY_PASS_ACCESS_TOKEN` | `true` (passes the OIDC access token downstream) |
-| `OAUTH2_PROXY_ALLOWED_GROUPS` | Operator tier: comma-separated Keycloak groups (default `admins`) |
-| `OAUTH2_PROXY_APPS_ALLOWED_GROUPS` | App-zone tier only (Compose env → `OAUTH2_PROXY_ALLOWED_GROUPS` on `oauth2-proxy-apps`; default `admins,users`) |
-| `OAUTH2_PROXY_DEVTOOLS_ALLOWED_GROUPS` | DevTools ForwardAuth tier (`oauth2-proxy-devtools` / `oidc-auth-devtools`; default `admins,users`) |
+| Variable                               | Purpose                                                                                                         |
+| -------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `OAUTH2_PROXY_OIDC_ISSUER_URL`         | Internal Keycloak issuer (`http://keycloak:8080/realms/devops`)                                                 |
+| `OAUTH2_PROXY_CLIENT_ID`               | `oauth2-proxy` or `oauth2-proxy-apps` (Keycloak client)                                                         |
+| `OAUTH2_PROXY_CLIENT_SECRET`           | Client secret from Keycloak (`KC_CLIENT_SECRET_OAUTH2_PROXY` / `_APPS`)                                         |
+| `OAUTH2_PROXY_COOKIE_SECRET`           | 32-byte random secret for cookie encryption (separate per instance)                                             |
+| `OAUTH2_PROXY_COOKIE_DOMAINS`          | `.yourdomain.com` (base `DOMAIN`, covers app subdomains)                                                        |
+| `OAUTH2_PROXY_REDIRECT_URL`            | `https://${OAUTH_DOMAIN}` or `https://${OAUTH_APPS_DOMAIN}` + `/oauth2/callback`                                |
+| `OAUTH2_PROXY_WHITELIST_DOMAINS`       | `.yourdomain.com`                                                                                               |
+| `OAUTH2_PROXY_EMAIL_DOMAINS`           | `*` (allow all email domains)                                                                                   |
+| `OAUTH2_PROXY_HTTP_ADDRESS`            | `0.0.0.0:4180` (operator) or `4181` (apps)                                                                      |
+| `OAUTH2_PROXY_REVERSE_PROXY`           | `true` (trusts X-Forwarded headers from Traefik)                                                                |
+| `OAUTH2_PROXY_SET_XAUTHREQUEST`        | `true` (sets X-Auth-Request-\* headers)                                                                         |
+| `OAUTH2_PROXY_SKIP_PROVIDER_BUTTON`    | `true` (skips the "Sign in with..." button, redirects immediately)                                              |
+| `OAUTH2_PROXY_PASS_ACCESS_TOKEN`       | `true` (passes the OIDC access token downstream)                                                                |
+| `OAUTH2_PROXY_ALLOWED_GROUPS`          | Operator tier: comma-separated Keycloak groups (default `admins`)                                               |
+| `OAUTH2_PROXY_APPS_ALLOWED_GROUPS`     | App-zone tier only (Compose env → `OAUTH2_PROXY_ALLOWED_GROUPS` on `oauth2-proxy-apps`; default `admins,users`) |
+| `OAUTH2_PROXY_DEVTOOLS_ALLOWED_GROUPS` | DevTools ForwardAuth tier (`oauth2-proxy-devtools` / `oidc-auth-devtools`; default `admins,users`)              |
 
 **Health check:** None defined.
 
 **Operational notes:**
+
 - **`oauth2-proxy`** is the ForwardAuth target for **`oidc-auth@file`** (`traefik/dynamic/forward-auth.yml`). Browser callbacks use `https://${OAUTH_DOMAIN}`.
 - **`oauth2-proxy-apps`** serves as a **reverse proxy** (`OAUTH2_PROXY_UPSTREAMS` → `oauth2-proxy-apps-hostfix` → k3d NodePort) for specific gated paths only — see **`traefik/dynamic/oauth2-proxy-apps-gated-paths.yml`**, not a whole dev/stg zone. Dev/stg hosts are ungated by default (`traefik/dynamic/k3d-passthrough.yml` → `k3d-ingress`); only the paths explicitly listed in the gated-paths file route through this proxy. Callbacks use `https://${OAUTH_APPS_DOMAIN}`.
 - Tiered OIDC patterns and existing-realm client patching: [Adding tiered OIDC with oauth2-proxy](../02_admin/08_oauth2_proxy_tiers_and_forwardauth.md).
@@ -459,21 +523,21 @@ Two containers share this image: **`oauth2-proxy`** (operator tier, port 4180) a
 
 ## sonarqube
 
-| Field | Value |
-|---|---|
-| Image | `sonarqube:community` |
-| Host ports | — (Traefik `https://${SONARQUBE_DOMAIN}`) |
-| Volumes | Named volume `dsoaas-sonarqube-data` → `/opt/sonarqube/data`; bind `extensions`, `logs`, `conf/sonar.properties`. Legacy `.vols/sonarqube/data` may remain as cold backup after migration. |
-| Depends on | `postgres` (healthy), `postgres-sonar-init`, `sonarqube-config-init` (completed) |
+| Field      | Value                                                                                                                                                                                      |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Image      | `sonarqube:community`                                                                                                                                                                      |
+| Host ports | — (Traefik `https://${SONARQUBE_DOMAIN}`)                                                                                                                                                  |
+| Volumes    | Named volume `dsoaas-sonarqube-data` → `/opt/sonarqube/data`; bind `extensions`, `logs`, `conf/sonar.properties`. Legacy `.vols/sonarqube/data` may remain as cold backup after migration. |
+| Depends on | `postgres` (healthy), `postgres-sonar-init`, `sonarqube-config-init` (completed)                                                                                                           |
 
 **Key environment variables:**
 
-| Variable | Purpose |
-|---|---|
-| `SONARQUBE_DOMAIN` | Public hostname (Traefik router + Keycloak SAML client) |
-| `SONARQUBE_EXTERNAL_URL` | Public base URL for links and `sonar.core.serverBaseURL` |
+| Variable                 | Purpose                                                                 |
+| ------------------------ | ----------------------------------------------------------------------- |
+| `SONARQUBE_DOMAIN`       | Public hostname (Traefik router + Keycloak SAML client)                 |
+| `SONARQUBE_EXTERNAL_URL` | Public base URL for links and `sonar.core.serverBaseURL`                |
 | `SONARQUBE_INTERNAL_URL` | In-network scanner URL (`http://sonarqube:9000`) for GitLab Runner jobs |
-| `SONAR_DB_*` | Sonar role/database on shared `postgres` (not Keycloak credentials) |
+| `SONAR_DB_*`             | Sonar role/database on shared `postgres` (not Keycloak credentials)     |
 
 **Health check:** `GET /api/system/status` until `status` is `UP` (long `start_period` on first boot).
 
@@ -483,10 +547,10 @@ Two containers share this image: **`oauth2-proxy`** (operator tier, port 4180) a
 
 **SSO (SAML + Keycloak):** Keycloak side from `realm-export.json` on first import (see [SonarQube SSO](../02_admin/09_sonarqube_sso.md)). Sonar side: `sonarqube-config-init` + `sonarqube-init`.
 
-| Service | Role |
-|---|---|
-| `sonarqube-config-init` | Writes SAML settings to `.vols/sonarqube/conf/sonar.properties` from Keycloak IdP metadata |
-| `sonarqube-init` | Sonar built-in `sonar-users` permissions + `admins` global admin; removes legacy custom groups |
+| Service                 | Role                                                                                           |
+| ----------------------- | ---------------------------------------------------------------------------------------------- |
+| `sonarqube-config-init` | Writes SAML settings to `.vols/sonarqube/conf/sonar.properties` from Keycloak IdP metadata     |
+| `sonarqube-init`        | Sonar built-in `sonar-users` permissions + `admins` global admin; removes legacy custom groups |
 
 **Traefik:** TLS termination only (no ForwardAuth on Sonar — authentication is SAML inside SonarQube).
 
@@ -496,12 +560,12 @@ Two containers share this image: **`oauth2-proxy`** (operator tier, port 4180) a
 
 ### sonarqube-mcp (optional profile `sonarmcp`)
 
-| Field | Value |
-|---|---|
-| Image | `mcp/sonarqube:latest` |
+| Field      | Value                                                                    |
+| ---------- | ------------------------------------------------------------------------ |
+| Image      | `mcp/sonarqube:latest`                                                   |
 | Host ports | `${SONARQUBE_MCP_PORT:-19080}` → container `8080` (HTTP, bind `0.0.0.0`) |
-| Ingress | None (LAN only; not on Traefik) |
-| Depends on | `sonarqube` (healthy) |
+| Ingress    | None (LAN only; not on Traefik)                                          |
+| Depends on | `sonarqube` (healthy)                                                    |
 
 Start: `docker compose --profile sonarmcp up -d sonarqube-mcp`. MCP endpoint: `http://<host-lan-ip>:19080/mcp`. Each IDE client must send `Authorization: Bearer <SonarQube user token>` (create token in Sonar UI). Cursor example:
 
@@ -543,17 +607,17 @@ Uses `SONARQUBE_INTERNAL_URL` (`http://sonarqube:9000`) from inside the stack. R
 
 `devtools/` is a **separate, independent** Docker Compose project — not part of `docker-compose.yml`, not started by `make bootstrap`, and not required for a normal `docker compose up`. It exists to give app teams deploying into the k3d cluster (currently: CFA's `backend-sample1`/`backend-sample2` and **Hasura** on dev/stg, plus ESA MySQL) shared Postgres + MySQL + RabbitMQ for their app-level connections, instead of standing up per-project infrastructure.
 
-| Field | Postgres | RabbitMQ |
-|---|---|---|
-| Compose file | `devtools/docker-compose.yml` (`docker compose -p devtools -f devtools/docker-compose.yml up -d`) | same |
-| Image | `postgres:16-alpine` | `rabbitmq:3.13-management-alpine` |
-| Network | `devops-network` (external) | same |
-| Static IP | `172.19.0.100` (`DEVTOOLS_PG_STATIC_IP`) | `172.19.0.101` (`DEVTOOLS_RMQ_STATIC_IP`) |
-| Env isolation | project-owned logical DBs (via local init scripts) | vhosts **`dev`** / **`stg`** |
-| Init | Tracked sample: `devtools/postgres-init/00-init-envs.sample.sh`. **Project-specific** scripts (e.g. CFA `00-init-cfa-envs.sh` creating `cfa_dev`/`cfa_stg`) are **gitignored** and stay on the operator host only — keep the stack generic. App schemas (migrations) stay in each project's repo/CI. | `devtools/rabbitmq-init/ensure-vhosts.sh` (one-shot compose service after broker healthy; creates vhosts `dev`/`stg` + admin permissions) |
-| Volume | `devtools/.vols/postgres` | `devtools/.vols/rabbitmq` |
-| Bootstrap user | `DEVTOOLS_PG_USER` / `DEVTOOLS_PG_PASSWORD` | `DEVTOOLS_RMQ_USER` / `DEVTOOLS_RMQ_PASSWORD` (sample: `admin` / `change-me`) |
-| Idle timeouts | `idle_session_timeout` 10min / `idle_in_transaction_session_timeout` 5min (`DEVTOOLS_PG_IDLE_*`). Stops Navicat/JDBC leaks filling `max_connections` (100). | n/a |
+| Field          | Postgres                                                                                                                                                                                                                                                                                             | RabbitMQ                                                                                                                                  |
+| -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| Compose file   | `devtools/docker-compose.yml` (`docker compose -p devtools -f devtools/docker-compose.yml up -d`)                                                                                                                                                                                                    | same                                                                                                                                      |
+| Image          | `postgres:16-alpine`                                                                                                                                                                                                                                                                                 | `rabbitmq:3.13-management-alpine`                                                                                                         |
+| Network        | `devops-network` (external)                                                                                                                                                                                                                                                                          | same                                                                                                                                      |
+| Static IP      | `172.19.0.100` (`DEVTOOLS_PG_STATIC_IP`)                                                                                                                                                                                                                                                             | `172.19.0.101` (`DEVTOOLS_RMQ_STATIC_IP`)                                                                                                 |
+| Env isolation  | project-owned logical DBs (via local init scripts)                                                                                                                                                                                                                                                   | vhosts **`dev`** / **`stg`**                                                                                                              |
+| Init           | Tracked sample: `devtools/postgres-init/00-init-envs.sample.sh`. **Project-specific** scripts (e.g. CFA `00-init-cfa-envs.sh` creating `cfa_dev`/`cfa_stg`) are **gitignored** and stay on the operator host only — keep the stack generic. App schemas (migrations) stay in each project's repo/CI. | `devtools/rabbitmq-init/ensure-vhosts.sh` (one-shot compose service after broker healthy; creates vhosts `dev`/`stg` + admin permissions) |
+| Volume         | `devtools/.vols/postgres`                                                                                                                                                                                                                                                                            | `devtools/.vols/rabbitmq`                                                                                                                 |
+| Bootstrap user | `DEVTOOLS_PG_USER` / `DEVTOOLS_PG_PASSWORD`                                                                                                                                                                                                                                                          | `DEVTOOLS_RMQ_USER` / `DEVTOOLS_RMQ_PASSWORD` (sample: `admin` / `change-me`)                                                             |
+| Idle timeouts  | `idle_session_timeout` 10min / `idle_in_transaction_session_timeout` 5min (`DEVTOOLS_PG_IDLE_*`). Stops Navicat/JDBC leaks filling `max_connections` (100).                                                                                                                                          | n/a                                                                                                                                       |
 
 **k3d bridge (`devtools/k8s-bridge.yaml` + `devtools/apply-k8s-bridge.sh`):** both containers are plain Docker, not k8s workloads, so pods can't resolve them by container name across the node/pod network boundary. The bridge creates a `devtools` namespace with selector-less Services + manually-authored Endpoints at the static IPs:
 
@@ -565,19 +629,21 @@ Apply once, after both the devtools compose stack and the k3d cluster are up —
 
 **MySQL:** `devtools-mysql` at static IP `172.19.0.104`. Bootstrap root from `DEVTOOLS_MYSQL_ROOT_PASSWORD`; app users **`admin`** (ALL) and **`esa_dev`** (`esa_dev.*`) via `devtools/mysql-init/ensure-users.sh`. TCP `:23306`. In-cluster: `devtools-mysql.devtools.svc.cluster.local:3306`. See [14_shared_devtools_mysql.md](../03_devs/14_shared_devtools_mysql.md).
 
+**n8n:** prod-only service `devtools-n8n` at `https://${N8N_DOMAIN}` (`n8n.apps.<DOMAIN>`). It is not an Auto DevOps app. Source is GitLab `internal/n8n` (`deployable: false`); the image is `registry.../internal/n8n:latest-main`. Workflows live in database `n8n` on `devtools-postgres` (role `n8n`, created by `devtools/n8n/ensure-db.sh`). Editor login is a community OIDC hook against Keycloak client `n8n` in realm `devops` (`bootstrap/patch-keycloak-n8n.sh`). Traefik routes that exact host at priority 100 and does not ForwardAuth it, so `/webhook` and `/healthz` stay public. Static IP `172.19.0.105`. The assistant uses LM Studio at `https://lm.apps.yadatechnology.com/v1` through `N8N_INSTANCE_AI_MODEL_URL`, the internal sandbox service `devtools-n8n-sandbox-api` (`N8N_SANDBOX_SERVICE_URL`), and SearXNG `devtools-n8n-searxng`. None of those are published on the host.
+
 **MinIO:** `devtools-minio` at static IP `172.19.0.103`. Root user `admin`; service user `cfa` + buckets `cfa-dev`/`cfa-stg` via `devtools/minio-init/ensure-users.sh`. Console `https://${DEVTOOLS_MINIO_CONSOLE_DOMAIN}` (`oidc-auth-devtools`); S3 API `https://${DEVTOOLS_MINIO_API_DOMAIN}` (no SSO) and TCP `:29000`. In-cluster: `devtools-minio.devtools.svc.cluster.local:9000`. See [13_shared_devtools_minio.md](../03_devs/13_shared_devtools_minio.md).
 
 **Logging (Loki + Grafana + Alloy):** optional DevTools services. Loki stores logs; compose Alloy scrapes Docker; k3d Alloy DaemonSet scrapes all Auto DevOps pods (DSOaaS apps and CFA alike). Grafana UI: `https://${GRAFANA_DOMAIN}` behind **`oidc-auth-devtools`** (`admins` + `users`). See [12_shared_devtools_logging.md](../03_devs/12_shared_devtools_logging.md).
 
 **Developer/laptop access (local host):** Traefik TCP passthrough (`traefik/dynamic/tcp-passthrough.yml`) — Traefik sits on `devops-network` and reaches containers by name (no NodePort):
 
-| Tool | Host port | Entrypoint |
-|---|---|---|
-| Postgres | `25432` | `devtools-pg` |
-| RabbitMQ AMQP | `25672` | `devtools-amqp` |
-| RabbitMQ Management UI | `25682` | `devtools-amqp-mgmt` |
-| MinIO S3 API | `29000` | `devtools-minio-s3` |
-| MySQL | `23306` | `devtools-mysql` |
+| Tool                   | Host port | Entrypoint           |
+| ---------------------- | --------- | -------------------- |
+| Postgres               | `25432`   | `devtools-pg`        |
+| RabbitMQ AMQP          | `25672`   | `devtools-amqp`      |
+| RabbitMQ Management UI | `25682`   | `devtools-amqp-mgmt` |
+| MinIO S3 API           | `29000`   | `devtools-minio-s3`  |
+| MySQL                  | `23306`   | `devtools-mysql`     |
 
 **External (vpnedge) access:** the edge VM DNATs public TCP ports from `FORWARD_TCP` in `edge/vpn-edge/forward-ports.env` (Postgres **25432**, RabbitMQ AMQP **25672**, Management UI **25682**, MinIO S3 **29000**, MySQL **23306**). Traffic typically arrives via the passthrough NLB IP (see [GCP edge template](10_gcp_edge_template.md)). Developer guides: [Shared Postgres](../03_devs/10_shared_devtools_postgres.md), [Shared RabbitMQ](../03_devs/11_shared_devtools_rabbitmq.md), [Shared MySQL](../03_devs/14_shared_devtools_mysql.md).
 

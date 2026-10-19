@@ -112,9 +112,11 @@ services:
           - ${MINIO_CONSOLE_DOMAIN}
           - ${SONARQUBE_DOMAIN}
           - ${CONSOLE_DOMAIN}
+          - ${MCP_DOMAIN}
           - ${GRAFANA_DOMAIN}
           - ${DEVTOOLS_MINIO_API_DOMAIN}
           - ${DEVTOOLS_MINIO_CONSOLE_DOMAIN}
+          - ${N8N_DOMAIN}
 
   # ========================================================================
   # MONGODB — Platform Registry (v2)
@@ -234,7 +236,10 @@ services:
   # Default: start-dev (dev mode). For production, change command to "start"
   # and ensure KC_HOSTNAME is properly configured.
   keycloak:
-    image: quay.io/keycloak/keycloak:26.6
+    build:
+      context: ./keycloak
+      dockerfile: Dockerfile
+    image: dsoaas-keycloak:26.6
     container_name: keycloak
     # realm-export.json contains ${VAR} placeholders that Keycloak does not
     # natively resolve during import. We use sed to substitute them from the
@@ -260,6 +265,8 @@ services:
           -e "s|\$${KC_CLIENT_SECRET_VAULT}|$$KC_CLIENT_SECRET_VAULT|g" \
           -e "s|\$${KC_CLIENT_SECRET_OAUTH2_PROXY}|$$KC_CLIENT_SECRET_OAUTH2_PROXY|g" \
           -e "s|\$${KC_CLIENT_SECRET_OAUTH2_PROXY_APPS}|$$KC_CLIENT_SECRET_OAUTH2_PROXY_APPS|g" \
+          -e "s|\$${KC_CLIENT_SECRET_N8N}|$$KC_CLIENT_SECRET_N8N|g" \
+          -e "s|\$${N8N_DOMAIN}|$$N8N_DOMAIN|g" \
           -e "s|\$${SONARQUBE_DOMAIN}|$$SONARQUBE_DOMAIN|g" \
           -e "s|\$${KEYCLOAK_ADMIN_PASSWORD}|$$KEYCLOAK_ADMIN_PASSWORD|g" \
           -e "s|\$${KEYCLOAK_ADMIN_EMAIL}|$$KEYCLOAK_ADMIN_EMAIL|g" \
@@ -278,6 +285,7 @@ services:
       KC_HTTP_ENABLED: ${KC_HTTP_ENABLED}
       KC_HEALTH_ENABLED: "true"
       KC_PROXY_HEADERS: xforwarded
+      KC_SPI_THEME__WELCOME_THEME: platform
       SMTP_HOST: ${SMTP_HOST}
       SMTP_PORT: ${SMTP_PORT}
       SMTP_USER: ${SMTP_USER}
@@ -292,6 +300,8 @@ services:
       KC_CLIENT_SECRET_VAULT: ${KC_CLIENT_SECRET_VAULT}
       KC_CLIENT_SECRET_OAUTH2_PROXY: ${KC_CLIENT_SECRET_OAUTH2_PROXY}
       KC_CLIENT_SECRET_OAUTH2_PROXY_APPS: ${KC_CLIENT_SECRET_OAUTH2_PROXY_APPS}
+      KC_CLIENT_SECRET_N8N: ${KC_CLIENT_SECRET_N8N}
+      N8N_DOMAIN: ${N8N_DOMAIN}
       GITLAB_DOMAIN: ${GITLAB_DOMAIN}
       VAULT_DOMAIN: ${VAULT_DOMAIN}
       API_DOMAIN: ${API_DOMAIN}
@@ -452,7 +462,7 @@ services:
   # First boot takes 3-5 minutes (database migrations). shm_size: 256m
   # recommended by GitLab Docker docs to prevent shared memory issues.
   gitlab:
-    image: gitlab/gitlab-ce:19.2.0-ce.0
+    image: gitlab/gitlab-ce:19.5.0-ce.0
     container_name: gitlab
     hostname: gitlab
     restart: unless-stopped
@@ -632,8 +642,8 @@ services:
   # After setting the token in .env:
   #   docker compose up -d gitlab-runner
   gitlab-runner:
-    # Keep in sync with helper_image tag (x86_64-v19.2.0) in .vols/gitlab-runner/config/config.toml
-    image: gitlab/gitlab-runner:v19.2.0
+    # Keep in sync with helper_image tag (x86_64-v19.5.0) in .vols/gitlab-runner/config/config.toml
+    image: gitlab/gitlab-runner:v19.5.0
     container_name: gitlab-runner
     restart: unless-stopped
     entrypoint: [""]
@@ -653,7 +663,7 @@ services:
             --token "$$GITLAB_RUNNER_TOKEN" \
             --executor "docker" \
             --docker-image "docker:latest" \
-            --docker-helper-image "registry.gitlab.com/gitlab-org/gitlab-runner/gitlab-runner-helper:x86_64-v19.2.0" \
+            --docker-helper-image "registry.gitlab.com/gitlab-org/gitlab-runner/gitlab-runner-helper:x86_64-v19.5.0" \
             --docker-privileged \
             --docker-volumes "/cache" \
             --docker-volumes "/certs/client" \
@@ -669,7 +679,7 @@ services:
         else
           sed -i "/^\[\[runners\]\]/a\  request_concurrency = $$GITLAB_RUNNER_CONCURRENT" /etc/gitlab-runner/config.toml
         fi
-        HELPER_IMAGE="registry.gitlab.com/gitlab-org/gitlab-runner/gitlab-runner-helper:x86_64-v19.2.0"
+        HELPER_IMAGE="registry.gitlab.com/gitlab-org/gitlab-runner/gitlab-runner-helper:x86_64-v19.5.0"
         CFG=/etc/gitlab-runner/config.toml
         # Keys under [runners.docker] need 4 spaces (2 for [[runners]] + 2 for subsection).
         if grep -q '^[[:space:]]*helper_image = ' "$$CFG"; then
@@ -734,12 +744,16 @@ services:
     container_name: api
     restart: unless-stopped
     ports:
-      - "13000:3000"
+      - "127.0.0.1:13000:3000"
+      # MCP only. GraphQL stays on 127.0.0.1:13000. Set DSOAAS_MCP_PUBLISH=127.0.0.1 to keep it off the LAN.
+      - "${DSOAAS_MCP_PUBLISH:-0.0.0.0}:${DSOAAS_MCP_PORT:-13010}:13010"
     environment:
       NODE_ENV: ${NODE_ENV}
       API_PORT: ${API_PORT}
       API_HOST: ${API_HOST}
       API_KEY: ${API_KEY}
+      MCP_PORT: "13010"
+      MCP_HOST: "0.0.0.0"
       LOG_LEVEL: ${LOG_LEVEL}
       DOMAIN: ${DOMAIN}
       APPS_DOMAIN: ${APPS_DOMAIN}
@@ -795,6 +809,13 @@ services:
       traefik.http.routers.api.tls.certresolver: "letsencrypt"
       # API authenticates callers via OIDC JWT (Bearer tokens); no ForwardAuth here.
       traefik.http.services.api.loadbalancer.server.port: "3000"
+      # Public MCP host. Bearer dsoas_ keys only — no oauth2-proxy, or IDE clients cannot connect.
+      # Service port is the MCP listener, not GraphQL.
+      traefik.http.routers.dsoaas-mcp.rule: "Host(`${MCP_DOMAIN}`)"
+      traefik.http.routers.dsoaas-mcp.entrypoints: "websecure"
+      traefik.http.routers.dsoaas-mcp.tls.certresolver: "letsencrypt"
+      traefik.http.routers.dsoaas-mcp.service: "dsoaas-mcp"
+      traefik.http.services.dsoaas-mcp.loadbalancer.server.port: "13010"
     networks:
       - devops-network
 
@@ -817,6 +838,10 @@ services:
       HOSTNAME: ${CONSOLE_HOST:-0.0.0.0}
       MANAGEMENT_API_GRAPHQL_URL: http://api:3000/graphql
       API_KEY: ${API_KEY}
+      GITLAB_DOMAIN: ${GITLAB_DOMAIN}
+      VAULT_DOMAIN: ${VAULT_DOMAIN}
+      APPS_DOMAIN: ${APPS_DOMAIN}
+      DSOAAS_MCP_PUBLIC_URL: ${DSOAAS_MCP_PUBLIC_URL:-https://${MCP_DOMAIN}/mcp}
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3001/api/health || exit 1"]
       interval: 15s

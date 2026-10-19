@@ -60,9 +60,12 @@ dump_mongo() {
     return 0
   fi
   local out="${DST_DIR}/mongo-${stamp}.archive.gz"
-  log "Dumping MongoDB (admin mongodump) → ${out}"
+  # Full-instance dumps fail on Mongo 7: the admin user cannot listCollections on
+  # the internal `config` database. Application data lives in MONGO_DB_NAME.
+  local mongo_db="${MONGO_DB_NAME:-platform}"
+  log "Dumping MongoDB database ${mongo_db} → ${out}"
   docker exec mongo sh -c \
-    'mongodump -u "$MONGO_ADMIN_USER" -p "$MONGO_ADMIN_PASSWORD" --authenticationDatabase admin --archive --gzip' \
+    "mongodump -u \"\$MONGO_ADMIN_USER\" -p \"\$MONGO_ADMIN_PASSWORD\" --authenticationDatabase admin --db='${mongo_db}' --archive --gzip" \
     >"${out}"
 }
 

@@ -317,6 +317,15 @@ export class MigrateProjectToAutoDevopsInput {
   @Type(() => DeployBranchOptionsInput)
   @IsOptional()
   branchOptions?: DeployBranchOptionsInput;
+
+  @Field(() => Boolean, {
+    nullable: true,
+    description:
+      'When true, clears pinnedV1 and continues. Migration is refused while pinned unless this is set.',
+  })
+  @IsBoolean()
+  @IsOptional()
+  unpin?: boolean;
 }
 
 @InputType({ description: 'Per-app build/deploy definition within a deployment target.' })
@@ -627,6 +636,49 @@ export class UploadEnvProfileInput {
   buildDelivery?: EnvProfileBuildDelivery;
 
   @Field(() => String, { nullable: true, description: 'Optional hint for operators (not enforced).' })
+  @IsString()
+  @IsOptional()
+  contentType?: string;
+}
+
+@InputType({
+  description:
+    'Updates env profile metadata in place (same profileId). Does not replace the Vault secret body.',
+})
+export class UpdateEnvProfileMetadataInput {
+  @Field(() => String, { nullable: true })
+  @IsString()
+  @IsOptional()
+  label?: string;
+
+  @Field(() => [String], { nullable: true })
+  @IsArray()
+  @IsString({ each: true })
+  @IsOptional()
+  branches?: string[];
+
+  @Field(() => [String], { nullable: true })
+  @IsArray()
+  @IsString({ each: true })
+  @IsOptional()
+  deploymentTargetKeys?: string[];
+
+  @Field(() => String, { nullable: true })
+  @IsString()
+  @IsOptional()
+  jobSelector?: string;
+
+  @Field(() => String, { nullable: true })
+  @IsString()
+  @IsOptional()
+  workspacePath?: string;
+
+  @Field(() => String, { nullable: true })
+  @IsString()
+  @IsOptional()
+  filename?: string;
+
+  @Field(() => String, { nullable: true })
   @IsString()
   @IsOptional()
   contentType?: string;

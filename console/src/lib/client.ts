@@ -27,10 +27,22 @@ export async function graphqlRequest<T>(
 }
 
 /** Management API health via BFF. */
-export async function checkHealth(): Promise<{ status: string; mongo?: string; vault?: string }> {
+export async function checkHealth(): Promise<{
+  status: string;
+  mongo?: string;
+  vault?: string;
+  checks?: string;
+  notChecked?: string;
+}> {
   const res = await fetch('/api/health');
   if (!res.ok) {
     throw new Error(`Health check failed: HTTP ${res.status}`);
   }
-  return res.json() as Promise<{ status: string; mongo?: string; vault?: string }>;
+  return res.json() as Promise<{
+    status: string;
+    mongo?: string;
+    vault?: string;
+    checks?: string;
+    notChecked?: string;
+  }>;
 }

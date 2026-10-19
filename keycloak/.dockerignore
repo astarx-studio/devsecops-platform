@@ -1,0 +1,5 @@
+theme/node_modules
+theme/dist
+theme/dist_keycloak
+theme/storybook-static
+theme/yarn.lock

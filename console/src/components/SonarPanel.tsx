@@ -5,7 +5,11 @@ import {
   Box,
   Button,
   Chip,
+  FormControl,
   FormControlLabel,
+  InputLabel,
+  MenuItem,
+  Select,
   Link,
   Stack,
   Switch,
@@ -19,9 +23,10 @@ import {
 } from "@mui/material";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { graphqlRequest } from "@/lib/client";
 import { MUTATIONS, QUERIES } from "@/lib/graphql";
-import type { Project, SonarBranchProvision } from "@/lib/types";
+import type { Project, SonarBranchProvision, SonarGateMode } from "@/lib/types";
 
 interface Props {
   project: Project;
@@ -46,6 +51,13 @@ export function SonarPanel({ project, onUpdated }: Props) {
   const [addToAllowedBranches, setAddToAllowedBranches] = useState(true);
   const [allowedBranchesInput, setAllowedBranchesInput] = useState("");
   const [sonarToken, setSonarToken] = useState("");
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [gate, setGate] = useState({
+    dev: "optional" as SonarGateMode,
+    stg: "required" as SonarGateMode,
+    prod: "required" as SonarGateMode,
+    other: "optional" as SonarGateMode,
+  });
   const [provisionResults, setProvisionResults] = useState<
     SonarBranchProvision[] | null
   >(null);
@@ -65,7 +77,23 @@ export function SonarPanel({ project, onUpdated }: Props) {
 
   useEffect(() => {
     setAllowedBranchesInput((project.sonar?.allowedBranches ?? []).join(", "));
-  }, [project.sonar?.allowedBranches]);
+    const policy = project.sonar?.gatePolicy;
+    const mode = (
+      value: string | null | undefined,
+      fallback: SonarGateMode,
+    ): SonarGateMode =>
+      value?.toLowerCase() === "required"
+        ? "required"
+        : value?.toLowerCase() === "optional"
+          ? "optional"
+          : fallback;
+    setGate({
+      dev: mode(policy?.dev, "optional"),
+      stg: mode(policy?.stg, "required"),
+      prod: mode(policy?.prod, "required"),
+      other: mode(policy?.other, "optional"),
+    });
+  }, [project.sonar?.allowedBranches, project.sonar?.gatePolicy]);
 
   const runMutation = useCallback(
     async <T,>(fn: () => Promise<T>): Promise<T | undefined> => {
@@ -113,10 +141,21 @@ export function SonarPanel({ project, onUpdated }: Props) {
   const saveSonarConfig = useCallback(() => {
     const allowedBranches = parseBranches(allowedBranchesInput);
     void runMutation(async () => {
+      const wire = (mode: SonarGateMode) =>
+        mode === "required" ? "REQUIRED" : "OPTIONAL";
       const input: {
         allowedBranches: string[];
         sonarToken?: string;
-      } = { allowedBranches };
+        gatePolicy: { dev: string; stg: string; prod: string; other: string };
+      } = {
+        allowedBranches,
+        gatePolicy: {
+          dev: wire(gate.dev),
+          stg: wire(gate.stg),
+          prod: wire(gate.prod),
+          other: wire(gate.other),
+        },
+      };
       if (sonarToken.trim()) {
         input.sonarToken = sonarToken.trim();
       }
@@ -127,7 +166,14 @@ export function SonarPanel({ project, onUpdated }: Props) {
       setSonarToken("");
       onUpdated(data.updateProjectSonarConfig);
     });
-  }, [allowedBranchesInput, onUpdated, project.id, runMutation, sonarToken]);
+  }, [
+    allowedBranchesInput,
+    gate,
+    onUpdated,
+    project.id,
+    runMutation,
+    sonarToken,
+  ]);
 
   const deleteSonar = useCallback(() => {
     const branches = parseBranches(branchInput);
@@ -135,25 +181,17 @@ export function SonarPanel({ project, onUpdated }: Props) {
       setError("Enter branch names to delete from SonarQube.");
       return;
     }
-    if (
-      !window.confirm(
-        `Delete Sonar analysis project(s) for: ${branches.join(", ")}? This does not remove GitLab SONAR_TOKEN.`,
-      )
-    ) {
-      return;
-    }
-    void runMutation(async () => {
-      await graphqlRequest(MUTATIONS.deleteSonarProjects, {
-        id: project.id,
-        branches,
-      });
-      setProvisionResults(null);
-    });
-  }, [branchInput, project.id, runMutation]);
+    setDeleteOpen(true);
+  }, [branchInput]);
 
   return (
     <Box>
-      <Typography variant="subtitle1" fontWeight={600} gutterBottom>
+      <Typography
+        component="h3"
+        variant="subtitle1"
+        fontWeight={600}
+        gutterBottom
+      >
         SonarQube
       </Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
@@ -192,9 +230,11 @@ export function SonarPanel({ project, onUpdated }: Props) {
               href={project.sonar.dashboardUrl}
               target="_blank"
               rel="noopener noreferrer"
+              aria-label="Sonar dashboard (opens in a new tab)"
             >
               Sonar dashboard
               <OpenInNewIcon
+                aria-hidden
                 sx={{ fontSize: 14, ml: 0.5, verticalAlign: "middle" }}
               />
             </Link>
@@ -244,7 +284,7 @@ export function SonarPanel({ project, onUpdated }: Props) {
         </Stack>
 
         {provisionResults && provisionResults.length > 0 && (
-          <Table size="small">
+          <Table size="small" aria-label="SonarQube projects by branch">
             <TableHead>
               <TableRow>
                 <TableCell>Branch</TableCell>
@@ -268,6 +308,7 @@ export function SonarPanel({ project, onUpdated }: Props) {
                       href={row.dashboardUrl}
                       target="_blank"
                       rel="noopener noreferrer"
+                      aria-label={`Open ${row.branch} dashboard (opens in a new tab)`}
                     >
                       Open
                     </Link>
@@ -278,7 +319,7 @@ export function SonarPanel({ project, onUpdated }: Props) {
           </Table>
         )}
 
-        <Typography variant="subtitle2" sx={{ pt: 1 }}>
+        <Typography component="h4" variant="subtitle2" sx={{ pt: 1 }}>
           CI variables & token
         </Typography>
         <TextField
@@ -300,10 +341,63 @@ export function SonarPanel({ project, onUpdated }: Props) {
           helperText="Stored in Vault and mirrored to GitLab when provided. Leave empty to keep existing."
           disabled={busy}
         />
+        <Stack direction="row" spacing={1}>
+          {(["dev", "stg", "prod", "other"] as const).map((tier) => (
+            <FormControl key={tier} size="small" sx={{ minWidth: 120 }}>
+              <InputLabel id={`sonar-gate-${tier}-label`}>
+                {tier} gate
+              </InputLabel>
+              <Select
+                labelId={`sonar-gate-${tier}-label`}
+                id={`sonar-gate-${tier}`}
+                label={`${tier} gate`}
+                value={gate[tier]}
+                onChange={(e) =>
+                  setGate((prev) => ({
+                    ...prev,
+                    [tier]: e.target.value as SonarGateMode,
+                  }))
+                }
+                disabled={busy}
+              >
+                <MenuItem value="optional">optional</MenuItem>
+                <MenuItem value="required">required</MenuItem>
+              </Select>
+            </FormControl>
+          ))}
+        </Stack>
         <Button variant="outlined" onClick={saveSonarConfig} disabled={busy}>
           Sync Sonar CI config
         </Button>
       </Stack>
+      <ConfirmDialog
+        open={deleteOpen}
+        title="Delete Sonar projects"
+        message={`Delete Sonar analysis for ${parseBranches(branchInput).join(", ")} and remove those branches from the allowlist and GitLab CI. If the allowlist becomes empty, SONAR_TOKEN is removed from GitLab CI. The Vault copy of the token is kept.`}
+        confirmLabel="Delete"
+        typedMatch={project.effectiveSlug}
+        busy={busy}
+        onClose={() => setDeleteOpen(false)}
+        onConfirm={() => {
+          const branches = parseBranches(branchInput);
+          setDeleteOpen(false);
+          void runMutation(async () => {
+            await graphqlRequest(MUTATIONS.deleteSonarProjects, {
+              id: project.id,
+              branches,
+              pruneAllowlist: true,
+            });
+            const refreshed = await graphqlRequest<{ project: Project }>(
+              QUERIES.project,
+              {
+                id: project.id,
+              },
+            );
+            setProvisionResults(null);
+            onUpdated(refreshed.project);
+          });
+        }}
+      />
     </Box>
   );
 }

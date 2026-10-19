@@ -1,0 +1,54 @@
+@import "./tokens.css";
+
+:root {
+    --pf-v5-global--primary-color--100: var(--platform-brand);
+    --pf-v5-global--primary-color--200: var(--platform-brand-hover);
+    --pf-v5-global--link--Color: var(--platform-brand);
+    --pf-v5-global--link--Color--hover: var(--platform-brand-hover);
+    --pf-v5-global--FontFamily--sans-serif: var(--platform-font);
+    --pf-v5-global--BorderRadius--sm: var(--platform-radius);
+    --pf-v5-c-button--m-primary--BackgroundColor: var(--platform-brand);
+    --pf-v5-c-button--m-primary--hover--BackgroundColor: var(--platform-brand-hover);
+    --pf-v5-c-button--m-primary--Color: var(--platform-brand-contrast);
+    --pf-v5-c-button--m-secondary--BackgroundColor: var(--platform-secondary);
+    --pf-v5-c-button--m-secondary--Color: var(--platform-secondary-contrast);
+    --pf-v5-c-button--m-secondary--BorderColor: var(--platform-secondary);
+}
+
+body {
+    font-family: var(--platform-font);
+    color: var(--platform-text);
+    background: var(--platform-bg);
+    background-attachment: fixed;
+}
+
+.pf-v5-c-button.pf-m-primary,
+.pf-c-button.pf-m-primary {
+    background-color: var(--platform-brand);
+    border-color: var(--platform-brand);
+    color: var(--platform-brand-contrast);
+}
+
+.pf-v5-c-button.pf-m-primary:hover,
+.pf-c-button.pf-m-primary:hover {
+    background-color: var(--platform-brand-hover);
+    border-color: var(--platform-brand-hover);
+}
+
+.pf-v5-c-button.pf-m-secondary,
+.pf-c-button.pf-m-secondary {
+    background-color: var(--platform-secondary);
+    border-color: var(--platform-secondary);
+    color: var(--platform-secondary-contrast);
+}
+
+.pf-v5-c-button.pf-m-secondary:hover,
+.pf-c-button.pf-m-secondary:hover {
+    background-color: var(--platform-secondary-hover);
+    border-color: var(--platform-secondary-hover);
+}
+
+.pf-v5-c-masthead {
+    background: var(--platform-surface);
+    border-bottom: 1px solid var(--platform-line);
+}

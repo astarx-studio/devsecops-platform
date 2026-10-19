@@ -3,6 +3,8 @@
 ← [Back to Milestone designs](index.md)
 
 > **Status**: Shipped in-monorepo as [`console/`](../../console/) (Next.js BFF + oauth2-proxy). This milestone doc retains original design notes.
+>
+> **Shipped vs this sketch (2026-10-13):** Auth is oauth2-proxy + server-side `API_KEY`, not in-app OIDC bearer. The console uses labeled fields, named tab panels, a skip link, and a keyboard focus ring; small screens scroll the page instead of nesting two viewport-locked panes. The MCP tab issues `dsoas_` bearer keys (`read`, `read_secret`, `operate`, or `full`) for the API's dedicated MCP port. The platform Logs area, and the Audit and App logs tabs on a project page, list recent `auditLogs` and follow app container logs for a deployment target (actor `api-key` or `oidc:<user>`, including env-profile and MCP key events) and does not record secret values. Catalog templates are selectable on Create. `publishable` is create-time only. Hostname edits go through deployment-target apps (`apps[].host`); dedicated hostname mutations update that field too. Archived delete is **not** proof of teardown — retry runs platform cleanup unless `skipPlatformCleanup` is true. Platform control (`dsoctl`, Vault unseal, `.env` rotation) stays out of the console until that write set is explicitly unfrozen.
 > **Audience**: Product owners, platform maintainers
 > **Cross-references**: [Management API (maintainer)](../99_maintainers/03_management_api.md), [Deployments](../03_devs/05_deployments.md), [MIGRATION_PLAN_v2.md](../../MIGRATION_PLAN_v2.md) Phase 7 sketch
 

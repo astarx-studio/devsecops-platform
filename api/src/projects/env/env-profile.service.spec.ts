@@ -51,6 +51,7 @@ describe('EnvProfileService', () => {
       projectModel as never,
       vaultService as unknown as VaultService,
       projectsService as unknown as ProjectsService,
+      { create: jest.fn().mockResolvedValue(undefined) } as never,
     );
   });
 

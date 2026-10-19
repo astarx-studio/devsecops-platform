@@ -161,7 +161,7 @@ wsl --shutdown
 Optimize-VHD -Path "$env:LOCALAPPDATA\Docker\wsl\disk\docker_data.vhdx" -Mode Full
 ```
 
-If `Optimize-VHD` is unavailable, use Docker Desktop → **Settings → Resources → Resource Saver / Clean / Compact** (wording varies by version), or [Docker’s disk reclaim docs](https://docs.docker.com/desktop/settings-and-maintenance/reclaim-disk/).
+If `Optimize-VHD` is unavailable, use Docker Desktop → **Settings → Resources → Resource Saver / Clean / Compact** (wording varies by version), or [Docker’s disk reclaim docs](https://docs.docker.com/desktop/settings-and-maintenance/reclaim-disk/). On this host the Hyper-V PowerShell module is disabled, and enabling it pulls in the full Hyper-V role. The 13 October 2026 window trimmed the guest filesystem, shut WSL down, and compacted the offline VHDX with `diskpart` instead. Record, sizes, and the traffic-cut procedure: [Disk cleanup and VHDX compact — 13 October 2026](reports/2026-10-13-disk-cleanup-vhdx-compact.md).
 
 ### Disk watchdog (failsafe)
 
@@ -319,3 +319,12 @@ Flags (set as make variables): `SKIP_BACKUP=1`, `ASSUME_YES=1` (non-interactive;
 **GitLab upgrades require special care.** GitLab has a strict version upgrade path — you cannot skip from a very old version to a very new one without going through intermediate versions. Always check the [GitLab upgrade path tool](https://gitlab-com.gitlab.io/support/toolbox/upgrade-path/) before upgrading.
 
 For other services, minor version bumps are generally safe. Major version bumps may have breaking changes — check the service's release notes before upgrading.
+
+### Archived project is not teardown
+
+If the operator console (or `deleteProject`) archives a project, GitLab, Kubernetes, Vault, or Sonar may still exist. The archived row keeps `gitlabDeleteError` with what remained. That state means cleanup is **not done**.
+
+1. Open the archived project in the console and choose **Retry delete** with **Retry platform cleanup** checked.
+2. Use **Force delete on GitLab** only when the container registry or packages block GitLab deletion.
+3. If the row stays archived, the message lists leftovers. Finish those in GitLab, `kubectl`/`helm`, Vault, or Sonar — do not assume the first archive pass removed them.
+4. `skipPlatformCleanup: true` is a GitLab-only retry. It does not clear cluster or Vault leftovers.

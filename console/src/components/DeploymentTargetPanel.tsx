@@ -15,6 +15,7 @@ import {
 } from "@mui/material";
 import { useCallback, useState } from 'react';
 
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { DeploymentTargetDialog } from "@/components/DeploymentTargetDialog";
 import { graphqlRequest } from '@/lib/client';
 import {
@@ -40,6 +41,7 @@ export function DeploymentTargetPanel({ project, onUpdated }: Props) {
   const [ciWarning, setCiWarning] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [removeKey, setRemoveKey] = useState<string | null>(null);
   const [editingKey, setEditingKey] = useState<string | null>(null);
   const [form, setForm] = useState<TargetFormState>(() =>
     targetFormFromProject(project.effectiveSlug),
@@ -98,9 +100,6 @@ export function DeploymentTargetPanel({ project, onUpdated }: Props) {
   }, [runMutation, form, appsDomain, project.id]);
 
   const removeTarget = (targetKey: string) => {
-    if (!window.confirm(`Remove deployment target "${targetKey}" and tear down K8s?`)) {
-      return;
-    }
     void runMutation(async () => {
       const data = await graphqlRequest<{ removeDeploymentTarget: Project }>(
         MUTATIONS.removeDeploymentTarget,
@@ -124,7 +123,7 @@ export function DeploymentTargetPanel({ project, onUpdated }: Props) {
   return (
     <Stack spacing={2}>
       <Stack direction="row" justifyContent="space-between" alignItems="center">
-        <Typography variant="subtitle1" fontWeight={600}>
+        <Typography component="h3" variant="subtitle1" fontWeight={600}>
           Deployment targets
         </Typography>
         <Button
@@ -142,7 +141,7 @@ export function DeploymentTargetPanel({ project, onUpdated }: Props) {
           {ciWarning}
         </Alert>
       )}
-      <Table size="small">
+      <Table size="small" aria-label="Deployment targets">
         <TableHead>
           <TableRow>
             <TableCell>Key</TableCell>
@@ -189,6 +188,7 @@ export function DeploymentTargetPanel({ project, onUpdated }: Props) {
                   size="small"
                   onClick={() => openUpsert(t)}
                   disabled={busy}
+                  aria-label={`Edit ${t.key} target`}
                 >
                   Edit
                 </Button>
@@ -196,8 +196,9 @@ export function DeploymentTargetPanel({ project, onUpdated }: Props) {
                   size="small"
                   color="error"
                   startIcon={<DeleteIcon />}
-                  onClick={() => removeTarget(t.key)}
+                  onClick={() => setRemoveKey(t.key)}
                   disabled={busy}
+                  aria-label={`Remove ${t.key} target`}
                 >
                   Remove
                 </Button>
@@ -217,6 +218,25 @@ export function DeploymentTargetPanel({ project, onUpdated }: Props) {
         onClose={() => setDialogOpen(false)}
         onChange={setForm}
         onSave={submitUpsert}
+      />
+      <ConfirmDialog
+        open={removeKey !== null}
+        title="Remove deployment target"
+        message={
+          removeKey
+            ? `Remove deployment target "${removeKey}" and tear down its Kubernetes releases?`
+            : ""
+        }
+        confirmLabel="Remove"
+        typedMatch={removeKey ?? undefined}
+        busy={busy}
+        onClose={() => setRemoveKey(null)}
+        onConfirm={() => {
+          if (!removeKey) return;
+          const key = removeKey;
+          setRemoveKey(null);
+          removeTarget(key);
+        }}
       />
     </Stack>
   );

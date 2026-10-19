@@ -13,6 +13,7 @@ import { Model } from 'mongoose';
 
 import { VaultService } from '../../vault/vault.service';
 import { ProjectsService } from '../projects.service';
+import { AuditLog } from '../schemas/audit-log.schema';
 import { Project, type EnvProfile, type ProjectDocument } from '../schemas/project.schema';
 
 import type { CiEnvIndex } from './ci-index.types';
@@ -61,6 +62,8 @@ export class EnvProfileService {
     private readonly vaultService: VaultService,
     @Inject(forwardRef(() => ProjectsService))
     private readonly projectsService: ProjectsService,
+    @InjectModel(AuditLog.name)
+    private readonly auditLogModel: Model<AuditLog>,
   ) {}
 
   async listProfiles(projectId: string): Promise<EnvProfile[]> {
@@ -163,6 +166,17 @@ export class EnvProfileService {
       this.logger.debug(
         `getProfileContent: project=${projectId} profile=${profileId} mode=raw_file bytes=${Buffer.byteLength(rawContent, 'utf8')}`,
       );
+      await this.auditLogModel.create({
+        eventType: 'env.profile.revealed',
+        projectId,
+        gitlabPath: doc.gitlabPath,
+        effectiveSlug: doc.effectiveSlug,
+        metadata: {
+          profileId,
+          mode: 'raw_file',
+          bytes: Buffer.byteLength(rawContent, 'utf8'),
+        },
+      });
       return {
         profileId,
         mode: 'raw_file',
@@ -178,6 +192,14 @@ export class EnvProfileService {
     this.logger.debug(
       `getProfileContent: project=${projectId} profile=${profileId} mode=dotenv keys=${entries.length}`,
     );
+
+    await this.auditLogModel.create({
+      eventType: 'env.profile.revealed',
+      projectId,
+      gitlabPath: doc.gitlabPath,
+      effectiveSlug: doc.effectiveSlug,
+      metadata: { profileId, mode: 'dotenv', keyCount: entries.length },
+    });
 
     return { profileId, mode: 'dotenv', entries };
   }
@@ -254,6 +276,107 @@ export class EnvProfileService {
     this.logger.log(
       `updateProfileContent: project=${projectId} profile=${profileId} phase=${updated.injectionPhase} keys=${keyNames.length}`,
     );
+
+    await this.auditLogModel.create({
+      eventType: 'env.profile.content_updated',
+      projectId,
+      gitlabPath: doc.gitlabPath,
+      effectiveSlug: doc.effectiveSlug,
+      metadata: { profileId, keyCount: keyNames.length, injectionPhase: updated.injectionPhase },
+    });
+
+    return updated;
+  }
+
+  /**
+   * Updates profile metadata without allocating a new id or rewriting secrets,
+   * except RUNTIME target membership which re-merges existing keys onto the new targets.
+   */
+  async updateProfileMetadata(
+    projectId: string,
+    profileId: string,
+    input: {
+      label?: string;
+      branches?: string[];
+      deploymentTargetKeys?: string[];
+      jobSelector?: string;
+      workspacePath?: string;
+      filename?: string;
+      contentType?: string;
+    },
+  ): Promise<EnvProfile> {
+    const doc = await this.findProjectOrThrow(projectId);
+    const profiles = doc.envProfiles ?? [];
+    const index = profiles.findIndex((p) => p.id === profileId);
+    if (index < 0) {
+      throw new NotFoundException(`Env profile "${profileId}" not found`);
+    }
+
+    const current = profiles[index];
+    const nextBranches = input.branches ?? current.branches;
+    if (!nextBranches.length) {
+      throw new BadRequestException('At least one branch is required');
+    }
+
+    let workspacePath = current.workspacePath;
+    let filename = current.filename;
+    if (current.injectionPhase === 'build' && (input.workspacePath !== undefined || input.filename)) {
+      workspacePath = assertValidBuildPath(
+        input.workspacePath ?? current.workspacePath ?? '',
+        input.filename ?? current.filename ?? '',
+      );
+      filename = input.filename ?? current.filename;
+    }
+
+    const nextTargets = input.deploymentTargetKeys ?? current.deploymentTargetKeys ?? [];
+    const targetsChanged =
+      current.injectionPhase === 'runtime' &&
+      input.deploymentTargetKeys !== undefined &&
+      nextTargets.join(',') !== (current.deploymentTargetKeys ?? []).join(',');
+
+    if (targetsChanged) {
+      await this.removeRuntimeKeysFromTargets(doc, current);
+      const secrets = await this.vaultService.readSecrets(current.vaultPath);
+      for (const targetKey of nextTargets) {
+        const path = buildRuntimeTargetVaultPath(doc.vaultBasePath, targetKey);
+        const existing = await this.vaultService.readSecrets(path);
+        await this.vaultService.writeSecrets(path, { ...existing, ...secrets });
+      }
+    }
+
+    const updated: EnvProfile = {
+      ...current,
+      label: input.label?.trim() || current.label,
+      branches: nextBranches,
+      deploymentTargetKeys: current.injectionPhase === 'runtime' ? nextTargets : current.deploymentTargetKeys,
+      jobSelector: input.jobSelector !== undefined ? input.jobSelector : current.jobSelector,
+      workspacePath,
+      filename,
+      contentType: input.contentType !== undefined ? input.contentType : current.contentType,
+      updatedAt: new Date(),
+    };
+    profiles[index] = updated;
+    doc.envProfiles = profiles;
+    await doc.save();
+    await this.syncCiIndex(doc);
+    await this.projectsService.syncVaultAccessCiVariables(doc);
+    const branchesToRefresh = new Set([...(current.branches ?? []), ...updated.branches]);
+    for (const branch of branchesToRefresh) {
+      await this.projectsService.refreshChartValuesOnGitlab(doc, branch);
+    }
+
+    await this.auditLogModel.create({
+      eventType: 'env.profile.metadata_updated',
+      projectId,
+      gitlabPath: doc.gitlabPath,
+      effectiveSlug: doc.effectiveSlug,
+      metadata: {
+        profileId,
+        branches: updated.branches,
+        deploymentTargetKeys: updated.deploymentTargetKeys ?? [],
+        label: updated.label,
+      },
+    });
 
     return updated;
   }

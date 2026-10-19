@@ -31,6 +31,11 @@ interface EnvClients {
 export type DeploymentStatusMap = Partial<Record<DeployEnv, string>>;
 
 /** HTTP status from @kubernetes/client-node errors (`code` or `response.statusCode`). */
+function clampTailLines(value: number | undefined): number {
+  if (!Number.isFinite(value)) return 100;
+  return Math.min(500, Math.max(100, Math.trunc(value as number)));
+}
+
 function readK8sErrorStatus(error: unknown): number | undefined {
   if (!error || typeof error !== 'object') {
     return undefined;
@@ -368,6 +373,142 @@ export class K8sService implements OnModuleInit {
       }
     }
     return false;
+  }
+
+  /**
+   * Tails logs for pods of one Helm release. The release name is the label
+   * `app.kubernetes.io/instance` written by the platform chart.
+   */
+  async readReleaseContainerLogs(
+    clusterProfile: ClusterProfile,
+    namespace: string,
+    releaseName: string,
+    options?: { tailLines?: number; previous?: boolean; container?: string },
+  ): Promise<{
+    clusterProfile: ClusterProfile;
+    namespace: string;
+    releaseName: string;
+    tailLines: number;
+    previous: boolean;
+    message?: string;
+    chunks: Array<{
+      pod: string;
+      container: string;
+      phase?: string;
+      text: string;
+      truncated: boolean;
+      error?: string;
+    }>;
+  }> {
+    const tailLines = clampTailLines(options?.tailLines);
+    const previous = options?.previous === true;
+    const containerFilter = options?.container?.trim() || undefined;
+    const base = {
+      clusterProfile,
+      namespace,
+      releaseName,
+      tailLines,
+      previous,
+      chunks: [] as Array<{
+        pod: string;
+        container: string;
+        phase?: string;
+        text: string;
+        truncated: boolean;
+        error?: string;
+      }>,
+    };
+    const clients = this.clients.get(clusterProfile);
+    if (!clients) {
+      return { ...base, message: `No kubeconfig for cluster profile "${clusterProfile}".` };
+    }
+
+    let pods;
+    try {
+      const listed = await clients.core.listNamespacedPod({
+        namespace,
+        labelSelector: `app.kubernetes.io/instance=${releaseName}`,
+      });
+      pods = listed.items ?? [];
+    } catch (error: unknown) {
+      const status = readK8sErrorStatus(error);
+      return {
+        ...base,
+        message: `Could not list pods in ${namespace} (HTTP ${status ?? 'unknown'}).`,
+      };
+    }
+
+    if (pods.length === 0) {
+      return {
+        ...base,
+        message: `No pods for release "${releaseName}" in namespace "${namespace}".`,
+      };
+    }
+
+    const limited = pods.slice(0, 8);
+    for (const pod of limited) {
+      const podName = pod.metadata?.name;
+      if (!podName) continue;
+      const phase = pod.status?.phase;
+      const containers = (pod.spec?.containers ?? [])
+        .map((item) => item.name)
+        .filter((name): name is string => Boolean(name))
+        .filter((name) => !containerFilter || name === containerFilter);
+      if (containers.length === 0) {
+        base.chunks.push({
+          pod: podName,
+          container: containerFilter ?? '—',
+          phase,
+          text: '',
+          truncated: false,
+          error: containerFilter
+            ? `Container "${containerFilter}" is not on this pod.`
+            : 'Pod has no containers.',
+        });
+        continue;
+      }
+      for (const container of containers) {
+        try {
+          const text = await clients.core.readNamespacedPodLog({
+            name: podName,
+            namespace,
+            container,
+            tailLines,
+            limitBytes: 256 * 1024,
+            timestamps: true,
+            previous,
+          });
+          const body = typeof text === 'string' ? text : '';
+          base.chunks.push({
+            pod: podName,
+            container,
+            phase,
+            text: body,
+            truncated: Buffer.byteLength(body, 'utf8') >= 256 * 1024,
+          });
+        } catch (error: unknown) {
+          const status = readK8sErrorStatus(error);
+          base.chunks.push({
+            pod: podName,
+            container,
+            phase,
+            text: '',
+            truncated: false,
+            error:
+              status === 400 && previous
+                ? 'No previous container log.'
+                : `Log read failed (HTTP ${status ?? 'unknown'}).`,
+          });
+        }
+      }
+    }
+    if (pods.length > limited.length) {
+      return {
+        ...base,
+        message: `Showing ${limited.length} of ${pods.length} pods.`,
+      };
+    }
+    return base;
   }
 
   private async hasReleaseWorkload(

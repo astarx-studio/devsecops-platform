@@ -52,6 +52,7 @@ import {
   listAppEnvironmentScopes,
 } from './deploy/deployment-wiring';
 import {
+  APP_LABEL_PATTERN,
   appEnvironmentScope,
   normalizeTargetApps,
   resolveHelmReleaseName,
@@ -72,7 +73,7 @@ import {
   UpsertDeploymentTargetInput,
 } from './graphql/project.inputs';
 import { Provisioning } from './graphql/enums';
-import { AuditLog } from './schemas/audit-log.schema';
+import { AuditLog, type AuditLogDocument } from './schemas/audit-log.schema';
 import { Project, ProjectDocument } from './schemas/project.schema';
 import type {
   ClusterProfile,
@@ -82,7 +83,7 @@ import type {
 } from './schemas/project.schema';
 import { SonarQubeService } from '../sonarqube/sonarqube.service';
 import { SlugService } from './slug.service';
-import { buildSonarCiVariables } from './sonar/sonar-ci-sync';
+import { buildSonarCiVariables, SONAR_CI_KEYS } from './sonar/sonar-ci-sync';
 import { buildSonarProjectKey, buildSonarProjectName } from './sonar/sonar-project-key.util';
 import {
   isSonarEnabled,
@@ -731,17 +732,18 @@ externalSecret:
    *
    * @param id - MongoDB document ID
    * @param options.forceGitLabDelete - purge registry/packages before GitLab delete
-   * @param options.skipPlatformCleanup - skip K8s/Vault/Sonar (retry on archived project)
+   * @param options.skipPlatformCleanup - skip K8s/Vault/Sonar (GitLab-only retry). Archived rows re-run platform cleanup unless this is true.
    */
   async deleteProject(id: string, options?: DeleteProjectOptions): Promise<DeleteProjectResult> {
     const forceGitLabDelete = options?.forceGitLabDelete ?? false;
     const skipPlatformCleanup = options?.skipPlatformCleanup ?? false;
 
-    this.logger.log(
-      `deleteProject: id=${id} forceGitLab=${forceGitLabDelete} skipPlatform=${skipPlatformCleanup}`,
-    );
     const doc = await this.findProject({ id });
-    const skipPlatform = skipPlatformCleanup || doc.archived;
+    this.logger.log(
+      `deleteProject: id=${id} forceGitLab=${forceGitLabDelete} skipPlatform=${skipPlatformCleanup} archived=${doc.archived ?? false}`,
+    );
+    // Archived is not proof that teardown succeeded. Re-run cleanup unless the caller opts out.
+    const skipPlatform = skipPlatformCleanup;
     const targets = ensureDeploymentTargets(doc, this.appsDomain);
     const cleanupNotes: string[] = [];
 
@@ -771,13 +773,16 @@ externalSecret:
         this.logger.warn(`Vault cleanup failed (non-critical): ${note}`);
       }
 
-      if (isSonarEnabled(doc.sonar) && this.sonarQubeService.isConfigured()) {
-        try {
-          await this.deleteSonarProjects(id, doc.sonar!.allowedBranches);
-        } catch (err) {
-          const note = `Sonar cleanup: ${(err as Error).message}`;
-          cleanupNotes.push(note);
-          this.logger.warn(`Sonar cleanup failed (non-critical): ${note}`);
+      if (this.sonarQubeService.isConfigured()) {
+        const sonarBranches = this.sonarCandidateBranches(doc, targets);
+        if (sonarBranches.length > 0) {
+          try {
+            await this.deleteSonarProjects(id, sonarBranches, false);
+          } catch (err) {
+            const note = `Sonar cleanup: ${(err as Error).message}`;
+            cleanupNotes.push(note);
+            this.logger.warn(`Sonar cleanup failed (non-critical): ${note}`);
+          }
         }
       }
     }
@@ -858,7 +863,8 @@ externalSecret:
     const gitlab = await this.gitlabProjectRemains(doc.gitlabProjectId);
 
     let kubernetes = false;
-    if (doc.capabilities?.deployable) {
+    const shouldCheckK8s = Boolean(doc.capabilities?.deployable) || targets.some((t) => t.enabled);
+    if (shouldCheckK8s) {
       try {
         kubernetes = await this.k8sService.hasReleaseInTargets(doc.effectiveSlug, targets);
       } catch (err) {
@@ -879,7 +885,37 @@ externalSecret:
       vault = true;
     }
 
-    return { gitlab, kubernetes, vault };
+    let sonar = false;
+    if (this.sonarQubeService.isConfigured()) {
+      const branches = this.sonarCandidateBranches(doc, targets);
+      for (const branch of branches) {
+        try {
+          if (
+            await this.sonarQubeService.projectRemains(buildSonarProjectKey(doc.gitlabPath, branch))
+          ) {
+            sonar = true;
+            break;
+          }
+        } catch (err) {
+          this.logger.warn(
+            `Could not verify Sonar project for "${doc.gitlabPath}" branch ${branch}: ${(err as Error).message}`,
+          );
+          sonar = true;
+          break;
+        }
+      }
+    }
+
+    return { gitlab, kubernetes, vault, sonar };
+  }
+
+  /** Branches that may still have Sonar projects (allowlist and deploy refs). */
+  private sonarCandidateBranches(doc: ProjectDocument, targets: DeploymentTarget[]): string[] {
+    const fromAllowlist = doc.sonar?.allowedBranches ?? [];
+    const fromTargets = targets
+      .map((t) => t.deployRef)
+      .filter((ref) => Boolean(ref) && ref !== 'none' && ref !== DEPLOY_REF_DISABLED);
+    return [...new Set([...fromAllowlist, ...fromTargets])];
   }
 
   private async gitlabProjectRemains(projectId: number): Promise<boolean> {
@@ -928,9 +964,16 @@ externalSecret:
   async migrateProjectToAutoDevops(
     id: string,
     branchOptions?: DeployBranchOptionsInput,
+    unpin = false,
   ): Promise<ProjectDocument> {
     this.logger.log(`migrateProjectToAutoDevops: id=${id}`);
     const doc = await this.findProject({ id });
+
+    if (doc.pinnedV1 && !unpin) {
+      throw new BadRequestException(
+        'Project is pinned to v1. Unpin it first, or pass unpin: true to migrate and clear the pin.',
+      );
+    }
 
     if (!doc.legacyV1) {
       this.logger.warn(`Project "${doc.gitlabPath}" is not a legacy v1 project — skipping`);
@@ -1001,6 +1044,9 @@ externalSecret:
 
     // Step 4: Update MongoDB
     doc.legacyV1 = false;
+    if (unpin) {
+      doc.pinnedV1 = false;
+    }
     await doc.save();
 
     await this.auditLogModel.create({
@@ -1039,7 +1085,12 @@ externalSecret:
       throw new NotFoundException(`Deployment target "${targetKey}" not found`);
     }
 
-    targets[idx] = { ...targets[idx], appHost: hostname };
+    const existingApps = targets[idx].apps ?? [];
+    const apps =
+      existingApps.length > 0
+        ? existingApps.map((app, appIndex) => (appIndex === 0 ? { ...app, host: hostname } : app))
+        : existingApps;
+    targets[idx] = { ...targets[idx], appHost: hostname, apps };
     doc.deploymentTargets = targets;
 
     if (targetKey === 'dev' || targetKey === 'stg' || targetKey === 'prod') {
@@ -1048,15 +1099,21 @@ externalSecret:
     this.syncAppHostsFromTargets(doc);
     await doc.save();
 
-    const scope = targets[idx].gitlabEnvironment ?? targetKey;
+    const scopes = new Set<string>([targets[idx].gitlabEnvironment ?? targetKey]);
+    const primaryApp = apps[0];
+    if (primaryApp) {
+      scopes.add(appEnvironmentScope(targetKey, primaryApp.name));
+    }
     try {
-      await this.gitlabService.setProjectCiVariable(
-        doc.gitlabProjectId,
-        'APP_HOST',
-        hostname,
-        scope,
-        false,
-      );
+      for (const scope of scopes) {
+        await this.gitlabService.setProjectCiVariable(
+          doc.gitlabProjectId,
+          'APP_HOST',
+          hostname,
+          scope,
+          false,
+        );
+      }
     } catch (err) {
       this.logger.warn(
         `Failed to update APP_HOST CI var (non-critical): ${(err as Error).message}`,
@@ -1211,6 +1268,13 @@ externalSecret:
       token,
     });
     await this.gitlabService.setProjectCiVariables(doc.gitlabProjectId, ciVars);
+    if (!isSonarEnabled(sonarConfig)) {
+      await this.gitlabService.deleteProjectCiVariable(
+        doc.gitlabProjectId,
+        SONAR_CI_KEYS.TOKEN,
+        '*',
+      );
+    }
   }
 
   /**
@@ -1296,8 +1360,9 @@ externalSecret:
    *
    * @param id - MongoDB project ID
    * @param branches - Git branch names whose Sonar keys should be removed
+   * @param pruneAllowlist - When true (operator delete), drop those branches from Mongo/CI. Project teardown passes false.
    */
-  async deleteSonarProjects(id: string, branches: string[]): Promise<void> {
+  async deleteSonarProjects(id: string, branches: string[], pruneAllowlist = true): Promise<void> {
     const doc = await this.findProject({ id });
     for (const branch of branches) {
       const projectKey = buildSonarProjectKey(doc.gitlabPath, branch);
@@ -1310,12 +1375,23 @@ externalSecret:
       }
     }
 
+    if (pruneAllowlist) {
+      const remove = new Set(branches);
+      const remaining = (doc.sonar?.allowedBranches ?? []).filter((b) => !remove.has(b));
+      const gatePolicy = resolveSonarGatePolicy(doc.sonar?.gatePolicy);
+      const sonarConfig: ProjectSonarConfig | undefined =
+        remaining.length > 0 ? { allowedBranches: remaining, gatePolicy } : undefined;
+      doc.sonar = sonarConfig;
+      await doc.save();
+      await this.syncSonarCiToGitLab(doc, sonarConfig);
+    }
+
     await this.auditLogModel.create({
       eventType: 'project.sonar_deleted',
       projectId: id,
       gitlabPath: doc.gitlabPath,
       effectiveSlug: doc.effectiveSlug,
-      metadata: { branches },
+      metadata: { branches, pruneAllowlist },
     });
   }
 
@@ -1346,6 +1422,84 @@ externalSecret:
     });
 
     return doc;
+  }
+
+  /**
+   * Recent audit events, newest first. Capped collection; no secret values are stored.
+   */
+  async listAuditLogs(projectId?: string, limit = 50): Promise<AuditLogDocument[]> {
+    const capped = Math.min(Math.max(limit, 1), 100);
+    const filter = projectId ? { projectId } : {};
+    return this.auditLogModel.find(filter).sort({ createdAt: -1 }).limit(capped).exec();
+  }
+
+  /**
+   * Tails container logs for one app on a deployment target.
+   * Namespace and cluster come from the stored target, not the caller.
+   */
+  async readAppContainerLogs(
+    id: string,
+    targetKey: string,
+    appName?: string,
+    tailLines?: number,
+    previous = false,
+    container?: string,
+    follow = false,
+  ) {
+    assertValidTargetKey(targetKey);
+    if (appName && !APP_LABEL_PATTERN.test(appName)) {
+      throw new BadRequestException(`app name "${appName}" is not a valid label`);
+    }
+    if (container && !/^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/.test(container)) {
+      throw new BadRequestException(`container "${container}" is not a valid name`);
+    }
+
+    const doc = await this.findProject({ id });
+    const target = (doc.deploymentTargets ?? []).find((item) => item.key === targetKey);
+    if (!target) {
+      throw new NotFoundException(`Deployment target "${targetKey}" not found`);
+    }
+
+    const apps: Array<{ name: string; image: string }> =
+      target.apps && target.apps.length > 0
+        ? target.apps
+        : [{ name: doc.effectiveSlug, image: doc.effectiveSlug }];
+    const app = appName
+      ? apps.find((item) => item.name === appName)
+      : apps.length === 1
+        ? apps[0]
+        : undefined;
+    if (!app) {
+      throw new BadRequestException(`Choose an app: ${apps.map((item) => item.name).join(', ')}`);
+    }
+
+    const releaseName = resolveHelmReleaseName(doc.effectiveSlug, app.image);
+    const result = await this.k8sService.readReleaseContainerLogs(
+      target.clusterProfile,
+      target.kubeNamespace,
+      releaseName,
+      { tailLines, previous, container },
+    );
+
+    if (!follow) {
+      await this.auditLogModel.create({
+        eventType: 'app.logs.read',
+        projectId: id,
+        gitlabPath: doc.gitlabPath,
+        effectiveSlug: doc.effectiveSlug,
+        metadata: {
+          targetKey,
+          appName: app.name,
+          releaseName,
+          namespace: target.kubeNamespace,
+          tailLines: result.tailLines,
+          previous,
+          container: container ?? null,
+        },
+      });
+    }
+
+    return result;
   }
 
   // ---------------------------------------------------------------------------

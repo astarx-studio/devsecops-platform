@@ -39,6 +39,8 @@ The remaining `*_DOMAIN` variables (`TRAEFIK_DOMAIN`, `KEYCLOAK_DOMAIN`, `CONSOL
 
 `CONSOLE_DOMAIN` — Operator console (Next.js at `console.devops.<DOMAIN>`). Protected by oauth2-proxy (`admins` group by default). Compose maps host port **13001** to container port **3001** (`CONSOLE_PORT`).
 
+`MCP_DOMAIN` — Public MCP endpoint `https://mcp.devops.<DOMAIN>/mcp`. Traefik terminates TLS and forwards only to the API container's MCP port. Callers send `Authorization: Bearer dsoas_…` issued from the console. There is no oauth2-proxy on this host.
+
 ---
 
 ## Traefik (the HTTPS gateway)

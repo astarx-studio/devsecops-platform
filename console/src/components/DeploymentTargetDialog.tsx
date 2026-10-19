@@ -189,8 +189,10 @@ export function DeploymentTargetDialog({
               fullWidth
             />
             <FormControl fullWidth>
-              <InputLabel>Cluster profile</InputLabel>
+              <InputLabel id="target-cluster-label">Cluster profile</InputLabel>
               <Select
+                labelId="target-cluster-label"
+                id="target-cluster"
                 label="Cluster profile"
                 value={form.clusterProfile}
                 onChange={(e: SelectChangeEvent) =>

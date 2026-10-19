@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { APP_INTERCEPTOR } from '@nestjs/core';
 import { HttpModule } from '@nestjs/axios';
 import { PassportModule } from '@nestjs/passport';
 import { ApolloDriver } from '@nestjs/apollo';
@@ -9,11 +10,13 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import type { ApolloDriverConfig } from '@nestjs/apollo';
 
 import { AppController } from './app.controller';
+import { AuditActorInterceptor } from './common/audit/audit-actor.interceptor';
 import { OidcJwtStrategy } from './common/guards';
 import { AppConfigModule, AppConfiguration } from './config';
 import { ConfigsModule } from './configs/configs.module';
 import { GitLabModule } from './gitlab/gitlab.module';
 import { K8sModule } from './k8s/k8s.module';
+import { McpModule } from './mcp/mcp.module';
 import { ProjectsModule } from './projects/projects.module';
 import { TemplatesModule } from './templates/templates.module';
 import { VaultModule } from './vault/vault.module';
@@ -61,8 +64,9 @@ import { VaultModule } from './vault/vault.module';
     ConfigsModule,
     TemplatesModule,
     ProjectsModule,
+    McpModule,
   ],
   controllers: [AppController],
-  providers: [OidcJwtStrategy],
+  providers: [OidcJwtStrategy, { provide: APP_INTERCEPTOR, useClass: AuditActorInterceptor }],
 })
 export class AppModule {}

@@ -140,6 +140,8 @@ describe('ProjectsService', () => {
       tryDeleteProject: tryDeleteProjectFn,
       getProject: getProjectFn,
       setProjectCiVariables: setProjectCiVariablesFn,
+      setProjectCiVariable: jest.fn().mockResolvedValue(undefined),
+      deleteProjectCiVariable: jest.fn().mockResolvedValue(undefined),
       templateGroup: 10,
       configGroup: 20,
     } as unknown as jest.Mocked<GitLabService>;
@@ -171,6 +173,7 @@ describe('ProjectsService', () => {
     sonarQubeService = {
       ensureProject: ensureSonarProjectFn,
       deleteProject: jest.fn().mockResolvedValue(undefined),
+      projectRemains: jest.fn().mockResolvedValue(false),
       generateGlobalAnalysisToken: generateGlobalAnalysisTokenFn,
       isConfigured: jest.fn().mockReturnValue(true),
     } as unknown as jest.Mocked<SonarQubeService>;
@@ -418,7 +421,16 @@ describe('ProjectsService', () => {
 
       await service.createProject(input);
 
-      expect(setProjectCiVariablesFn).not.toHaveBeenCalled();
+      const vars = setProjectCiVariablesFn.mock.calls[0]?.[1] as Array<{
+        key: string;
+        value: string;
+      }>;
+      expect(vars.map((v) => v.key).sort()).toEqual([
+        'DEPLOY_DEV_REF',
+        'DEPLOY_PROD_REF',
+        'DEPLOY_STG_REF',
+      ]);
+      expect(vars.every((v) => v.value === 'none')).toBe(true);
     });
 
     it('should write audit log entry on success', async () => {
@@ -557,8 +569,29 @@ describe('ProjectsService', () => {
       const result = await service.deleteProject('abc', { forceGitLabDelete: true });
 
       expect(tryDeleteProjectFn).toHaveBeenCalledWith(42, { force: true });
-      expect(teardownProjectTargetsFn).not.toHaveBeenCalled();
+      expect(teardownProjectTargetsFn).toHaveBeenCalled();
       expect(result.outcome).toBe('deleted');
+    });
+
+    it('should skip platform cleanup only when explicitly requested', async () => {
+      const mockDoc = {
+        _id: 'abc',
+        gitlabProjectId: 42,
+        gitlabPath: 'groupa/repoa',
+        effectiveSlug: 'repoa',
+        helmReleaseName: 'repoa',
+        vaultBasePath: 'projects/groupa/repoa',
+        capabilities: { deployable: false, publishable: false },
+        archived: true,
+        save: jest.fn(),
+        deleteOne: jest.fn().mockResolvedValue(undefined),
+      };
+      projectModel.findById.mockReturnValue({ exec: jest.fn().mockResolvedValue(mockDoc) });
+
+      await service.deleteProject('abc', { skipPlatformCleanup: true });
+
+      expect(teardownProjectTargetsFn).not.toHaveBeenCalled();
+      expect(deleteSecretsTreeFn).not.toHaveBeenCalled();
     });
 
     it('should continue when Vault deletion fails (non-critical)', async () => {

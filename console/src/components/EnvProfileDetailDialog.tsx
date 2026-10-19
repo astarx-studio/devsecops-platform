@@ -64,6 +64,9 @@ export function EnvProfileDetailDialog({
   const [rows, setRows] = useState<EnvKeyValueRow[]>(emptyEnvRows());
   const [rawContent, setRawContent] = useState("");
   const [rawRevealed, setRawRevealed] = useState(false);
+  const [labelInput, setLabelInput] = useState("");
+  const [branchesInput, setBranchesInput] = useState("");
+  const [targetsInput, setTargetsInput] = useState("");
 
   const load = useCallback(async () => {
     if (!profile) {
@@ -97,16 +100,56 @@ export function EnvProfileDetailDialog({
 
   useEffect(() => {
     if (open && profile) {
+      setLabelInput(profile.label);
+      setBranchesInput(profile.branches.join(", "));
+      setTargetsInput((profile.deploymentTargetKeys ?? []).join(", "));
       void load();
     }
   }, [open, profile, load]);
+
+  const saveMetadata = useCallback(async () => {
+    if (!profile) return;
+    const branches = branchesInput
+      .split(/[\s,]+/)
+      .map((b) => b.trim())
+      .filter(Boolean);
+    const deploymentTargetKeys = targetsInput
+      .split(/[\s,]+/)
+      .map((b) => b.trim())
+      .filter(Boolean);
+    setSaving(true);
+    setError(null);
+    try {
+      await graphqlRequest(MUTATIONS.updateEnvProfileMetadata, {
+        projectId,
+        profileId: profile.id,
+        input: {
+          label: labelInput.trim(),
+          branches,
+          ...(profile.injectionPhase === "RUNTIME"
+            ? { deploymentTargetKeys }
+            : {}),
+        },
+      });
+      const refreshed = await graphqlRequest<{ project: Project }>(
+        QUERIES.project,
+        {
+          id: projectId,
+        },
+      );
+      onSaved(refreshed.project);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  }, [branchesInput, labelInput, onSaved, profile, projectId, targetsInput]);
 
   const handleSave = useCallback(async () => {
     if (!profile) {
       return;
     }
-    const content =
-      mode === "RAW_FILE" ? rawContent : serializeEnvRows(rows);
+    const content = mode === "RAW_FILE" ? rawContent : serializeEnvRows(rows);
     if (!content.trim()) {
       setError(
         mode === "RAW_FILE"
@@ -140,7 +183,12 @@ export function EnvProfileDetailDialog({
   const disabled = busy || loading || saving;
 
   return (
-    <Dialog open={open} onClose={disabled ? undefined : onClose} fullWidth maxWidth="md">
+    <Dialog
+      open={open}
+      onClose={disabled ? undefined : onClose}
+      fullWidth
+      maxWidth="md"
+    >
       <DialogTitle>
         {profile ? `Env profile: ${profile.label}` : "Env profile"}
       </DialogTitle>
@@ -177,6 +225,42 @@ export function EnvProfileDetailDialog({
             </Stack>
           )}
 
+          {profile && (
+            <Stack spacing={1}>
+              <TextField
+                size="small"
+                label="Label"
+                value={labelInput}
+                onChange={(e) => setLabelInput(e.target.value)}
+                disabled={disabled}
+              />
+              <TextField
+                size="small"
+                label="Branches"
+                value={branchesInput}
+                onChange={(e) => setBranchesInput(e.target.value)}
+                disabled={disabled}
+                helperText="Comma-separated. Saved without creating a new profile id."
+              />
+              {profile.injectionPhase === "RUNTIME" && (
+                <TextField
+                  size="small"
+                  label="Deployment targets"
+                  value={targetsInput}
+                  onChange={(e) => setTargetsInput(e.target.value)}
+                  disabled={disabled}
+                />
+              )}
+              <Button
+                variant="outlined"
+                disabled={disabled}
+                onClick={() => void saveMetadata()}
+              >
+                Save metadata
+              </Button>
+            </Stack>
+          )}
+
           <Typography variant="body2" color="text.secondary">
             Values are loaded from Vault for operators. Masked by default — use
             Reveal to show plaintext. Saving replaces this profile&apos;s
@@ -193,7 +277,9 @@ export function EnvProfileDetailDialog({
           {!loading && mode === "RAW_FILE" && (
             <Stack spacing={1}>
               <Stack direction="row" justifyContent="flex-end">
-                <Tooltip title={rawRevealed ? "Hide content" : "Reveal content"}>
+                <Tooltip
+                  title={rawRevealed ? "Hide content" : "Reveal content"}
+                >
                   <IconButton
                     size="small"
                     disabled={disabled}

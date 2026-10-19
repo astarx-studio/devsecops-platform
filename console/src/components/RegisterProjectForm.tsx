@@ -65,7 +65,12 @@ export function RegisterProjectForm({ onRegistered }: Props) {
 
   return (
     <Paper sx={{ p: 2 }}>
-      <Typography variant="subtitle1" fontWeight={600} gutterBottom>
+      <Typography
+        component="h2"
+        variant="subtitle1"
+        fontWeight={600}
+        gutterBottom
+      >
         Register existing GitLab project
       </Typography>
       <Stack spacing={2}>
@@ -78,7 +83,12 @@ export function RegisterProjectForm({ onRegistered }: Props) {
           fullWidth
         />
         <FormControlLabel
-          control={<Switch checked={deployable} onChange={(e) => setDeployable(e.target.checked)} />}
+          control={
+            <Switch
+              checked={deployable}
+              onChange={(e) => setDeployable(e.target.checked)}
+            />
+          }
           label="Wire deploy (Vault, CI, targets)"
         />
         {deployable && (

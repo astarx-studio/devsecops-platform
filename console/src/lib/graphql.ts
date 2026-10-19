@@ -94,6 +94,62 @@ export const QUERIES = {
       templates { id slug description gitlabUrl defaultBranch }
     }
   `,
+  mcpAccessKeys: `
+    query McpAccessKeys($includeRevoked: Boolean) {
+      mcpAccessKeys(includeRevoked: $includeRevoked) {
+        id
+        name
+        tokenPrefix
+        scope
+        createdAt
+        lastUsedAt
+        revokedAt
+      }
+    }
+  `,
+  appContainerLogs: `
+    query AppContainerLogs(
+      $id: ID!
+      $targetKey: String!
+      $appName: String
+      $tailLines: Int
+      $previous: Boolean
+      $container: String
+      $follow: Boolean
+    ) {
+      appContainerLogs(
+        id: $id
+        targetKey: $targetKey
+        appName: $appName
+        tailLines: $tailLines
+        previous: $previous
+        container: $container
+        follow: $follow
+      ) {
+        clusterProfile
+        namespace
+        releaseName
+        tailLines
+        previous
+        message
+        chunks { pod container phase text truncated error }
+      }
+    }
+  `,
+  auditLogs: `
+    query AuditLogs($projectId: ID, $limit: Int) {
+      auditLogs(projectId: $projectId, limit: $limit) {
+        id
+        eventType
+        actor
+        projectId
+        gitlabPath
+        effectiveSlug
+        createdAt
+        metadata
+      }
+    }
+  `,
   envProfileContent: `
     query EnvProfileContent($projectId: ID!, $profileId: String!) {
       envProfileContent(projectId: $projectId, profileId: $profileId) {
@@ -142,16 +198,13 @@ export const MUTATIONS = {
       }
     }
   `,
-  setDeploymentTargetHostname: `
-    mutation SetDeploymentTargetHostname($id: ID!, $targetKey: String!, $hostname: String!) {
-      setDeploymentTargetHostname(id: $id, targetKey: $targetKey, hostname: $hostname) {
-        ${PROJECT_FIELDS}
-      }
-    }
-  `,
   deleteProject: `
-    mutation DeleteProject($id: ID!, $forceGitLabDelete: Boolean) {
-      deleteProject(id: $id, forceGitLabDelete: $forceGitLabDelete) {
+    mutation DeleteProject($id: ID!, $forceGitLabDelete: Boolean, $skipPlatformCleanup: Boolean) {
+      deleteProject(
+        id: $id
+        forceGitLabDelete: $forceGitLabDelete
+        skipPlatformCleanup: $skipPlatformCleanup
+      ) {
         outcome
         message
         project { ${PROJECT_FIELDS} }
@@ -189,8 +242,8 @@ export const MUTATIONS = {
     }
   `,
   deleteSonarProjects: `
-    mutation DeleteSonarProjects($id: ID!, $branches: [String!]!) {
-      deleteSonarProjects(id: $id, branches: $branches)
+    mutation DeleteSonarProjects($id: ID!, $branches: [String!]!, $pruneAllowlist: Boolean) {
+      deleteSonarProjects(id: $id, branches: $branches, pruneAllowlist: $pruneAllowlist)
     }
   `,
   uploadEnvProfile: `
@@ -237,6 +290,41 @@ export const MUTATIONS = {
         contentType
         keyNames
         updatedAt
+      }
+    }
+  `,
+  createMcpAccessKey: `
+    mutation CreateMcpAccessKey($name: String!, $scope: String) {
+      createMcpAccessKey(name: $name, scope: $scope) {
+        id
+        name
+        tokenPrefix
+        scope
+        token
+        createdAt
+      }
+    }
+  `,
+  revokeMcpAccessKey: `
+    mutation RevokeMcpAccessKey($id: ID!) {
+      revokeMcpAccessKey(id: $id)
+    }
+  `,
+  updateEnvProfileMetadata: `
+    mutation UpdateEnvProfileMetadata(
+      $projectId: ID!
+      $profileId: String!
+      $input: UpdateEnvProfileMetadataInput!
+    ) {
+      updateEnvProfileMetadata(projectId: $projectId, profileId: $profileId, input: $input) {
+        id
+        label
+        branches
+        deploymentTargetKeys
+        jobSelector
+        workspacePath
+        filename
+        contentType
       }
     }
   `,

@@ -4,7 +4,9 @@ import RefreshIcon from '@mui/icons-material/Refresh';
 import {
   Alert,
   Chip,
+  CircularProgress,
   IconButton,
+  TextField,
   List,
   ListItemButton,
   ListItemText,
@@ -14,7 +16,7 @@ import {
   Tabs,
   Tooltip,
   Typography,
-} from '@mui/material';
+} from "@mui/material";
 import { useCallback, useEffect, useState } from 'react';
 
 import { graphqlRequest } from '@/lib/client';
@@ -30,6 +32,8 @@ interface Props {
   category: ListCategory;
   onCategoryChange: (category: ListCategory) => void;
   onDetected?: () => void;
+  preferredId?: string | null;
+  preferredSlug?: string | null;
 }
 
 export function ProjectList({
@@ -39,12 +43,18 @@ export function ProjectList({
   category,
   onCategoryChange,
   onDetected,
+  preferredId,
+  preferredSlug,
 }: Props) {
   const [projects, setProjects] = useState<Project[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [detectMessage, setDetectMessage] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [detecting, setDetecting] = useState(false);
+  const [search, setSearch] = useState("");
+  const [groupPrefix, setGroupPrefix] = useState("");
+  const [legacyOnly, setLegacyOnly] = useState(false);
+  const [pinnedOnly, setPinnedOnly] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -55,7 +65,14 @@ export function ProjectList({
         {
           page: 0,
           perPage: 100,
-          filter: { archived: category === 'archived' },
+          filter: {
+            archived: category === "archived",
+            ...(groupPrefix.trim()
+              ? { groupPathPrefix: groupPrefix.trim() }
+              : {}),
+            ...(legacyOnly ? { legacyV1: true } : {}),
+            ...(pinnedOnly ? { pinnedV1: true } : {}),
+          },
         },
       );
       setProjects(data.projects);
@@ -64,7 +81,7 @@ export function ProjectList({
     } finally {
       setLoading(false);
     }
-  }, [category]);
+  }, [category, groupPrefix, legacyOnly, pinnedOnly]);
 
   const detectFromGitLab = useCallback(async () => {
     setDetecting(true);
@@ -93,11 +110,33 @@ export function ProjectList({
     void load();
   }, [load, refreshToken]);
 
+  useEffect(() => {
+    if (selectedId || (!preferredId && !preferredSlug)) return;
+    const match = projects.find(
+      (p) => p.id === preferredId || p.effectiveSlug === preferredSlug,
+    );
+    if (match) onSelect(match);
+  }, [projects, preferredId, preferredSlug, selectedId, onSelect]);
+
+  const visible = projects.filter((p) => {
+    const q = search.trim().toLowerCase();
+    if (!q) return true;
+    return (
+      p.gitlabPath.toLowerCase().includes(q) ||
+      p.effectiveSlug.toLowerCase().includes(q) ||
+      (p.displayName ?? "").toLowerCase().includes(q)
+    );
+  });
+
   return (
-    <Paper sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+    <Paper sx={{ height: "100%", display: "flex", flexDirection: "column" }}>
       <Stack sx={{ px: 1.5, pt: 1 }}>
-        <Stack direction="row" alignItems="center" justifyContent="space-between">
-          <Typography variant="subtitle1" fontWeight={600}>
+        <Stack
+          direction="row"
+          alignItems="center"
+          justifyContent="space-between"
+        >
+          <Typography component="h2" variant="subtitle1" fontWeight={600}>
             Projects
           </Typography>
           <Stack direction="row" spacing={0.25}>
@@ -123,62 +162,178 @@ export function ProjectList({
             </IconButton>
           </Stack>
         </Stack>
+        <TextField
+          id="project-search"
+          size="small"
+          label="Search projects"
+          placeholder="Path or slug"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          fullWidth
+          sx={{ my: 1 }}
+        />
+        <TextField
+          id="project-group-prefix"
+          size="small"
+          label="Group path prefix"
+          placeholder="e.g. platform/"
+          value={groupPrefix}
+          onChange={(e) => setGroupPrefix(e.target.value)}
+          fullWidth
+          sx={{ mb: 1 }}
+        />
+        <Stack
+          direction="row"
+          spacing={0.5}
+          sx={{ mb: 1 }}
+          role="group"
+          aria-label="Project filters"
+        >
+          <Chip
+            label={legacyOnly ? "Legacy only, on" : "Legacy only"}
+            size="small"
+            color={legacyOnly ? "warning" : "default"}
+            variant={legacyOnly ? "filled" : "outlined"}
+            aria-pressed={legacyOnly}
+            onClick={() => setLegacyOnly((v) => !v)}
+          />
+          <Chip
+            label={pinnedOnly ? "Pinned only, on" : "Pinned only"}
+            size="small"
+            color={pinnedOnly ? "warning" : "default"}
+            variant={pinnedOnly ? "filled" : "outlined"}
+            aria-pressed={pinnedOnly}
+            onClick={() => setPinnedOnly((v) => !v)}
+          />
+          {loading && (
+            <CircularProgress size={16} aria-label="Loading projects" />
+          )}
+        </Stack>
         <Tabs
           value={category}
           onChange={(_, v: ListCategory) => onCategoryChange(v)}
           variant="fullWidth"
-          sx={{ minHeight: 36, '& .MuiTab-root': { minHeight: 36, py: 0.5 } }}
+          aria-label="Project status"
+          selectionFollowsFocus
         >
-          <Tab label="Active" value="active" />
-          <Tab label="Archived" value="archived" />
+          <Tab
+            id="list-tab-active"
+            aria-controls="project-list"
+            label="Active"
+            value="active"
+          />
+          <Tab
+            id="list-tab-archived"
+            aria-controls="project-list"
+            label="Archived"
+            value="archived"
+          />
         </Tabs>
       </Stack>
       {detectMessage && (
-        <Alert severity="info" sx={{ mx: 1.5, mb: 1 }} onClose={() => setDetectMessage(null)}>
+        <Alert
+          severity="info"
+          sx={{ mx: 1.5, mb: 1 }}
+          onClose={() => setDetectMessage(null)}
+        >
           {detectMessage}
         </Alert>
       )}
       {error && (
-        <Typography color="error" variant="body2" sx={{ px: 2, pb: 1 }}>
+        <Alert severity="error" sx={{ mx: 1.5, mb: 1 }}>
           {error}
-        </Typography>
+        </Alert>
       )}
-      <List dense sx={{ overflow: 'auto', flex: 1 }}>
-        {projects.map((p) => (
+      <List
+        id="project-list"
+        aria-label={
+          category === "archived" ? "Archived projects" : "Active projects"
+        }
+        aria-labelledby={
+          category === "archived" ? "list-tab-archived" : "list-tab-active"
+        }
+        dense
+        sx={{ overflow: "auto", flex: 1 }}
+      >
+        {visible.map((p) => (
           <ListItemButton
             key={p.id}
             selected={p.id === selectedId}
+            aria-current={p.id === selectedId ? "true" : undefined}
             onClick={() => onSelect(p)}
+            sx={
+              p.id === selectedId
+                ? { borderLeft: 4, borderColor: "primary.main", pl: 1.5 }
+                : undefined
+            }
           >
             <ListItemText
               primary={p.gitlabPath}
               secondary={
-                <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap sx={{ mt: 0.5 }}>
-                  <Chip label={p.effectiveSlug} size="small" variant="outlined" />
+                <Stack
+                  direction="row"
+                  spacing={0.5}
+                  flexWrap="wrap"
+                  useFlexGap
+                  sx={{ mt: 0.5 }}
+                >
+                  <Chip
+                    label={p.effectiveSlug}
+                    size="small"
+                    variant="outlined"
+                  />
                   {p.archived && (
-                    <Chip label="archived" size="small" color="default" variant="filled" />
+                    <Chip
+                      label="archived"
+                      size="small"
+                      color="default"
+                      variant="filled"
+                    />
                   )}
                   {p.capabilities.deployable && (
-                    <Chip label="deploy" size="small" color="primary" variant="outlined" />
+                    <Chip
+                      label="deploy"
+                      size="small"
+                      color="primary"
+                      variant="outlined"
+                    />
                   )}
                   {p.legacyV1 && (
-                    <Chip label="legacy" size="small" color="warning" variant="outlined" />
+                    <Chip
+                      label="legacy"
+                      size="small"
+                      color="warning"
+                      variant="outlined"
+                    />
+                  )}
+                  {p.pinnedV1 && (
+                    <Chip
+                      label="pinned"
+                      size="small"
+                      color="warning"
+                      variant="outlined"
+                    />
                   )}
                 </Stack>
               }
               slotProps={{
                 primary: { noWrap: true },
                 // Chips/Stack render as divs; default secondary Typography is inline (span).
-                secondary: { component: 'div' },
+                secondary: { component: "div" },
               }}
             />
           </ListItemButton>
         ))}
-        {!loading && projects.length === 0 && (
-          <Typography variant="body2" color="text.secondary" sx={{ p: 2 }}>
-            {category === 'archived'
-              ? 'No archived (dangling) projects.'
-              : 'No active projects in registry.'}
+        {!loading && visible.length === 0 && (
+          <Typography
+            role="status"
+            variant="body2"
+            color="text.secondary"
+            sx={{ p: 2 }}
+          >
+            {category === "archived"
+              ? "No archived (dangling) projects."
+              : "No active projects in registry."}
           </Typography>
         )}
       </List>

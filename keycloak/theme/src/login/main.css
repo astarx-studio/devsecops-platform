@@ -1,0 +1,18 @@
+@import "../theme/tokens.css";
+
+html,
+body,
+.login-pf,
+.login-pf body {
+    min-height: 100%;
+    background: var(--platform-bg) !important;
+    background-attachment: fixed !important;
+    background-size: cover !important;
+    color: var(--platform-text);
+}
+
+.pf-v5-c-background-image,
+.kc-logo-text,
+#kc-logo-wrapper {
+    display: none !important;
+}

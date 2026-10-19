@@ -117,6 +117,17 @@ export class SonarQubeService {
    *
    * @param projectKey - Sonar project key
    */
+  /**
+   * Returns true when the Sonar project key still exists.
+   * Returns false when Sonar admin API is not configured (cannot prove a remainder).
+   */
+  async projectRemains(projectKey: string): Promise<boolean> {
+    if (!this.isConfigured()) {
+      return false;
+    }
+    return this.projectExists(projectKey);
+  }
+
   async deleteProject(projectKey: string): Promise<void> {
     this.assertConfigured();
 

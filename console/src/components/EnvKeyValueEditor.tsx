@@ -72,7 +72,7 @@ export function EnvKeyValueEditor({
 
   return (
     <Stack spacing={1}>
-      <Table size="small">
+      <Table size="small" aria-label="Environment variables">
         <TableHead>
           <TableRow>
             <TableCell width="36%">Key</TableCell>

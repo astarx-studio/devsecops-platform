@@ -25,23 +25,24 @@
 http:
   routers:
     # -------------------------------------------------------------------------
-    # CFA core-finance-apps — /app UI (frontend-host + Module Federation
-    # remotes). /api/*, /auth/*, /gql on the same host stay ungated via the
-    # priority-10 routers in k3d-passthrough.yml.
+    # CFA core-finance-apps — previously gated /app UI through oauth2-proxy-apps.
+    # Ungated so the shell + Module Federation remotes are reachable without
+    # platform SSO (same as cfa-2). /api/*, /auth/*, /gql were already ungated.
+    # Re-enable by restoring the Host+PathPrefix(/app) routers below.
     # -------------------------------------------------------------------------
-    gated-kai-core-finance-apps-dev-ui:
-      rule: "Host(`kai-core-finance-apps.dev.apps.__DOMAIN__`) && PathPrefix(`/app`)"
-      entryPoints:
-        - websecure
-      service: oauth2-proxy-apps-upstream
-      priority: 100
-
-    gated-kai-core-finance-apps-stg-ui:
-      rule: "Host(`kai-core-finance-apps.stg.apps.__DOMAIN__`) && PathPrefix(`/app`)"
-      entryPoints:
-        - websecure
-      service: oauth2-proxy-apps-upstream
-      priority: 100
+    # gated-kai-core-finance-apps-dev-ui:
+    #   rule: "Host(`kai-core-finance-apps.dev.apps.__DOMAIN__`) && PathPrefix(`/app`)"
+    #   entryPoints:
+    #     - websecure
+    #   service: oauth2-proxy-apps-upstream
+    #   priority: 100
+    #
+    # gated-kai-core-finance-apps-stg-ui:
+    #   rule: "Host(`kai-core-finance-apps.stg.apps.__DOMAIN__`) && PathPrefix(`/app`)"
+    #   entryPoints:
+    #     - websecure
+    #   service: oauth2-proxy-apps-upstream
+    #   priority: 100
 
     # -------------------------------------------------------------------------
     # Qestor web UI — whole host is the SPA (API lives on qestor-api.* and

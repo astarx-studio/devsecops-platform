@@ -233,7 +233,7 @@ bao login -method=oidc -address=https://${VAULT_DOMAIN}
 
 ### Token auth (Management API)
 
-The Management API uses a static `VAULT_ROOT_TOKEN` (passed as `X-Vault-Token` header). This bypasses OIDC entirely. This is appropriate for server-to-server automation but should be hardened with scoped policies/AppRoles in a later milestone.
+The Management API uses a static `VAULT_ROOT_TOKEN` (passed as `X-Vault-Token` header) unless `VAULT_ROLE_ID` and `VAULT_SECRET_ID` are both set. When those AppRole credentials are set, the API logs in at startup and does not use the root token. Root token remains the default until an AppRole and policy are created in OpenBao. This bypasses OIDC entirely.
 
 ---
 

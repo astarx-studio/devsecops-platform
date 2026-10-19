@@ -25,6 +25,7 @@ import {
 } from "@mui/material";
 import { useCallback, useMemo, useRef, useState, type MouseEvent } from "react";
 
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { EnvKeyValueEditor } from "@/components/EnvKeyValueEditor";
 import { EnvProfileDetailDialog } from "@/components/EnvProfileDetailDialog";
 import { graphqlRequest } from "@/lib/client";
@@ -74,6 +75,10 @@ export function EnvProfilePanel({ project, onUpdated }: Props) {
   const [contentMode, setContentMode] = useState<ContentInputMode>("paste");
   const [keyRows, setKeyRows] = useState<EnvKeyValueRow[]>(emptyEnvRows());
   const [manageProfile, setManageProfile] = useState<EnvProfile | null>(null);
+  const [removeTarget, setRemoveTarget] = useState<{
+    id: string;
+    label: string;
+  } | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const targetOptions = useMemo(
@@ -173,14 +178,7 @@ export function EnvProfilePanel({ project, onUpdated }: Props) {
     })();
   };
 
-  const remove = (profileId: string, label: string) => {
-    if (
-      !window.confirm(
-        `Delete env profile "${label}"? Secrets will be removed from Vault.`,
-      )
-    ) {
-      return;
-    }
+  const remove = (profileId: string, _label: string) => {
     void runMutation(async () => {
       const data = await graphqlRequest<{ deleteEnvProfile: Project }>(
         MUTATIONS.deleteEnvProfile,
@@ -258,7 +256,7 @@ export function EnvProfilePanel({ project, onUpdated }: Props) {
   return (
     <Stack spacing={2}>
       <Stack direction="row" justifyContent="space-between" alignItems="center">
-        <Typography variant="subtitle1" fontWeight={600}>
+        <Typography component="h3" variant="subtitle1" fontWeight={600}>
           Env profiles (Vault)
         </Typography>
         <Chip
@@ -276,13 +274,12 @@ export function EnvProfilePanel({ project, onUpdated }: Props) {
       <Typography variant="body2" color="text.secondary">
         Upload branch-scoped config to Vault only. BUILD profiles bake at image
         build; RUNTIME profiles inject into pods per deployment target
-        (including custom targets). Use Manage to view and edit existing
-        values.
+        (including custom targets). Use Manage to view and edit existing values.
       </Typography>
 
       {error && <Alert severity="error">{error}</Alert>}
 
-      <Table size="small">
+      <Table size="small" aria-label="Environment profiles">
         <TableHead>
           <TableRow>
             <TableCell>Label</TableCell>
@@ -317,6 +314,7 @@ export function EnvProfilePanel({ project, onUpdated }: Props) {
                   startIcon={<EditIcon />}
                   disabled={busy}
                   onClick={() => setManageProfile(p)}
+                  aria-label={`Manage ${p.label} profile`}
                 >
                   Manage
                 </Button>
@@ -325,7 +323,8 @@ export function EnvProfilePanel({ project, onUpdated }: Props) {
                   color="error"
                   startIcon={<DeleteIcon />}
                   disabled={busy}
-                  onClick={() => remove(p.id, p.label)}
+                  onClick={() => setRemoveTarget({ id: p.id, label: p.label })}
+                  aria-label={`Delete ${p.label} profile`}
                 >
                   Delete
                 </Button>
@@ -363,8 +362,10 @@ export function EnvProfilePanel({ project, onUpdated }: Props) {
               }
             />
             <FormControl size="small" sx={{ minWidth: 140 }}>
-              <InputLabel>Phase</InputLabel>
+              <InputLabel id="env-phase-label">Phase</InputLabel>
               <Select
+                labelId="env-phase-label"
+                id="env-phase"
                 label="Phase"
                 value={form.injectionPhase}
                 onChange={(e) =>
@@ -420,8 +421,10 @@ export function EnvProfilePanel({ project, onUpdated }: Props) {
                 }
               />
               <FormControl size="small" sx={{ minWidth: 180 }}>
-                <InputLabel>Delivery</InputLabel>
+                <InputLabel id="env-delivery-label">Delivery</InputLabel>
                 <Select
+                  labelId="env-delivery-label"
+                  id="env-delivery"
                   label="Delivery"
                   value={form.buildDelivery}
                   onChange={(e) =>
@@ -437,8 +440,10 @@ export function EnvProfilePanel({ project, onUpdated }: Props) {
             </Stack>
           ) : (
             <FormControl size="small" fullWidth>
-              <InputLabel>Deployment targets</InputLabel>
+              <InputLabel id="env-targets-label">Deployment targets</InputLabel>
               <Select
+                labelId="env-targets-label"
+                id="env-targets"
                 multiple
                 label="Deployment targets"
                 value={form.deploymentTargetKeys}
@@ -499,9 +504,7 @@ export function EnvProfilePanel({ project, onUpdated }: Props) {
                   ref={fileInputRef}
                   type="file"
                   hidden
-                  onChange={(e) =>
-                    void onFilePick(e.target.files?.[0] ?? null)
-                  }
+                  onChange={(e) => void onFilePick(e.target.files?.[0] ?? null)}
                 />
               </Button>
               <Typography variant="caption" color="text.secondary">
@@ -560,6 +563,25 @@ export function EnvProfilePanel({ project, onUpdated }: Props) {
         busy={busy}
         onClose={() => setManageProfile(null)}
         onSaved={onUpdated}
+      />
+      <ConfirmDialog
+        open={removeTarget !== null}
+        title="Delete env profile"
+        message={
+          removeTarget
+            ? `Delete env profile "${removeTarget.label}"? Secrets will be removed from Vault.`
+            : ""
+        }
+        confirmLabel="Delete"
+        typedMatch={removeTarget?.label}
+        busy={busy}
+        onClose={() => setRemoveTarget(null)}
+        onConfirm={() => {
+          if (!removeTarget) return;
+          const { id, label } = removeTarget;
+          setRemoveTarget(null);
+          remove(id, label);
+        }}
       />
     </Stack>
   );

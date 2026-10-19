@@ -150,3 +150,16 @@ export interface HealthStatus {
   mongo?: string;
   vault?: string;
 }
+
+export type McpAccessScope = "read" | "read_secret" | "operate" | "full";
+
+export interface McpAccessKey {
+  id: string;
+  name: string;
+  tokenPrefix: string;
+  scope?: McpAccessScope | null;
+  token?: string;
+  createdAt?: string | null;
+  lastUsedAt?: string | null;
+  revokedAt?: string | null;
+}

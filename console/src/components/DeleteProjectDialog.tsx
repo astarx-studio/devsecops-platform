@@ -17,7 +17,7 @@ interface Props {
   gitlabPath: string;
   busy: boolean;
   onClose: () => void;
-  onConfirm: (forceGitLabDelete: boolean) => void;
+  onConfirm: (forceGitLabDelete: boolean, skipPlatformCleanup: boolean) => void;
 }
 
 export function DeleteProjectDialog({
@@ -29,10 +29,12 @@ export function DeleteProjectDialog({
   onConfirm,
 }: Props) {
   const [forceGitLab, setForceGitLab] = useState(archived);
+  const [retryPlatform, setRetryPlatform] = useState(true);
 
   useEffect(() => {
     if (open) {
       setForceGitLab(archived);
+      setRetryPlatform(true);
     }
   }, [open, archived]);
 
@@ -44,22 +46,36 @@ export function DeleteProjectDialog({
 
   return (
     <Dialog open={open} onClose={handleClose} maxWidth="sm" fullWidth>
-      <DialogTitle>{archived ? 'Force delete GitLab project' : 'Unregister project'}</DialogTitle>
+      <DialogTitle>{archived ? 'Retry unregister' : 'Unregister project'}</DialogTitle>
       <DialogContent>
         <DialogContentText sx={{ mb: 2 }}>
           {archived ? (
             <>
-              Retry permanent deletion of <strong>{gitlabPath}</strong> on GitLab. Platform
-              resources were already torn down when this project was archived.
+              <strong>{gitlabPath}</strong> is archived because something was still left behind
+              (GitLab, Kubernetes, Vault, or Sonar). Archive does <strong>not</strong> mean
+              teardown finished. Retry platform cleanup unless you only want another GitLab delete
+              attempt.
             </>
           ) : (
             <>
-              Unregister <strong>{gitlabPath}</strong> from the platform? K8s targets, Vault, and
-              Sonar resources will be removed. If GitLab still has container images, deletion may
-              fail and the project will appear under <strong>Archived</strong>.
+              Unregister <strong>{gitlabPath}</strong>? The API will try to remove K8s releases,
+              the Vault tree, and Sonar projects, then delete the GitLab project. If anything
+              remains, the row is archived — that is not a successful teardown.
             </>
           )}
         </DialogContentText>
+        {archived && (
+          <FormControlLabel
+            control={
+              <Checkbox
+                checked={retryPlatform}
+                onChange={(e) => setRetryPlatform(e.target.checked)}
+                disabled={busy}
+              />
+            }
+            label="Retry platform cleanup (Kubernetes, Vault, Sonar)"
+          />
+        )}
         <FormControlLabel
           control={
             <Checkbox
@@ -78,10 +94,10 @@ export function DeleteProjectDialog({
         <Button
           color="error"
           variant="contained"
-          onClick={() => onConfirm(forceGitLab)}
+          onClick={() => onConfirm(forceGitLab, archived ? !retryPlatform : false)}
           disabled={busy}
         >
-          {archived ? 'Force delete' : 'Delete'}
+          {archived ? 'Retry delete' : 'Delete'}
         </Button>
       </DialogActions>
     </Dialog>

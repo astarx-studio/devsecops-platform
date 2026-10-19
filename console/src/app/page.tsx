@@ -1,5 +1,11 @@
-import { ConsolePage } from '@/components/ConsolePage';
+import { Suspense } from "react";
+
+import { ConsolePage } from "@/components/ConsolePage";
 
 export default function Home() {
-  return <ConsolePage />;
+  return (
+    <Suspense>
+      <ConsolePage />
+    </Suspense>
+  );
 }

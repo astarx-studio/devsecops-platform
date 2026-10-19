@@ -1,0 +1,52 @@
+/*
+ * Visual swap point for the platform Keycloak theme.
+ * Light is the brighter part of dawn. Dark is the same dawn, earlier and dimmer.
+ * Primary stays bluish cyan. Secondary stays the dawn sun.
+ */
+:root,
+[data-platform-mode="light"] {
+    --platform-font: "Segoe UI", system-ui, sans-serif;
+    --platform-bg: linear-gradient(
+        168deg,
+        #d7e4f5 0%,
+        #e7d5e4 28%,
+        #f3c7b0 58%,
+        #f6d7a6 100%
+    );
+    --platform-surface: #fffaf4;
+    --platform-canvas: #f3ebe3;
+    --platform-text: #241c18;
+    --platform-muted: #6b5348;
+    --platform-brand: #128ea3;
+    --platform-brand-hover: #0d7386;
+    --platform-brand-contrast: #ffffff;
+    --platform-secondary: #e39a3c;
+    --platform-secondary-hover: #c47a28;
+    --platform-secondary-contrast: #3a2a12;
+    --platform-line: #f0dcc8;
+    --platform-radius: 12px;
+    --platform-header: #241c18;
+}
+
+[data-platform-mode="dark"] {
+    --platform-bg: linear-gradient(
+        168deg,
+        #0c1428 0%,
+        #1a2748 22%,
+        #3a3158 46%,
+        #6a4038 70%,
+        #8a5a32 100%
+    );
+    --platform-surface: #1a2236;
+    --platform-canvas: #10182c;
+    --platform-text: #f6efe6;
+    --platform-muted: #d7c3b2;
+    --platform-brand: #3ec6d6;
+    --platform-brand-hover: #7adbe6;
+    --platform-brand-contrast: #062026;
+    --platform-secondary: #f0b15a;
+    --platform-secondary-hover: #f6c98a;
+    --platform-secondary-contrast: #2a1c0a;
+    --platform-line: #3a4666;
+    --platform-header: #f6efe6;
+}

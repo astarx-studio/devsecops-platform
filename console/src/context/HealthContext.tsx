@@ -24,7 +24,10 @@ export function HealthProvider({ children }: { children: ReactNode }) {
   const refreshHealth = useCallback(async () => {
     try {
       const h = await checkHealth();
-      setHealthStatus(`${h.status} (mongo=${h.mongo ?? '?'}, vault=${h.vault ?? '?'})`);
+      const notChecked = h.notChecked ?? 'gitlab, kubernetes, keycloak, sonarqube';
+      setHealthStatus(
+        `${h.status} (mongo=${h.mongo ?? '?'}, vault=${h.vault ?? '?'}) — not checked: ${notChecked}`,
+      );
     } catch (err) {
       setHealthStatus(`unreachable: ${(err as Error).message}`);
     }

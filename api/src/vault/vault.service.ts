@@ -1,5 +1,5 @@
 import { HttpService } from '@nestjs/axios';
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { firstValueFrom } from 'rxjs';
 
@@ -12,17 +12,46 @@ import { AppConfiguration } from '../config';
  * Uses internal Docker DNS URL (http://vault:8200) with X-Vault-Token header.
  */
 @Injectable()
-export class VaultService {
+export class VaultService implements OnModuleInit {
   private readonly logger = new Logger(VaultService.name);
   private readonly baseUrl: string;
-  private readonly token: string;
+  private token: string;
+  private readonly roleId?: string;
+  private readonly secretId?: string;
 
   constructor(
     private readonly httpService: HttpService,
     configService: ConfigService<AppConfiguration>,
   ) {
     this.baseUrl = configService.get<string>('vault.url', { infer: true })!;
-    this.token = configService.get<string>('vault.token', { infer: true })!;
+    this.token = configService.get<string>('vault.token', { infer: true }) ?? '';
+    this.roleId = configService.get<string>('vault.roleId', { infer: true });
+    this.secretId = configService.get<string>('vault.secretId', { infer: true });
+  }
+
+  async onModuleInit(): Promise<void> {
+    if (this.roleId && this.secretId) {
+      const response = await firstValueFrom(
+        this.httpService.post<{ auth?: { client_token?: string } }>(
+          `${this.baseUrl}/v1/auth/approle/login`,
+          { role_id: this.roleId, secret_id: this.secretId },
+        ),
+      );
+      const clientToken = response.data.auth?.client_token;
+      if (!clientToken) {
+        throw new Error('Vault AppRole login succeeded without a client token');
+      }
+      this.token = clientToken;
+      this.logger.log('Vault authenticated via AppRole (root token not used)');
+      return;
+    }
+
+    if (!this.token) {
+      throw new Error('Vault token is empty and AppRole credentials are not set');
+    }
+    this.logger.warn(
+      'Vault is using VAULT_ROOT_TOKEN. Prefer VAULT_ROLE_ID + VAULT_SECRET_ID (scoped AppRole).',
+    );
   }
 
   private get headers() {

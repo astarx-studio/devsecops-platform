@@ -45,6 +45,71 @@ This immediately prevents them from logging in to any platform tool.
 
 ---
 
+## Account console, profile, and password reset
+
+Signed-in users manage their own profile and password at `https://<KEYCLOAK_DOMAIN>/realms/devops/account/` (Personal info and Signing in). The sign-in page shows **Forgot password?** because the realm allows password reset. Keycloak emails the reset link through the realm SMTP settings. The link is valid for 30 minutes (`actionTokenGeneratedByUserLifespan`).
+
+The account console only loads the profile after login when the access token includes:
+
+- audience `account`
+- client role `manage-account` under `resource_access.account.roles`
+
+Those claims come from the `roles` client scope (`client roles` and `audience resolve` mappers) and from that scope being assigned to the built-in `account` and `account-console` clients. The same scope still emits `realm_roles` for the Management API.
+
+A realm imported from an older `realm-export.json` can be missing those mappers and scope assignments. Login still works, then the account page fails, so people cannot change their password. A reset email that lands on that page looks like forgot-password is broken too. Apply the live fix, then restart Keycloak so it reloads clients:
+
+```bash
+bash bootstrap/patch-keycloak-account.sh
+```
+
+`realm-export.json` already contains the mappers and the 30-minute reset lifespan for a new database. Import runs once; it does not update an existing realm.
+
+---
+
+## Platform theme
+
+Sign-in, account, admin, email, and the server welcome page use one theme named `platform`. The product name on those screens is **YADA DSOaaS**. The Keycloak logo and wordmark are not shown. The Keycloak server image still ships its Apache-2.0 `NOTICE`.
+
+The theme is a Vite app in `keycloak/theme` (Keycloakify 11, pinned in `package.json`, built for Keycloak 26.6). `keycloak/Dockerfile` builds `platform-theme.jar` and copies it into `quay.io/keycloak/keycloak:26.6`. Compose builds that image as `dsoaas-keycloak:26.6`. Welcome is server-wide via `KC_SPI_THEME__WELCOME_THEME=platform`.
+
+The sign-in shell and the server welcome page use Material UI colors from one dawn palette. Light is the brighter part of dawn. Dark is the same dawn, earlier and dimmer. An icon button on those screens stores the choice in `platform-color-mode`. The account console uses the same dawn Material UI for every page it can open. On the account console the dawn gradient sits in the sidebar, and the page itself uses the flat surface color. The admin console stays Keycloak’s own screens.
+
+Personal info can store a square profile photo. Choosing a photo opens the same kind of crop, zoom, rotate, and flip dialog used in Qestor. The cropped JPEG is saved on the Keycloak user as the `picture` attribute. When that attribute is empty, the account shows the user’s Gravatar, then initials if Gravatar has no image. Import does not add `picture` to a realm that already exists:
+
+```bash
+bash bootstrap/patch-keycloak-profile-picture.sh
+```
+
+Welcome and every sign-in page offer two paths:
+
+- **Employee** opens the `devops` realm (`/realms/devops/account/`).
+- **Admin** opens the `master` realm through the administration console (`/admin/`).
+
+The form on the page you are already on still submits to that realm. The other path starts a new sign-in.
+
+Visual swap point, and the only files a later design pass should need:
+
+- `keycloak/theme/src/theme/tokens.css` — light and dark dawn colors, type, and radius
+- `keycloak/theme/src/assets/favicon-light.ico` and `favicon-dark.ico` — browser icon, and the source of the logo
+- `keycloak/theme/src/assets/logo-light.png` and `logo-dark.png` — the same mark, used on the page and in email
+
+After editing those, rebuild and recreate Keycloak:
+
+```bash
+docker compose build keycloak
+docker compose up -d keycloak
+```
+
+`realm-export.json` sets the devops realm display name to YADA DSOaaS and selects `platform` for login, account, admin, and email. Import does not update a realm that already exists. Apply the same selection to the live `devops` and `master` realms, including the `account` and `account-console` client login theme:
+
+```bash
+bash bootstrap/patch-keycloak-theme.sh
+```
+
+The master realm keeps its own display name. Its admin console still uses the platform admin theme.
+
+---
+
 ## Managing OIDC client secrets
 
 Each tool that uses SSO has a "client" in Keycloak with a secret. These secrets are also stored in `.env` and must match. If they ever get out of sync, logins will fail.

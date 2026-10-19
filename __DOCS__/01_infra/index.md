@@ -14,6 +14,10 @@ Here's what you'll do, in order:
 6. **[Reset from zero](05_reset_from_zero.md)** — If you ever need to wipe everything and start fresh, this is the procedure.
 7. **[Legacy v1 import](07_v1_migration.md)** — Rare operator-only steps if you import old projects; `make migrate-v1` points here.
 
+Maintenance records (not part of first-time setup):
+
+- **[Disk cleanup and VHDX compact — 13 October 2026](reports/2026-10-13-disk-cleanup-vhdx-compact.md)** — Unused k3d image prune, offline VHDX compact, and how traffic was closed and reopened.
+
 ---
 
 A few things worth knowing before you dive in:

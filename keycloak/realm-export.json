@@ -1,11 +1,17 @@
 {
   "realm": "devops",
   "enabled": true,
-  "displayName": "DevOps Platform",
+  "displayName": "YADA DSOaaS",
+  "displayNameHtml": "YADA DSOaaS",
+  "loginTheme": "platform",
+  "accountTheme": "platform",
+  "adminTheme": "platform",
+  "emailTheme": "platform",
   "registrationAllowed": false,
   "loginWithEmailAllowed": true,
   "duplicateEmailsAllowed": false,
   "resetPasswordAllowed": true,
+  "actionTokenGeneratedByUserLifespan": 1800,
   "verifyEmail": true,
   "editUsernameAllowed": false,
   "smtpServer": {
@@ -38,18 +44,26 @@
       }
     ]
   },
-  "defaultRoles": ["developer"],
-  "defaultGroups": ["/users"],
+  "defaultRoles": [
+    "developer"
+  ],
+  "defaultGroups": [
+    "/users"
+  ],
   "groups": [
     {
       "name": "admins",
       "path": "/admins",
-      "realmRoles": ["admin"]
+      "realmRoles": [
+        "admin"
+      ]
     },
     {
       "name": "users",
       "path": "/users",
-      "realmRoles": ["developer"]
+      "realmRoles": [
+        "developer"
+      ]
     }
   ],
   "clientScopes": [
@@ -209,7 +223,7 @@
     },
     {
       "name": "roles",
-      "description": "Maps realm roles into JWT access tokens",
+      "description": "Maps realm roles into JWT access tokens and client roles required by the account console",
       "protocol": "openid-connect",
       "attributes": {
         "include.in.token.scope": "true",
@@ -228,6 +242,44 @@
             "access.token.claim": "true",
             "claim.name": "realm_roles",
             "jsonType.label": "String"
+          }
+        },
+        {
+          "name": "realm access roles",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-realm-role-mapper",
+          "consentRequired": false,
+          "config": {
+            "multivalued": "true",
+            "user.attribute": "foo",
+            "introspection.token.claim": "true",
+            "access.token.claim": "true",
+            "claim.name": "realm_access.roles",
+            "jsonType.label": "String"
+          }
+        },
+        {
+          "name": "client roles",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-client-role-mapper",
+          "consentRequired": false,
+          "config": {
+            "user.attribute": "foo",
+            "access.token.claim": "true",
+            "claim.name": "resource_access.${client_id}.roles",
+            "jsonType.label": "String",
+            "multivalued": "true",
+            "introspection.token.claim": "true"
+          }
+        },
+        {
+          "name": "audience resolve",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-resolve-mapper",
+          "consentRequired": false,
+          "config": {
+            "access.token.claim": "true",
+            "introspection.token.claim": "true"
           }
         }
       ]
@@ -255,12 +307,20 @@
       "redirectUris": [
         "https://${GITLAB_DOMAIN}/users/auth/openid_connect/callback"
       ],
-      "webOrigins": ["https://${GITLAB_DOMAIN}"],
+      "webOrigins": [
+        "https://${GITLAB_DOMAIN}"
+      ],
       "attributes": {
         "pkce.code.challenge.method": "S256",
         "post.logout.redirect.uris": "https://${GITLAB_DOMAIN}"
       },
-      "defaultClientScopes": ["openid", "profile", "email", "roles", "groups"]
+      "defaultClientScopes": [
+        "openid",
+        "profile",
+        "email",
+        "roles",
+        "groups"
+      ]
     },
     {
       "clientId": "vault",
@@ -277,8 +337,16 @@
         "https://${VAULT_DOMAIN}/ui/vault/auth/oidc/oidc/callback",
         "http://localhost:8250/oidc/callback"
       ],
-      "webOrigins": ["https://${VAULT_DOMAIN}"],
-      "defaultClientScopes": ["openid", "profile", "email", "roles", "groups"]
+      "webOrigins": [
+        "https://${VAULT_DOMAIN}"
+      ],
+      "defaultClientScopes": [
+        "openid",
+        "profile",
+        "email",
+        "roles",
+        "groups"
+      ]
     },
     {
       "clientId": "oauth2-proxy",
@@ -291,12 +359,23 @@
       "serviceAccountsEnabled": false,
       "protocol": "openid-connect",
       "secret": "${KC_CLIENT_SECRET_OAUTH2_PROXY}",
-      "redirectUris": ["https://${OAUTH_DOMAIN}/oauth2/callback"],
-      "webOrigins": ["https://${TRAEFIK_DOMAIN}", "https://${OAUTH_DOMAIN}"],
+      "redirectUris": [
+        "https://${OAUTH_DOMAIN}/oauth2/callback"
+      ],
+      "webOrigins": [
+        "https://${TRAEFIK_DOMAIN}",
+        "https://${OAUTH_DOMAIN}"
+      ],
       "attributes": {
         "post.logout.redirect.uris": "https://${TRAEFIK_DOMAIN}"
       },
-      "defaultClientScopes": ["openid", "profile", "email", "roles", "groups"]
+      "defaultClientScopes": [
+        "openid",
+        "profile",
+        "email",
+        "roles",
+        "groups"
+      ]
     },
     {
       "clientId": "oauth2-proxy-apps",
@@ -309,9 +388,44 @@
       "serviceAccountsEnabled": false,
       "protocol": "openid-connect",
       "secret": "${KC_CLIENT_SECRET_OAUTH2_PROXY_APPS}",
-      "redirectUris": ["https://${OAUTH_APPS_DOMAIN}/oauth2/callback"],
-      "webOrigins": ["https://${OAUTH_APPS_DOMAIN}"],
-      "defaultClientScopes": ["openid", "profile", "email", "roles", "groups"]
+      "redirectUris": [
+        "https://${OAUTH_APPS_DOMAIN}/oauth2/callback"
+      ],
+      "webOrigins": [
+        "https://${OAUTH_APPS_DOMAIN}"
+      ],
+      "defaultClientScopes": [
+        "openid",
+        "profile",
+        "email",
+        "roles",
+        "groups"
+      ]
+    },
+    {
+      "clientId": "n8n",
+      "name": "n8n",
+      "description": "OIDC client for the devtools n8n editor",
+      "enabled": true,
+      "publicClient": false,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "protocol": "openid-connect",
+      "secret": "${KC_CLIENT_SECRET_N8N}",
+      "redirectUris": [
+        "https://${N8N_DOMAIN}/auth/oidc/callback"
+      ],
+      "webOrigins": [
+        "https://${N8N_DOMAIN}"
+      ],
+      "defaultClientScopes": [
+        "openid",
+        "profile",
+        "email",
+        "roles",
+        "groups"
+      ]
     },
     {
       "clientId": "sonarqube",
@@ -331,7 +445,9 @@
         "saml.onetimeuse.condition": "false",
         "saml_name_id_format": "username"
       },
-      "redirectUris": ["https://${SONARQUBE_DOMAIN}/oauth2/callback/saml"],
+      "redirectUris": [
+        "https://${SONARQUBE_DOMAIN}/oauth2/callback/saml"
+      ],
       "adminUrl": "https://${SONARQUBE_DOMAIN}",
       "baseUrl": "https://${SONARQUBE_DOMAIN}",
       "protocolMappers": [
@@ -390,8 +506,13 @@
       "email": "${KEYCLOAK_ADMIN_EMAIL}",
       "firstName": "Platform",
       "lastName": "Admin",
-      "realmRoles": ["admin", "developer"],
-      "groups": ["/admins"],
+      "realmRoles": [
+        "admin",
+        "developer"
+      ],
+      "groups": [
+        "/admins"
+      ],
       "credentials": [
         {
           "type": "password",
@@ -400,5 +521,17 @@
         }
       ]
     }
-  ]
+  ],
+  "components": {
+    "org.keycloak.userprofile.UserProfileProvider": [
+      {
+        "providerId": "declarative-user-profile",
+        "config": {
+          "kc.user.profile.config": [
+            "{\"attributes\":[{\"name\":\"username\",\"displayName\":\"${username}\",\"validations\":{\"length\":{\"min\":3,\"max\":255},\"username-prohibited-characters\":{},\"up-username-not-idn-homograph\":{}},\"permissions\":{\"view\":[\"admin\",\"user\"],\"edit\":[\"admin\",\"user\"]},\"multivalued\":false},{\"name\":\"email\",\"displayName\":\"${email}\",\"validations\":{\"email\":{},\"length\":{\"max\":255}},\"permissions\":{\"view\":[\"admin\",\"user\"],\"edit\":[\"admin\",\"user\"]},\"multivalued\":false},{\"name\":\"firstName\",\"displayName\":\"${firstName}\",\"validations\":{\"length\":{\"max\":255},\"person-name-prohibited-characters\":{}},\"permissions\":{\"view\":[\"admin\",\"user\"],\"edit\":[\"admin\",\"user\"]},\"multivalued\":false},{\"name\":\"lastName\",\"displayName\":\"${lastName}\",\"validations\":{\"length\":{\"max\":255},\"person-name-prohibited-characters\":{}},\"permissions\":{\"view\":[\"admin\",\"user\"],\"edit\":[\"admin\",\"user\"]},\"multivalued\":false},{\"name\":\"picture\",\"displayName\":\"Profile photo\",\"permissions\":{\"view\":[\"admin\",\"user\"],\"edit\":[\"admin\",\"user\"]},\"validations\":{\"length\":{\"max\":200000}},\"multivalued\":false}],\"groups\":[{\"name\":\"user-metadata\",\"displayHeader\":\"User metadata\",\"displayDescription\":\"Attributes, which refer to user metadata\"}]}"
+          ]
+        }
+      }
+    ]
+  }
 }

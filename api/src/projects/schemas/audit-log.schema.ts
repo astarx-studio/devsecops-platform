@@ -2,6 +2,8 @@ import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 
 import type { HydratedDocument } from 'mongoose';
 
+import { auditActorAls } from '../../common/audit/audit-actor.context';
+
 export type AuditEventType =
   | 'project.created'
   | 'project.deleted'
@@ -15,7 +17,13 @@ export type AuditEventType =
   | 'project.sonar_deleted'
   | 'project.registered'
   | 'project.deployment.upserted'
-  | 'project.deployment.removed';
+  | 'project.deployment.removed'
+  | 'env.profile.revealed'
+  | 'env.profile.content_updated'
+  | 'env.profile.metadata_updated'
+  | 'mcp.key.created'
+  | 'mcp.key.revoked'
+  | 'app.logs.read';
 
 export type AuditLogDocument = HydratedDocument<AuditLog>;
 
@@ -50,9 +58,19 @@ export class AuditLog {
       'project.registered',
       'project.deployment.upserted',
       'project.deployment.removed',
+      'env.profile.revealed',
+      'env.profile.content_updated',
+      'env.profile.metadata_updated',
+      'mcp.key.created',
+      'mcp.key.revoked',
+      'app.logs.read',
     ]),
   })
   eventType!: AuditEventType;
+
+  /** Caller identity: `api-key` or `oidc:<username>`. Empty when unknown. */
+  @Prop()
+  actor?: string;
 
   /** MongoDB ObjectId of the affected project document (as string). */
   @Prop()
@@ -80,3 +98,10 @@ export class AuditLog {
 }
 
 export const AuditLogSchema = SchemaFactory.createForClass(AuditLog);
+
+AuditLogSchema.pre('validate', function stampActor() {
+  const actor = auditActorAls.getStore()?.actor;
+  if (actor && !this.actor) {
+    this.actor = actor;
+  }
+});

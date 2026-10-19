@@ -9,6 +9,10 @@ export interface HealthResponse {
   status: 'ok' | 'degraded';
   mongo: 'ok' | 'down';
   vault: 'ok' | 'down';
+  /** Dependencies this endpoint actually probes. */
+  checks: string;
+  /** Dependencies operators must not infer from status=ok. */
+  notChecked: string;
 }
 
 @Controller()
@@ -35,6 +39,8 @@ export class AppController {
       status: mongoOk && vaultOk ? 'ok' : 'degraded',
       mongo: mongoOk ? 'ok' : 'down',
       vault: vaultOk ? 'ok' : 'down',
+      checks: 'mongo,vault',
+      notChecked: 'gitlab,kubernetes,keycloak,sonarqube',
     };
   }
 }

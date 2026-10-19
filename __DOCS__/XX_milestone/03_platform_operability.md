@@ -2,7 +2,7 @@
 
 ← [Back to Milestone designs](index.md)
 
-> **Status**: Proposed (not yet scheduled)
+> **Status**: Proposed (not yet scheduled). Console write set is frozen as of 2026-10-13 (project lifecycle only). Do not start `dsoctl` until that surface stays small — credential rotation and Vault unseal remain shell/runbook, not a second control plane.
 > **Audience**: Platform maintainers, future-Phase planners
 > **Cross-references**: [Environment config](../01_infra/02_env.md), [OpenBao admin](../02_admin/04_vault.md), [Operator console](02_frontend_console.md), [Management API](../99_maintainers/03_management_api.md), [Secrets (devs)](../03_devs/04_secrets.md)
 
@@ -71,7 +71,7 @@ There is no CLI, no API endpoint, no audit trail. The operator *is* the rotation
   ├── OIDC client secrets: KC_CLIENT_SECRET_GITLAB, KC_CLIENT_SECRET_VAULT, KC_CLIENT_SECRET_OAUTH2_PROXY
   ├── Access tokens: GITLAB_ROOT_TOKEN, CLOUDFLARE_API_TOKEN, CLOUDFLARE_TUNNEL_TOKEN
   └── Bootstrap placeholders: GITLAB_RUNNER_TOKEN=FILL_AFTER_STARTUP
-      
+
 keycloak/realm-export.json  (static JSON imported at first boot)
   └── OIDC client secrets duplicated here — must match .env manually
 ```

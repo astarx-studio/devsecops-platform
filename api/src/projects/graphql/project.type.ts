@@ -1,4 +1,5 @@
 import { Field, ID, Int, ObjectType } from '@nestjs/graphql';
+import GraphQLJSON from 'graphql-type-json';
 
 import {
   ClusterProfile,
@@ -438,4 +439,77 @@ export class ConfigType {
 
   @Field(() => String, { description: 'GitLab web URL.' })
   gitlabUrl!: string;
+}
+
+@ObjectType({ description: 'One container log tail from a project Helm release.' })
+export class AppContainerLogChunkType {
+  @Field()
+  pod!: string;
+
+  @Field()
+  container!: string;
+
+  @Field({ nullable: true })
+  phase?: string;
+
+  @Field({ description: 'Log text. May contain whatever the process wrote.' })
+  text!: string;
+
+  @Field()
+  truncated!: boolean;
+
+  @Field({ nullable: true })
+  error?: string;
+}
+
+@ObjectType({ description: 'Container logs for one app on a deployment target.' })
+export class AppContainerLogsType {
+  @Field()
+  clusterProfile!: string;
+
+  @Field()
+  namespace!: string;
+
+  @Field()
+  releaseName!: string;
+
+  @Field(() => Int)
+  tailLines!: number;
+
+  @Field()
+  previous!: boolean;
+
+  @Field({ nullable: true })
+  message?: string;
+
+  @Field(() => [AppContainerLogChunkType])
+  chunks!: AppContainerLogChunkType[];
+}
+
+/** Append-only lifecycle event. Does not include secret values. */
+@ObjectType({ description: 'Audit log entry for a project lifecycle event.' })
+export class AuditLogType {
+  @Field(() => ID)
+  id!: string;
+
+  @Field(() => String)
+  eventType!: string;
+
+  @Field(() => String, { nullable: true })
+  projectId?: string;
+
+  @Field(() => String, { nullable: true })
+  gitlabPath?: string;
+
+  @Field(() => String, { nullable: true })
+  effectiveSlug?: string;
+
+  @Field(() => String, { nullable: true, description: 'api-key or oidc:<username>' })
+  actor?: string;
+
+  @Field(() => GraphQLJSON, { nullable: true })
+  metadata?: Record<string, unknown>;
+
+  @Field(() => String, { nullable: true })
+  createdAt?: string;
 }

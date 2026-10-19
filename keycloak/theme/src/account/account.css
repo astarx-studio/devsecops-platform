@@ -1,0 +1,18 @@
+@import "../theme/tokens.css";
+
+html,
+body,
+#root {
+    min-height: 100%;
+    background: var(--platform-canvas) !important;
+    background-image: none !important;
+    color: var(--platform-text);
+}
+
+.platform-sidebar {
+    background-color: transparent !important;
+    background-image: var(--platform-bg) !important;
+    background-attachment: fixed !important;
+    background-size: cover !important;
+    color: var(--platform-text);
+}

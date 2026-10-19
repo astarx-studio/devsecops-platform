@@ -13,10 +13,10 @@ import {
   TextField,
   Typography,
 } from '@mui/material';
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from "react";
 
 import { graphqlRequest } from '@/lib/client';
-import { MUTATIONS } from '@/lib/graphql';
+import { MUTATIONS, QUERIES } from "@/lib/graphql";
 import type { Project, Provisioning } from '@/lib/types';
 
 interface Props {
@@ -24,7 +24,7 @@ interface Props {
 }
 
 export function CreateProjectForm({ onCreated }: Props) {
-  const [groupPath, setGroupPath] = useState('system/devsecops-platform/smoke');
+  const [groupPath, setGroupPath] = useState("");
   const [projectSlug, setProjectSlug] = useState('');
   const [displayName, setDisplayName] = useState('');
   const [provisioning, setProvisioning] = useState<Provisioning>('AUTO_DEVOPS');
@@ -33,6 +33,39 @@ export function CreateProjectForm({ onCreated }: Props) {
   const [publishable, setPublishable] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [slugHint, setSlugHint] = useState<string | null>(null);
+  const [templates, setTemplates] = useState<
+    Array<{ slug: string; description?: string | null }>
+  >([]);
+
+  useEffect(() => {
+    if (provisioning !== "TEMPLATE") return;
+    void graphqlRequest<{
+      templates: Array<{ slug: string; description?: string | null }>;
+    }>(QUERIES.templates)
+      .then((data) => setTemplates(data.templates))
+      .catch(() => setTemplates([]));
+  }, [provisioning]);
+
+  useEffect(() => {
+    const slug = projectSlug.trim();
+    if (!slug) {
+      setSlugHint(null);
+      return;
+    }
+    const timer = setTimeout(() => {
+      void graphqlRequest<{ slugAvailable: boolean }>(QUERIES.slugAvailable, {
+        slug,
+      })
+        .then((data) =>
+          setSlugHint(
+            data.slugAvailable ? "Slug is available" : "Slug is already taken",
+          ),
+        )
+        .catch(() => setSlugHint(null));
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [projectSlug]);
 
   const submit = useCallback(() => {
     const segments = groupPath
@@ -82,21 +115,31 @@ export function CreateProjectForm({ onCreated }: Props) {
 
   return (
     <Paper sx={{ p: 2 }}>
-      <Typography variant="subtitle1" fontWeight={600} gutterBottom>
+      <Typography
+        component="h2"
+        variant="subtitle1"
+        fontWeight={600}
+        gutterBottom
+      >
         Create project
       </Typography>
       <Stack spacing={2}>
         {error && <Alert severity="error">{error}</Alert>}
         <TextField
-          label="Group path (slash-separated, no project slug)"
+          id="create-group-path"
+          label="Group path"
           value={groupPath}
           onChange={(e) => setGroupPath(e.target.value)}
+          helperText="Slash-separated group path. Do not include the project slug."
           fullWidth
         />
         <TextField
           label="Project slug"
           value={projectSlug}
           onChange={(e) => setProjectSlug(e.target.value)}
+          helperText={
+            slugHint ?? "Checked against the registry before you submit"
+          }
           fullWidth
         />
         <TextField
@@ -106,8 +149,10 @@ export function CreateProjectForm({ onCreated }: Props) {
           fullWidth
         />
         <FormControl fullWidth>
-          <InputLabel>Provisioning</InputLabel>
+          <InputLabel id="create-provisioning-label">Provisioning</InputLabel>
           <Select
+            labelId="create-provisioning-label"
+            id="create-provisioning"
             label="Provisioning"
             value={provisioning}
             onChange={(e) => setProvisioning(e.target.value as Provisioning)}
@@ -116,26 +161,50 @@ export function CreateProjectForm({ onCreated }: Props) {
             <MenuItem value="TEMPLATE">TEMPLATE</MenuItem>
           </Select>
         </FormControl>
-        {provisioning === 'TEMPLATE' && (
-          <TextField
-            label="Template slug"
-            value={templateSlug}
-            onChange={(e) => setTemplateSlug(e.target.value)}
-            fullWidth
-          />
+        {provisioning === "TEMPLATE" && (
+          <FormControl fullWidth>
+            <InputLabel id="create-template-label">Template</InputLabel>
+            <Select
+              labelId="create-template-label"
+              id="create-template"
+              label="Template"
+              value={templateSlug}
+              onChange={(e) => setTemplateSlug(e.target.value)}
+            >
+              {templates.map((template) => (
+                <MenuItem key={template.slug} value={template.slug}>
+                  {template.slug}
+                  {template.description ? ` — ${template.description}` : ""}
+                </MenuItem>
+              ))}
+              {templates.length === 0 && (
+                <MenuItem value="" disabled>
+                  No templates returned
+                </MenuItem>
+              )}
+            </Select>
+          </FormControl>
         )}
         <FormControlLabel
-          control={<Switch checked={deployable} onChange={(e) => setDeployable(e.target.checked)} />}
+          control={
+            <Switch
+              checked={deployable}
+              onChange={(e) => setDeployable(e.target.checked)}
+            />
+          }
           label="Deployable"
         />
         <FormControlLabel
           control={
-            <Switch checked={publishable} onChange={(e) => setPublishable(e.target.checked)} />
+            <Switch
+              checked={publishable}
+              onChange={(e) => setPublishable(e.target.checked)}
+            />
           }
-          label="Publishable"
+          label="Publishable (set at create; cannot be changed later)"
         />
         <Button variant="contained" onClick={submit} disabled={busy}>
-          Create
+          {busy ? "Creating…" : "Create"}
         </Button>
       </Stack>
     </Paper>

@@ -34,7 +34,10 @@ export interface AppConfiguration {
     url: string;
     /** Vault URL written to GitLab VAULT_ADDR for CI jobs (external runners need a public URL). */
     ciUrl: string;
+    /** Static token. Empty when AppRole credentials are used instead. */
     token: string;
+    roleId?: string;
+    secretId?: string;
   };
 
   kube: {
@@ -72,6 +75,14 @@ export interface AppConfiguration {
     issuerUrl?: string;
     jwksUrl?: string;
     audience?: string;
+    /** When set, bearer tokens must include this Keycloak group or realm role. */
+    requiredGroup?: string;
+  };
+
+  mcp: {
+    /** Listener inside the API container. Published separately from GraphQL. */
+    port: number;
+    host: string;
   };
 
   sonarqube: {
@@ -98,6 +109,14 @@ const configuration = (): AppConfiguration => {
   const optional = (key: string): string | undefined => process.env[key];
 
   const domain = required('DOMAIN');
+  const vaultToken = optional('VAULT_ROOT_TOKEN') ?? '';
+  const vaultRoleId = optional('VAULT_ROLE_ID');
+  const vaultSecretId = optional('VAULT_SECRET_ID');
+  if (!vaultToken && !(vaultRoleId && vaultSecretId)) {
+    throw new Error(
+      'Missing Vault credentials: set VAULT_ROOT_TOKEN or both VAULT_ROLE_ID and VAULT_SECRET_ID',
+    );
+  }
 
   return {
     port: Number.parseInt(optional('API_PORT') ?? '3000', 10),
@@ -123,7 +142,9 @@ const configuration = (): AppConfiguration => {
     vault: {
       url: optional('VAULT_URL') ?? 'http://vault:8200',
       ciUrl: optional('VAULT_CI_URL') ?? optional('VAULT_URL') ?? 'http://vault:8200',
-      token: required('VAULT_ROOT_TOKEN'),
+      token: vaultToken,
+      roleId: vaultRoleId,
+      secretId: vaultSecretId,
     },
 
     kube: {
@@ -138,10 +159,16 @@ const configuration = (): AppConfiguration => {
       pipelineFile: optional('AUTO_DEVOPS_PIPELINE_FILE') ?? '.gitlab-ci.yml',
     },
 
+    mcp: {
+      port: Number.parseInt(optional('MCP_PORT') ?? '13010', 10),
+      host: optional('MCP_HOST') ?? '0.0.0.0',
+    },
+
     oidc: {
       issuerUrl: optional('OIDC_ISSUER_URL'),
       jwksUrl: optional('OIDC_JWKS_URL'),
       audience: optional('OIDC_AUDIENCE'),
+      requiredGroup: optional('OIDC_REQUIRED_GROUP'),
     },
 
     sonarqube: {
