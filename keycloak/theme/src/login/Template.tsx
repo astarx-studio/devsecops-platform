@@ -194,7 +194,19 @@ function LoginFieldStyles() {
                     cursor: "pointer",
                     background: theme.palette.primary.main,
                     color: theme.palette.primary.contrastText
-                }
+                },
+                ".platform-login input:disabled, .platform-login textarea:disabled, .platform-login select:disabled, .platform-login .pf-c-form-control:disabled":
+                    {
+                        color: theme.palette.text.secondary,
+                        background: `color-mix(in srgb, ${theme.palette.text.primary} 8%, ${theme.palette.background.paper})`,
+                        cursor: "not-allowed"
+                    },
+                ".platform-login input[type='submit']:disabled, .platform-login input[type='button']:disabled, .platform-login button:disabled":
+                    {
+                        background: `color-mix(in srgb, ${theme.palette.text.primary} 8%, ${theme.palette.background.paper})`,
+                        color: theme.palette.text.secondary,
+                        cursor: "not-allowed"
+                    }
             })}
         />
     );

@@ -663,41 +663,135 @@ main .pf-v5-c-table :where(td, th) {
     box-shadow: 0 8px 24px color-mix(in srgb, #000 28%, transparent);
 }
 
-.pf-v5-c-button:disabled,
-.pf-v5-c-button.pf-m-disabled,
-.pf-v5-c-button[aria-disabled="true"],
-.pf-v5-c-menu-toggle:disabled,
-.pf-v5-c-menu-toggle.pf-m-disabled,
-.pf-v5-c-menu-toggle:not(.pf-m-plain):disabled {
+/*
+ * Disabled controls stay muted even when an enabled rule is more specific
+ * or a hover/focus state is also active.
+ */
+.pf-v5-c-button:is(:disabled, .pf-m-disabled, [aria-disabled="true"]),
+.pf-v5-c-button:is(:disabled, .pf-m-disabled, [aria-disabled="true"]):hover,
+.pf-v5-c-button:is(:disabled, .pf-m-disabled, [aria-disabled="true"]):focus,
+.pf-v5-c-button.pf-m-primary:is(:disabled, .pf-m-disabled, [aria-disabled="true"]),
+.pf-v5-c-button.pf-m-primary:is(:disabled, .pf-m-disabled, [aria-disabled="true"]):hover,
+.pf-v5-c-button.pf-m-secondary:is(:disabled, .pf-m-disabled, [aria-disabled="true"]),
+.pf-v5-c-button.pf-m-secondary:is(:disabled, .pf-m-disabled, [aria-disabled="true"]):hover,
+.pf-v5-c-button.pf-m-tertiary:is(:disabled, .pf-m-disabled, [aria-disabled="true"]),
+.pf-v5-c-button.pf-m-tertiary:is(:disabled, .pf-m-disabled, [aria-disabled="true"]):hover,
+.pf-v5-c-button.pf-m-danger:is(:disabled, .pf-m-disabled, [aria-disabled="true"]),
+.pf-v5-c-button.pf-m-danger:is(:disabled, .pf-m-disabled, [aria-disabled="true"]):hover,
+.pf-v5-c-button.pf-m-warning:is(:disabled, .pf-m-disabled, [aria-disabled="true"]),
+.pf-v5-c-button.pf-m-control:is(:disabled, .pf-m-disabled, [aria-disabled="true"]),
+.pf-v5-c-button.pf-m-control:is(:disabled, .pf-m-disabled, [aria-disabled="true"]):hover,
+.pf-v5-c-toolbar .pf-v5-c-input-group .pf-v5-c-button.pf-m-control:is(:disabled, .pf-m-disabled, [aria-disabled="true"]),
+.pf-v5-c-clipboard-copy__group .pf-v5-c-button:is(:disabled, .pf-m-disabled, [aria-disabled="true"]),
+.pf-v5-c-input-group .pf-v5-c-button:is(:disabled, .pf-m-disabled, [aria-disabled="true"]),
+.pf-v5-c-number-input__button:is(:disabled, .pf-m-disabled, [aria-disabled="true"]),
+.pf-v5-c-toggle-group__button:is(:disabled, .pf-m-disabled, [aria-disabled="true"]),
+.pf-v5-c-toggle-group__button.pf-m-selected:is(:disabled, .pf-m-disabled, [aria-disabled="true"]),
+.pf-v5-c-menu-toggle:not(.pf-m-plain):is(:disabled, .pf-m-disabled, [aria-disabled="true"]),
+.pf-v5-c-menu-toggle:not(.pf-m-plain):is(:disabled, .pf-m-disabled, [aria-disabled="true"]):hover,
+.pf-v5-c-menu-toggle:not(.pf-m-plain):is(:disabled, .pf-m-disabled, [aria-disabled="true"]):focus,
+.pf-v5-c-select__toggle:is(:disabled, .pf-m-disabled, [aria-disabled="true"]) {
+    --pf-v5-c-button--m-primary--BackgroundColor: color-mix(in srgb, var(--platform-text) 8%, var(--platform-surface));
+    --pf-v5-c-button--m-secondary--BackgroundColor: color-mix(in srgb, var(--platform-text) 8%, var(--platform-surface));
+    --pf-v5-c-button--m-control--BackgroundColor: color-mix(in srgb, var(--platform-text) 8%, var(--platform-surface));
+    --pf-v5-c-button--disabled--Color: var(--platform-muted);
+    --pf-v5-c-toggle-group__button--BackgroundColor: color-mix(in srgb, var(--platform-text) 8%, var(--platform-surface));
+    --pf-v5-c-toggle-group__button--m-selected--BackgroundColor: color-mix(in srgb, var(--platform-text) 8%, var(--platform-surface));
     color: var(--platform-muted);
-    background-color: color-mix(
-        in srgb,
-        var(--platform-text) 8%,
-        var(--platform-surface)
-    );
+    background-color: color-mix(in srgb, var(--platform-text) 8%, var(--platform-surface));
     border-color: var(--platform-line);
     box-shadow: none;
     cursor: not-allowed;
 }
 
-.pf-v5-c-button.pf-m-plain:disabled,
-.pf-v5-c-button.pf-m-link:disabled,
-.pf-v5-c-menu-toggle.pf-m-plain:disabled,
-.pf-v5-c-menu-toggle.pf-m-plain.pf-m-disabled {
-    background-color: transparent;
+.pf-v5-c-button:is(:disabled, .pf-m-disabled, [aria-disabled="true"]) svg,
+.pf-v5-c-menu-toggle:is(:disabled, .pf-m-disabled, [aria-disabled="true"]) svg {
     color: var(--platform-muted);
+    fill: currentColor;
 }
 
-.pf-v5-c-form-control:disabled,
+.pf-v5-c-button.pf-m-plain:is(:disabled, .pf-m-disabled, [aria-disabled="true"]),
+.pf-v5-c-button.pf-m-plain:is(:disabled, .pf-m-disabled, [aria-disabled="true"]):hover,
+.pf-v5-c-button.pf-m-link:is(:disabled, .pf-m-disabled, [aria-disabled="true"]),
+.pf-v5-c-button.pf-m-link:is(:disabled, .pf-m-disabled, [aria-disabled="true"]):hover,
+.pf-v5-c-table .pf-v5-c-button.pf-m-plain:is(:disabled, .pf-m-disabled, [aria-disabled="true"]),
+.pf-v5-c-pagination .pf-v5-c-button:is(:disabled, .pf-m-disabled, [aria-disabled="true"]),
+.pf-v5-c-menu-toggle.pf-m-plain:is(:disabled, .pf-m-disabled, [aria-disabled="true"]),
+.pf-v5-c-menu-toggle.pf-m-plain:is(:disabled, .pf-m-disabled, [aria-disabled="true"]):hover,
+.pf-v5-c-menu-toggle.pf-m-plain:is(:disabled, .pf-m-disabled, [aria-disabled="true"]):focus,
+main a:not(.pf-v5-c-button):is(:disabled, .pf-m-disabled, [aria-disabled="true"]) {
+    background-color: transparent;
+    border-color: transparent;
+    color: var(--platform-muted);
+    box-shadow: none;
+    cursor: not-allowed;
+}
+
+.pf-v5-c-menu-toggle:not(.pf-m-plain):is(:disabled, .pf-m-disabled, [aria-disabled="true"])::before,
+.pf-v5-c-form-control:is(:disabled, :has(:disabled))::before,
+.pf-v5-theme-dark .pf-v5-c-form-control:is(:disabled, :has(:disabled))::before {
+    border-color: var(--platform-line);
+}
+
+.pf-v5-c-form-control:is(:disabled, .pf-m-disabled, :has(:disabled)),
+.pf-v5-theme-dark .pf-v5-c-form-control:is(:disabled, .pf-m-disabled, :has(:disabled)),
+.pf-v5-c-clipboard-copy__group .pf-v5-c-form-control:is(:disabled, :has(:disabled)),
+.pf-v5-c-text-input-group:is(:disabled, :has(input:disabled), :has(textarea:disabled)),
+.pf-v5-theme-dark .pf-v5-c-text-input-group:is(:disabled, :has(input:disabled), :has(textarea:disabled)),
 .pf-v5-c-form-control > input:disabled,
+.pf-v5-c-form-control > textarea:disabled,
+.pf-v5-c-text-input-group__text-input:disabled,
 input:disabled,
 textarea:disabled,
 select:disabled {
     color: var(--platform-muted);
-    background-color: color-mix(
-        in srgb,
-        var(--platform-text) 8%,
-        var(--platform-surface)
-    );
+    background-color: color-mix(in srgb, var(--platform-text) 8%, var(--platform-surface));
+    border-color: var(--platform-line);
+    cursor: not-allowed;
+}
+
+.pf-v5-c-menu__item:is(:disabled, .pf-m-disabled, [aria-disabled="true"]),
+.pf-v5-c-menu__item:is(:disabled, .pf-m-disabled, [aria-disabled="true"]):hover,
+.pf-v5-c-menu__list-item:is(.pf-m-disabled, [aria-disabled="true"]) .pf-v5-c-menu__item,
+.pf-v5-c-dropdown__menu-item:is(:disabled, .pf-m-disabled, [aria-disabled="true"]),
+.pf-v5-c-select__menu-item:is(:disabled, .pf-m-disabled, [aria-disabled="true"]),
+.pf-v5-c-tabs__item.pf-m-disabled .pf-v5-c-tabs__link,
+.pf-v5-c-tabs__link:is(:disabled, .pf-m-disabled, [aria-disabled="true"]),
+.pf-v5-c-wizard__nav-link:is(:disabled, .pf-m-disabled, [aria-disabled="true"]) {
+    color: var(--platform-muted);
+    background-color: transparent;
+    cursor: not-allowed;
+}
+
+.pf-v5-c-switch__input:disabled ~ .pf-v5-c-switch__toggle,
+.pf-v5-c-switch__input:disabled:checked ~ .pf-v5-c-switch__toggle {
+    background-color: color-mix(in srgb, var(--platform-text) 14%, var(--platform-surface));
+    border-color: var(--platform-line);
+    cursor: not-allowed;
+}
+
+.pf-v5-c-switch__input:disabled:checked ~ .pf-v5-c-switch__toggle {
+    background-color: color-mix(in srgb, var(--platform-brand) 28%, var(--platform-surface));
+}
+
+.pf-v5-c-switch__input:disabled ~ .pf-v5-c-switch__label,
+.pf-v5-c-check__input:disabled ~ .pf-v5-c-check__label,
+.pf-v5-c-radio__input:disabled ~ .pf-v5-c-radio__label,
+.pf-v5-c-check__input:disabled ~ .pf-v5-c-check__label .pf-v5-c-check__label-text,
+.pf-v5-c-radio__input:disabled ~ .pf-v5-c-radio__label .pf-v5-c-radio__label-text {
+    color: var(--platform-muted);
+    cursor: not-allowed;
+}
+
+.pf-v5-c-check:has(input:disabled),
+.pf-v5-c-radio:has(input:disabled),
+.pf-v5-c-slider.pf-m-disabled,
+.pf-v5-c-dual-list-selector.pf-m-disabled {
+    cursor: not-allowed;
+}
+
+.pf-v5-c-check__input:disabled,
+.pf-v5-c-radio__input:disabled {
+    accent-color: var(--platform-muted);
     cursor: not-allowed;
 }
