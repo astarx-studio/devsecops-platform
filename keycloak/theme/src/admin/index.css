@@ -5,6 +5,22 @@
  * $ npx keycloakify own --path "admin/index.css" --revert
  */
 
+html,
+body,
+#root {
+    min-height: 100%;
+    background: var(--platform-canvas) !important;
+    background-image: none !important;
+}
+
+.platform-sidebar {
+    background-color: transparent !important;
+    background-image: var(--platform-bg) !important;
+    background-attachment: fixed !important;
+    background-size: cover !important;
+    color: var(--platform-text);
+}
+
 img.keycloak__pageheader_brand {
     height: 35px;
 }

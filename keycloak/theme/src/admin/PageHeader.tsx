@@ -9,148 +9,175 @@
 
 // @ts-nocheck
 
+import { useState } from "react";
+import AppBar from "@mui/material/AppBar";
+import Box from "@mui/material/Box";
+import Button from "@mui/material/Button";
+import IconButton from "@mui/material/IconButton";
+import Menu from "@mui/material/Menu";
+import MenuItem from "@mui/material/MenuItem";
+import Stack from "@mui/material/Stack";
+import Toolbar from "@mui/material/Toolbar";
+import Typography from "@mui/material/Typography";
+import DarkModeIcon from "@mui/icons-material/DarkMode";
+import LightModeIcon from "@mui/icons-material/LightMode";
+import MenuIcon from "@mui/icons-material/Menu";
+import { useTranslation } from "react-i18next";
+import { Link } from "react-router-dom";
+import { useEnvironment } from "../shared/keycloak-ui-shared";
 import logoLight from "../assets/logo-light.png";
 import logoDark from "../assets/logo-dark.png";
 import faviconLight from "../assets/favicon-light.ico";
 import faviconDark from "../assets/favicon-dark.ico";
-import { useDawnBrand } from "../theme/useDawnBrand";
-import { KeycloakMasthead, useEnvironment, useHelp } from "../shared/keycloak-ui-shared";
-import { DropdownItem, ToolbarItem } from "../shared/@patternfly/react-core";
-import { HelpIcon } from "../shared/@patternfly/react-icons";
-import { useTranslation } from "react-i18next";
-import { Link, useHref } from "react-router-dom";
+import { applyPlatformFavicon, type PlatformMode } from "../theme/colorMode";
 import { PageHeaderClearCachesModal } from "./PageHeaderClearCachesModal";
 import { HelpHeader } from "./components/help-enabler/HelpHeader";
 import { useAccess } from "./context/access/Access";
 import { useRealm } from "./context/realm-context/RealmContext";
+import { useWhoAmI } from "./context/whoami/WhoAmI";
 import { toDashboard } from "./dashboard/routes/Dashboard";
 import type { Environment } from "./environment-types";
-import { usePreviewLogo } from "./realm-settings/themes/LogoContext";
-import { joinPath } from "./utils/joinPath";
 import { useIsFeatureDisabled, Feature } from "./utils/useIsFeatureEnabled";
-import useToggle from "./utils/useToggle";
+import { setPlatformAdminMode } from "./colorScheme";
 
-const ManageAccountDropdownItem = () => {
-    const { keycloak } = useEnvironment();
-    const { t } = useTranslation();
-    const isFeatureDisabled = useIsFeatureDisabled();
-
-    if (isFeatureDisabled(Feature.AccountV3)) {
-        return null;
-    }
-
-    return (
-        <DropdownItem
-            key="manage account"
-            id="manage-account"
-            onClick={() => keycloak.accountManagement()}
-        >
-            {t("manageAccount")}
-        </DropdownItem>
-    );
+type HeaderProps = {
+    mode: PlatformMode;
+    onToggleMode: () => void;
+    onOpenNav: () => void;
 };
 
-const ServerInfoDropdownItem = () => {
-    const { realm } = useRealm();
-    const { t } = useTranslation();
-
-    return (
-        <DropdownItem
-            key="server info"
-            component={props => <Link {...props} to={toDashboard({ realm })} />}
-        >
-            {t("realmInfo")}
-        </DropdownItem>
-    );
-};
-
-const ClearCachesDropdownItem = () => {
-    const { t } = useTranslation();
-    const [open, toggleModal] = useToggle();
-
-    return (
-        <>
-            <DropdownItem key="clear caches" onClick={() => toggleModal()}>
-                {t("clearCachesTitle")}
-            </DropdownItem>
-            {open && <PageHeaderClearCachesModal onClose={() => toggleModal()} />}
-        </>
-    );
-};
-
-const HelpDropdownItem = () => {
-    const { t } = useTranslation();
-    const { enabled, toggleHelp } = useHelp();
-    return (
-        <DropdownItem data-testId="helpIcon" icon={<HelpIcon />} onClick={toggleHelp}>
-            {enabled ? t("helpEnabled") : t("helpDisabled")}
-        </DropdownItem>
-    );
-};
-
-const kebabDropdownItems = (isMasterRealm: boolean, isManager: boolean) => [
-    <ManageAccountDropdownItem key="kebab Manage Account" />,
-    <ServerInfoDropdownItem key="kebab Server Info" />,
-    ...(isMasterRealm && isManager
-        ? [<ClearCachesDropdownItem key="Clear Caches" />]
-        : []),
-    <HelpDropdownItem key="kebab Help" />
-];
-
-const userDropdownItems = (isMasterRealm: boolean, isManager: boolean) => [
-    <ManageAccountDropdownItem key="Manage Account" />,
-    <ServerInfoDropdownItem key="Server info" />,
-    ...(isMasterRealm && isManager
-        ? [<ClearCachesDropdownItem key="Clear Caches" />]
-        : [])
-];
-
-export const Header = () => {
+export const Header = ({ mode, onToggleMode, onOpenNav }: HeaderProps) => {
     const { environment, keycloak } = useEnvironment<Environment>();
     const { t } = useTranslation();
     const { realm } = useRealm();
     const { hasAccess } = useAccess();
-
-    const brandSrc = useDawnBrand({
-        lightLogo: logoLight,
-        darkLogo: logoDark,
-        lightIcon: faviconLight,
-        darkIcon: faviconDark
-    });
-    const contextLogo = usePreviewLogo();
-    const customLogo = contextLogo?.logo;
-
+    const { whoAmI } = useWhoAmI();
+    const isFeatureDisabled = useIsFeatureDisabled();
+    const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null);
+    const [clearCachesOpen, setClearCachesOpen] = useState(false);
+    const token = keycloak.idTokenParsed ?? keycloak.tokenParsed;
+    const givenName = token?.given_name;
+    const familyName = token?.family_name;
+    const username =
+        whoAmI.displayName ||
+        (givenName && familyName
+            ? t("fullName", { givenName, familyName })
+            : givenName || familyName || token?.preferred_username || t("unknownUser"));
     const isMasterRealm = realm === environment.masterRealm;
     const isManager = hasAccess("manage-realm");
 
-    const url = useHref(toDashboard({ realm }));
-    const logoUrl = environment.logoUrl ? environment.logoUrl : url;
+    applyPlatformFavicon(mode === "dark" ? faviconDark : faviconLight);
 
     return (
-        <KeycloakMasthead
-            data-testid="page-header"
-            keycloak={keycloak}
-            features={{ hasManageAccount: false }}
-            brand={{
-                href: logoUrl,
-                src: customLogo?.trim() ? customLogo : brandSrc,
-                alt: "YADA DSOaaS",
-                className: "keycloak__pageheader_brand"
+        <AppBar
+            position="fixed"
+            color="inherit"
+            elevation={0}
+            sx={{
+                zIndex: theme => theme.zIndex.drawer + 1,
+                borderBottom: 1,
+                borderColor: "divider",
+                backgroundImage: "none"
             }}
-            dropdownItems={userDropdownItems(isMasterRealm, isManager)}
-            kebabDropdownItems={kebabDropdownItems(isMasterRealm, isManager)}
-            toolbarItems={[
-                <ToolbarItem
-                    key="help"
-                    align={{ default: "alignRight" }}
-                    visibility={{
-                        default: "hidden",
-                        md: "visible"
-                    }} /** the settings and help icon buttons are only visible on desktop sizes and replaced by a kebab dropdown for other sizes */
+        >
+            <Toolbar>
+                <IconButton
+                    edge="start"
+                    aria-label="Open admin menu"
+                    onClick={onOpenNav}
+                    sx={{ mr: 1, display: { md: "none" } }}
                 >
+                    <MenuIcon />
+                </IconButton>
+                <Box
+                    component={Link}
+                    to={toDashboard({ realm })}
+                    sx={{
+                        display: "flex",
+                        alignItems: "center",
+                        color: "inherit",
+                        textDecoration: "none",
+                        flexGrow: 1
+                    }}
+                >
+                    <Box
+                        component="img"
+                        src={mode === "dark" ? logoDark : logoLight}
+                        alt="YADA DSOaaS"
+                        sx={{ width: 32, height: 32, mr: 1.25 }}
+                    />
+                    <Typography variant="h6">YADA DSOaaS</Typography>
+                </Box>
+                <Stack direction="row" spacing={0.5} sx={{ alignItems: "center" }}>
                     <HelpHeader />
-                </ToolbarItem>
-            ]}
-        />
+                    <IconButton
+                        aria-label={
+                            mode === "dark"
+                                ? "Use the brighter dawn"
+                                : "Use the darker dawn"
+                        }
+                        onClick={() => {
+                            const next = mode === "dark" ? "light" : "dark";
+                            setPlatformAdminMode(next);
+                            onToggleMode();
+                        }}
+                    >
+                        {mode === "dark" ? <LightModeIcon /> : <DarkModeIcon />}
+                    </IconButton>
+                    <Button
+                        color="inherit"
+                        aria-label={username}
+                        onClick={event => setMenuAnchor(event.currentTarget)}
+                        sx={{ textTransform: "none" }}
+                    >
+                        {username}
+                    </Button>
+                    <Menu
+                        anchorEl={menuAnchor}
+                        open={Boolean(menuAnchor)}
+                        onClose={() => setMenuAnchor(null)}
+                    >
+                        {!isFeatureDisabled(Feature.AccountV3) && (
+                            <MenuItem
+                                onClick={() => {
+                                    setMenuAnchor(null);
+                                    keycloak.accountManagement();
+                                }}
+                            >
+                                {t("manageAccount")}
+                            </MenuItem>
+                        )}
+                        <MenuItem
+                            component={Link}
+                            to={toDashboard({ realm })}
+                            onClick={() => setMenuAnchor(null)}
+                        >
+                            {t("realmInfo")}
+                        </MenuItem>
+                        {isMasterRealm && isManager && (
+                            <MenuItem
+                                onClick={() => {
+                                    setMenuAnchor(null);
+                                    setClearCachesOpen(true);
+                                }}
+                            >
+                                {t("clearCachesTitle")}
+                            </MenuItem>
+                        )}
+                        <MenuItem
+                            onClick={() => {
+                                setMenuAnchor(null);
+                                keycloak.logout();
+                            }}
+                        >
+                            {t("signOut")}
+                        </MenuItem>
+                    </Menu>
+                </Stack>
+            </Toolbar>
+            {clearCachesOpen && (
+                <PageHeaderClearCachesModal onClose={() => setClearCachesOpen(false)} />
+            )}
+        </AppBar>
     );
 };

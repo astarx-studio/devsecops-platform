@@ -183,7 +183,7 @@ function LoginFieldStyles() {
                 ".platform-login a:not(.MuiLink-root):not(.MuiButton-root)": {
                     color: theme.palette.secondary.main
                 },
-                ".platform-login input[type='submit']": {
+                ".platform-login input[type='submit'], .platform-login input[type='button']": {
                     width: "100%",
                     marginTop: 8,
                     border: 0,

@@ -16,6 +16,7 @@ import { routes } from "./routes";
 
 import "./index.css";
 import "../theme/shell.css";
+import "./content.css";
 
 document.title = "YADA DSOaaS";
 

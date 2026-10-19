@@ -1,0 +1,703 @@
+/*
+ * Dawn surface for every admin tool. The pages stay Keycloak's screens.
+ * These tokens and parts are what those screens are built from, so the
+ * palette covers lists, forms, dialogs, wizards, and empty states together.
+ */
+
+:root,
+[data-platform-mode="light"] {
+    --pf-v5-global--BackgroundColor--100: var(--platform-surface);
+    --pf-v5-global--BackgroundColor--150: #fff6ec;
+    --pf-v5-global--BackgroundColor--200: #f6eadc;
+    --pf-v5-global--BackgroundColor--300: #efe0d0;
+    --pf-v5-global--BackgroundColor--400: #e7d3c0;
+    --pf-v5-global--BackgroundColor--light-100: var(--platform-surface);
+    --pf-v5-global--BackgroundColor--light-200: #fff6ec;
+    --pf-v5-global--BackgroundColor--light-300: var(--platform-canvas);
+    --pf-v5-global--Color--100: var(--platform-text);
+    --pf-v5-global--Color--200: var(--platform-muted);
+    --pf-v5-global--Color--300: var(--platform-text);
+    --pf-v5-global--Color--400: var(--platform-muted);
+    --pf-v5-global--Color--dark-100: var(--platform-text);
+    --pf-v5-global--Color--dark-200: var(--platform-muted);
+    --pf-v5-global--Color--light-100: var(--platform-text);
+    --pf-v5-global--BorderColor--100: var(--platform-line);
+    --pf-v5-global--BorderColor--200: #e4cbb4;
+    --pf-v5-global--BorderColor--300: var(--platform-line);
+    --pf-v5-global--BorderColor--dark-100: var(--platform-line);
+    --pf-v5-global--BorderColor--light-100: var(--platform-line);
+    --pf-v5-global--primary-color--100: var(--platform-brand);
+    --pf-v5-global--primary-color--200: var(--platform-brand-hover);
+    --pf-v5-global--primary-color--dark-100: var(--platform-brand);
+    --pf-v5-global--primary-color--light-100: var(--platform-brand);
+    --pf-v5-global--active-color--100: var(--platform-brand);
+    --pf-v5-global--active-color--200: color-mix(
+        in srgb,
+        var(--platform-brand) 18%,
+        var(--platform-surface)
+    );
+    --pf-v5-global--active-color--300: var(--platform-brand-hover);
+    --pf-v5-global--active-color--400: var(--platform-brand-hover);
+    --pf-v5-global--link--Color: var(--platform-brand);
+    --pf-v5-global--link--Color--hover: var(--platform-brand-hover);
+    --pf-v5-global--link--Color--dark: var(--platform-brand);
+    --pf-v5-global--link--Color--dark--hover: var(--platform-brand-hover);
+    --pf-v5-global--link--Color--light: var(--platform-brand);
+    --pf-v5-global--link--Color--light--hover: var(--platform-brand-hover);
+    --pf-v5-global--link--Color--visited: var(--platform-brand-hover);
+    --pf-v5-global--disabled-color--100: var(--platform-muted);
+    --pf-v5-global--disabled-color--200: var(--platform-line);
+    --pf-v5-global--disabled-color--300: #f6eadc;
+    --pf-v5-global--icon--Color--light: var(--platform-muted);
+    --pf-v5-global--icon--Color--dark: var(--platform-text);
+    --pf-v5-global--FontFamily--text: var(--platform-font);
+    --pf-v5-global--FontFamily--heading: var(--platform-font);
+    --pf-v5-global--BorderRadius--sm: 10px;
+    --pf-v5-c-page__main-section--BackgroundColor: var(--platform-surface);
+    --pf-v5-c-page__main-section--m-light--BackgroundColor: var(--platform-surface);
+    --pf-v5-c-page__main-section--m-light-100--BackgroundColor: var(--platform-surface);
+}
+
+.pf-v5-theme-dark,
+[data-platform-mode="dark"] {
+    --pf-v5-global--BackgroundColor--100: var(--platform-surface);
+    --pf-v5-global--BackgroundColor--150: #222b42;
+    --pf-v5-global--BackgroundColor--200: #10182c;
+    --pf-v5-global--BackgroundColor--300: #243049;
+    --pf-v5-global--BackgroundColor--400: #2c3854;
+    --pf-v5-global--BackgroundColor--light-100: var(--platform-surface);
+    --pf-v5-global--BackgroundColor--light-200: #10182c;
+    --pf-v5-global--BackgroundColor--light-300: #243049;
+    --pf-v5-global--BackgroundColor--dark-100: var(--platform-surface);
+    --pf-v5-global--BackgroundColor--dark-200: #10182c;
+    --pf-v5-global--BackgroundColor--dark-300: #243049;
+    --pf-v5-global--BackgroundColor--dark-400: #2c3854;
+    --pf-v5-global--Color--100: var(--platform-text);
+    --pf-v5-global--Color--200: var(--platform-muted);
+    --pf-v5-global--Color--300: var(--platform-text);
+    --pf-v5-global--Color--dark-100: var(--platform-text);
+    --pf-v5-global--Color--dark-200: var(--platform-muted);
+    --pf-v5-global--Color--light-100: var(--platform-text);
+    --pf-v5-global--Color--light-200: var(--platform-muted);
+    --pf-v5-global--BorderColor--100: var(--platform-line);
+    --pf-v5-global--BorderColor--200: var(--platform-line);
+    --pf-v5-global--BorderColor--300: #4a5878;
+    --pf-v5-global--BorderColor--400: var(--platform-muted);
+    --pf-v5-global--BorderColor--dark-100: var(--platform-line);
+    --pf-v5-global--BorderColor--light-100: var(--platform-line);
+    --pf-v5-global--primary-color--100: var(--platform-brand);
+    --pf-v5-global--primary-color--200: var(--platform-brand-hover);
+    --pf-v5-global--primary-color--300: var(--platform-brand);
+    --pf-v5-global--primary-color--400: var(--platform-brand-contrast);
+    --pf-v5-global--primary-color--dark-100: var(--platform-brand);
+    --pf-v5-global--primary-color--light-100: var(--platform-brand);
+    --pf-v5-global--active-color--100: var(--platform-brand);
+    --pf-v5-global--active-color--200: color-mix(
+        in srgb,
+        var(--platform-brand) 22%,
+        var(--platform-surface)
+    );
+    --pf-v5-global--link--Color: var(--platform-brand);
+    --pf-v5-global--link--Color--hover: var(--platform-brand-hover);
+    --pf-v5-global--link--Color--dark: var(--platform-brand);
+    --pf-v5-global--link--Color--dark--hover: var(--platform-brand-hover);
+    --pf-v5-global--link--Color--light: var(--platform-brand);
+    --pf-v5-global--link--Color--light--hover: var(--platform-brand-hover);
+    --pf-v5-global--link--Color--visited: var(--platform-brand-hover);
+    --pf-v5-global--disabled-color--100: var(--platform-muted);
+    --pf-v5-global--disabled-color--200: var(--platform-line);
+    --pf-v5-global--disabled-color--300: #8d7b6c;
+    --pf-v5-global--icon--Color--light: var(--platform-text);
+    --pf-v5-global--icon--Color--dark: var(--platform-text);
+    --pf-v5-global--icon--Color--light--light: var(--platform-text);
+    --pf-v5-global--icon--Color--dark--light: var(--platform-text);
+    --pf-v5-global--icon--Color--light--dark: var(--platform-text);
+    --pf-v5-global--icon--Color--dark--dark: var(--platform-text);
+    --pf-v5-c-page__main-section--BackgroundColor: var(--platform-surface);
+    --pf-v5-c-page__main-section--m-light--BackgroundColor: var(--platform-surface);
+    --pf-v5-c-page__main-nav--BackgroundColor: var(--platform-surface);
+    --pf-v5-c-page__main-breadcrumb--BackgroundColor: transparent;
+}
+
+main .pf-v5-c-page__main-section,
+.pf-v5-c-card,
+.pf-v5-c-panel,
+.pf-v5-c-modal-box,
+.pf-v5-c-menu,
+.pf-v5-c-wizard,
+.pf-v5-c-drawer__panel,
+.pf-v5-c-alert {
+    border-radius: var(--platform-radius);
+}
+
+main .pf-v5-c-page__main-section {
+    background-color: var(--platform-surface);
+    color: var(--platform-text);
+    border: 1px solid var(--platform-line);
+}
+
+.pf-v5-c-card,
+.pf-v5-c-panel,
+.pf-v5-c-modal-box,
+.pf-v5-c-menu,
+.pf-v5-c-wizard,
+.pf-v5-c-alert {
+    border: 1px solid var(--platform-line);
+    background-color: var(--platform-surface);
+    color: var(--platform-text);
+}
+
+.pf-v5-c-title,
+.pf-v5-c-content h1,
+.pf-v5-c-content h2,
+.pf-v5-c-content h3,
+.pf-v5-c-content h4 {
+    color: var(--platform-header);
+}
+
+.pf-v5-c-tabs {
+    background: transparent;
+}
+
+.pf-v5-c-tabs__link,
+.pf-v5-c-tabs__item {
+    color: var(--platform-text);
+}
+
+.pf-v5-c-tabs__item.pf-m-current .pf-v5-c-tabs__link::after,
+.pf-v5-c-tabs__link::after {
+    border-color: var(--platform-brand);
+}
+
+.pf-v5-c-table {
+    --pf-v5-c-table--BackgroundColor: var(--platform-surface);
+    --pf-v5-c-table--BorderColor: var(--platform-line);
+    color: var(--platform-text);
+    background-color: var(--platform-surface);
+}
+
+.pf-v5-c-table tr,
+.pf-v5-c-table th,
+.pf-v5-c-table td,
+.pf-v5-c-table__expandable-row-content {
+    background-color: var(--platform-surface);
+    color: var(--platform-text);
+    border-color: var(--platform-line);
+}
+
+.pf-v5-c-table thead th,
+.pf-v5-c-table tr.pf-v5-c-table__header {
+    color: var(--platform-muted);
+}
+
+.pf-v5-c-table tbody tr:hover td,
+.pf-v5-c-table tbody tr:hover th {
+    background-color: color-mix(
+        in srgb,
+        var(--platform-brand) 8%,
+        var(--platform-surface)
+    );
+}
+
+.pf-v5-c-data-list,
+.pf-v5-c-data-list__item,
+.pf-v5-c-description-list,
+.pf-v5-c-expandable-section,
+.pf-v5-c-toolbar,
+.pf-v5-c-pagination,
+.pf-v5-c-empty-state,
+.pf-v5-c-jump-links,
+.pf-v5-c-tree-view,
+.pf-v5-c-dual-list-selector,
+.pf-v5-c-clipboard-copy {
+    color: var(--platform-text);
+    background-color: transparent;
+}
+
+.pf-v5-c-form-control,
+.pf-v5-c-form-control > input,
+.pf-v5-c-form-control > textarea,
+.pf-v5-c-text-input-group,
+.pf-v5-c-text-input-group__text-input,
+.pf-v5-c-menu-toggle:not(.pf-m-plain),
+.pf-v5-c-select__toggle,
+input.pf-v5-c-form-control,
+textarea.pf-v5-c-form-control,
+select.pf-v5-c-form-control {
+    background-color: var(--platform-surface);
+    color: var(--platform-text);
+    border-color: var(--platform-line);
+    border-radius: 10px;
+}
+
+.pf-v5-c-form-control:focus,
+.pf-v5-c-form-control:focus-within,
+.pf-v5-c-menu-toggle:not(.pf-m-plain):focus,
+.pf-v5-c-menu-toggle:not(.pf-m-plain).pf-m-focus {
+    border-color: var(--platform-brand);
+    box-shadow: 0 0 0 1px var(--platform-brand);
+}
+
+.pf-v5-c-form__label,
+.pf-v5-c-form__label-text,
+.pf-v5-c-helper-text,
+.pf-v5-c-form__helper-text {
+    color: var(--platform-text);
+}
+
+.pf-v5-c-helper-text,
+.pf-v5-c-form__helper-text {
+    color: var(--platform-muted);
+}
+
+.pf-v5-c-switch__toggle {
+    border-color: var(--platform-line);
+}
+
+.pf-v5-c-switch__input:checked ~ .pf-v5-c-switch__toggle {
+    background-color: var(--platform-brand);
+    border-color: var(--platform-brand);
+}
+
+.pf-v5-c-label {
+    border-radius: 999px;
+}
+
+.pf-v5-c-breadcrumb,
+.pf-v5-c-breadcrumb__link,
+.pf-v5-c-breadcrumb__item {
+    color: var(--platform-muted);
+}
+
+main a:not(.pf-v5-c-button),
+.pf-v5-c-button.pf-m-link {
+    color: var(--platform-brand);
+}
+
+.pf-v5-c-button.pf-m-secondary,
+.pf-v5-c-button.pf-m-control,
+.pf-v5-c-button.pf-m-tertiary {
+    border-radius: 10px;
+}
+
+.pf-v5-c-button.pf-m-primary,
+.pf-v5-c-button.pf-m-secondary {
+    border-radius: 10px;
+}
+
+.keycloak__form_actions {
+    background-color: var(--platform-surface);
+    border-top-color: var(--platform-line);
+    color: var(--platform-text);
+}
+
+.pf-v5-c-modal-box__header,
+.pf-v5-c-modal-box__body,
+.pf-v5-c-modal-box__footer,
+.pf-v5-c-wizard__main,
+.pf-v5-c-wizard__footer,
+.pf-v5-c-menu__content,
+.pf-v5-c-menu__list-item,
+.pf-v5-c-menu__item {
+    background-color: var(--platform-surface);
+    color: var(--platform-text);
+}
+
+.pf-v5-c-menu__item:hover,
+.pf-v5-c-menu__list-item:hover {
+    background-color: color-mix(
+        in srgb,
+        var(--platform-brand) 10%,
+        var(--platform-surface)
+    );
+}
+
+.pf-v5-c-alert.pf-m-info {
+    --pf-v5-c-alert--BackgroundColor: color-mix(
+        in srgb,
+        var(--platform-brand) 12%,
+        var(--platform-surface)
+    );
+}
+
+.pf-v5-c-alert.pf-m-warning,
+.pf-v5-c-banner.pf-m-gold {
+    --pf-v5-c-alert--BackgroundColor: color-mix(
+        in srgb,
+        var(--platform-secondary) 18%,
+        var(--platform-surface)
+    );
+}
+
+.pf-v5-c-empty-state__title,
+.pf-v5-c-empty-state__body {
+    color: var(--platform-text);
+}
+
+.pf-v5-c-code-block,
+.pf-v5-c-code-editor,
+div.w-tc-editor {
+    border-radius: 10px;
+    border: 1px solid var(--platform-line);
+}
+
+/* One card per screen: neighboring sections share a single outline. */
+#kc-main-content-page-container {
+    display: flex;
+    flex-direction: column;
+    min-height: calc(100vh - 64px);
+}
+
+#kc-main-content-page-container > .pf-v5-c-page__main-section:last-of-type {
+    flex: 1 1 auto;
+}
+
+main .pf-v5-c-page__main-section {
+    margin-bottom: 0;
+}
+
+main .pf-v5-c-page__main-section + .pf-v5-c-page__main-section {
+    margin-top: -1px;
+    border-top-left-radius: 0;
+    border-top-right-radius: 0;
+}
+
+main .pf-v5-c-page__main-section:has(+ .pf-v5-c-page__main-section) {
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
+}
+
+/* A divider between the title and the list is the card seam, not a second rounded box. */
+#kc-main-content-page-container > .pf-v5-c-page__main-section:has(+ .pf-v5-c-divider) {
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
+}
+
+#kc-main-content-page-container > .pf-v5-c-divider + .pf-v5-c-page__main-section {
+    margin-top: -1px;
+    border-top-width: 0;
+    border-top-left-radius: 0;
+    border-top-right-radius: 0;
+}
+
+/* A section inside a card or a split pane is content. A second outline leaves corner gaps. */
+.pf-v5-c-page__main-section .pf-v5-c-page__main-section,
+.pf-v5-c-drawer .pf-v5-c-page__main-section {
+    border: 0;
+    border-radius: 0;
+    margin-top: 0;
+    background-color: transparent;
+}
+
+.pf-v5-c-page__main-section .pf-v5-c-drawer__panel,
+.pf-v5-c-page__main-section .pf-v5-c-drawer__content {
+    border-radius: 0;
+    box-shadow: none;
+}
+
+main .pf-v5-c-divider {
+    --pf-v5-c-divider--BackgroundColor: var(--platform-line);
+    --pf-v5-c-divider--after--Inset: 0;
+}
+
+.pf-v5-c-drawer__panel .pf-v5-c-drawer__body > .pf-v5-c-drawer__head > .pf-v5-c-divider {
+    width: calc(
+        100% + var(--pf-v5-c-drawer--child--PaddingLeft) +
+            var(--pf-v5-c-drawer--child--PaddingRight)
+    );
+    margin-inline: calc(var(--pf-v5-c-drawer--child--PaddingLeft) * -1);
+}
+
+.pf-v5-c-page__main-section .pf-v5-c-drawer__splitter {
+    background-color: transparent;
+    --pf-v5-c-drawer__splitter--after--BorderColor: var(--platform-line);
+}
+
+/* Search sits in the card, and the arrow belongs to the field. */
+.pf-v5-c-text-input-group,
+.pf-v5-theme-dark .pf-v5-c-text-input-group {
+    --pf-v5-c-text-input-group--BackgroundColor: var(--platform-surface);
+    background-color: var(--platform-surface);
+    color: var(--platform-text);
+    border: 1px solid var(--platform-line);
+    border-radius: 10px;
+}
+
+.pf-v5-c-input-group .pf-v5-c-text-input-group {
+    border-start-end-radius: 0;
+    border-end-end-radius: 0;
+}
+
+.pf-v5-c-text-input-group__text,
+.pf-v5-c-text-input-group__text:focus-within,
+.pf-v5-c-text-input-group:hover .pf-v5-c-text-input-group__text {
+    --pf-v5-c-text-input-group__text--after--BorderBottomWidth: 0;
+    --pf-v5-c-text-input-group__text--focus-within--after--BorderBottomWidth: 0;
+}
+
+.pf-v5-c-menu-toggle:not(.pf-m-plain),
+.pf-v5-c-menu-toggle:not(.pf-m-plain):hover,
+.pf-v5-c-menu-toggle:not(.pf-m-plain):focus,
+.pf-v5-c-menu-toggle:not(.pf-m-plain).pf-m-expanded {
+    --pf-v5-c-menu-toggle--after--BorderBottomWidth: 0;
+    --pf-v5-c-menu-toggle--hover--after--BorderBottomWidth: 0;
+    --pf-v5-c-menu-toggle--focus--after--BorderBottomWidth: 0;
+    --pf-v5-c-menu-toggle--active--after--BorderBottomWidth: 0;
+    --pf-v5-c-menu-toggle--m-expanded--after--BorderBottomWidth: 0;
+    --pf-v5-c-menu-toggle--before--BorderTopColor: var(--platform-line);
+    --pf-v5-c-menu-toggle--before--BorderRightColor: var(--platform-line);
+    --pf-v5-c-menu-toggle--before--BorderBottomColor: var(--platform-line);
+    --pf-v5-c-menu-toggle--before--BorderLeftColor: var(--platform-line);
+    --pf-v5-c-menu-toggle--before--BorderTopWidth: 1px;
+    --pf-v5-c-menu-toggle--before--BorderRightWidth: 1px;
+    --pf-v5-c-menu-toggle--before--BorderBottomWidth: 1px;
+    --pf-v5-c-menu-toggle--before--BorderLeftWidth: 1px;
+    border: 1px solid var(--platform-line);
+    border-radius: 10px;
+}
+
+.pf-v5-c-menu-toggle:not(.pf-m-plain)::before {
+    border-radius: 10px;
+}
+
+.pf-v5-c-toolbar .pf-v5-c-input-group .pf-v5-c-button.pf-m-control {
+    --pf-v5-c-button--m-control--BackgroundColor: var(--platform-surface);
+    --pf-v5-c-button--m-control--hover--BackgroundColor: var(--platform-surface);
+    --pf-v5-c-button--m-control--Color: var(--platform-brand);
+    --pf-v5-c-button--after--BorderWidth: 0;
+    background-color: var(--platform-surface);
+    color: var(--platform-brand);
+    border: 1px solid var(--platform-line);
+    border-inline-start-width: 0;
+    border-start-start-radius: 0;
+    border-end-start-radius: 0;
+    border-start-end-radius: 10px;
+    border-end-end-radius: 10px;
+}
+
+.pf-v5-c-toolbar .pf-v5-c-input-group .pf-v5-c-button.pf-m-control::after {
+    border-width: 0;
+    border-start-end-radius: 10px;
+    border-end-end-radius: 10px;
+}
+
+.pf-v5-c-clipboard-copy__group .pf-v5-c-form-control {
+    border-start-end-radius: 0;
+    border-end-end-radius: 0;
+}
+
+.pf-v5-c-clipboard-copy__group .pf-v5-c-button {
+    background-color: var(--platform-surface);
+    color: var(--platform-brand);
+    border: 1px solid var(--platform-line);
+    border-inline-start-width: 0;
+    border-radius: 0 10px 10px 0;
+    align-self: stretch;
+}
+
+/* Boxed fields in both dawns. Dark PatternFly otherwise keeps only the underline. */
+.pf-v5-c-form-control,
+.pf-v5-theme-dark .pf-v5-c-form-control {
+    --pf-v5-c-form-control--BackgroundColor: var(--platform-surface);
+    --pf-v5-c-form-control--before--BorderTopColor: var(--platform-line);
+    --pf-v5-c-form-control--before--BorderRightColor: var(--platform-line);
+    --pf-v5-c-form-control--before--BorderBottomColor: var(--platform-line);
+    --pf-v5-c-form-control--before--BorderLeftColor: var(--platform-line);
+    --pf-v5-c-form-control--before--BorderBottomWidth: 1px;
+    --pf-v5-c-form-control--after--BorderBottomColor: var(--platform-line);
+    border-radius: 10px;
+    background-color: var(--platform-surface);
+    color: var(--platform-text);
+}
+
+.pf-v5-c-clipboard-copy__group .pf-v5-c-form-control,
+.pf-v5-theme-dark .pf-v5-c-clipboard-copy__group .pf-v5-c-form-control {
+    border-radius: 10px 0 0 10px;
+}
+
+.pf-v5-c-clipboard-copy__group .pf-v5-c-form-control::before,
+.pf-v5-theme-dark .pf-v5-c-clipboard-copy__group .pf-v5-c-form-control::before {
+    border-radius: 10px 0 0 10px;
+}
+
+.pf-v5-c-clipboard-copy__group .pf-v5-c-button::after {
+    border-width: 0;
+    border-radius: 0 10px 10px 0;
+}
+
+.pf-v5-c-menu-toggle.pf-m-plain,
+.pf-v5-c-menu-toggle.pf-m-plain:hover,
+.pf-v5-c-menu-toggle.pf-m-plain:focus,
+.pf-v5-c-menu-toggle.pf-m-plain.pf-m-focus,
+.pf-v5-c-menu-toggle.pf-m-plain.pf-m-expanded {
+    background-color: transparent;
+    border: 0;
+    box-shadow: none;
+}
+
+.pf-v5-c-menu-toggle:not(.pf-m-plain) {
+    background-color: var(--platform-surface);
+    color: var(--platform-text);
+    border: 1px solid var(--platform-line);
+    border-radius: 10px;
+}
+
+.pf-v5-c-table tbody td,
+.pf-v5-c-table thead th {
+    border-bottom: 1px solid color-mix(in srgb, var(--platform-text) 22%, transparent);
+}
+
+.pf-v5-c-table .pf-v5-c-button.pf-m-plain,
+.pf-v5-c-button.pf-m-plain,
+.pf-v5-c-menu-toggle.pf-m-plain {
+    --pf-v5-c-menu-toggle--m-plain--Color: var(--platform-text);
+    --pf-v5-c-button--m-plain--Color: var(--platform-text);
+    color: var(--platform-text);
+}
+
+.pf-v5-theme-dark
+    .pf-v5-c-label:not(.pf-m-blue):not(.pf-m-green):not(.pf-m-red):not(.pf-m-orange):not(
+        .pf-m-gold
+    ):not(.pf-m-cyan):not(.pf-m-purple):not(.pf-m-yellow),
+.pf-v5-c-label:not(.pf-m-blue):not(.pf-m-green):not(.pf-m-red):not(.pf-m-orange):not(
+        .pf-m-gold
+    ):not(.pf-m-cyan):not(.pf-m-purple):not(.pf-m-yellow) {
+    --pf-v5-c-label--BackgroundColor: color-mix(
+        in srgb,
+        var(--platform-brand) 28%,
+        var(--platform-surface)
+    );
+    color: var(--platform-text);
+}
+
+a.pf-m-inline.pf-m-link,
+main a.pf-v5-u-ml-md {
+    white-space: nowrap;
+}
+
+main .pf-v5-c-page__main-section .pf-v5-c-content,
+main .pf-v5-c-page__main-section p {
+    text-wrap: pretty;
+}
+
+.pf-v5-c-empty-state__icon {
+    color: var(--platform-brand);
+}
+
+.pf-v5-c-empty-state__icon svg {
+    fill: var(--platform-brand);
+    color: var(--platform-brand);
+}
+
+.pf-v5-c-button.pf-m-secondary {
+    --pf-v5-c-button--m-secondary--BackgroundColor: var(--platform-secondary);
+    --pf-v5-c-button--m-secondary--Color: var(--platform-secondary-contrast);
+    --pf-v5-c-button--m-secondary--BorderColor: var(--platform-secondary);
+    background-color: var(--platform-secondary);
+    border-color: var(--platform-secondary);
+    color: var(--platform-secondary-contrast);
+}
+
+.pf-v5-c-toggle-group {
+    --pf-v5-c-toggle-group__button--BackgroundColor: var(--platform-surface);
+    --pf-v5-c-toggle-group__button--Color: var(--platform-text);
+    --pf-v5-c-toggle-group__button--m-selected--BackgroundColor: var(--platform-brand);
+    --pf-v5-c-toggle-group__button--m-selected--Color: var(--platform-brand-contrast);
+}
+
+.pf-v5-c-banner.pf-m-gold {
+    --pf-v5-c-banner--m-gold--BackgroundColor: color-mix(
+        in srgb,
+        var(--platform-secondary) 32%,
+        var(--platform-surface)
+    );
+    --pf-v5-c-banner--BackgroundColor: color-mix(
+        in srgb,
+        var(--platform-secondary) 32%,
+        var(--platform-surface)
+    );
+    --pf-v5-c-banner--Color: var(--platform-text);
+    color: var(--platform-text);
+    border: 1px solid var(--platform-secondary);
+    border-radius: var(--platform-radius);
+}
+
+.react-flow {
+    height: 70vh !important;
+    min-height: 560px !important;
+    background: var(--platform-surface);
+}
+
+.keycloak__form_actions {
+    left: 304px;
+    right: 24px;
+    width: auto;
+    margin-left: 0;
+    border: 1px solid var(--platform-line);
+    border-radius: 0 0 var(--platform-radius) var(--platform-radius);
+}
+
+@media (max-width: 899px) {
+    .keycloak__form_actions {
+        left: 0;
+        right: 0;
+        border-radius: 0;
+    }
+}
+
+main .pf-v5-c-page__main-section {
+    max-width: 100%;
+    min-width: 0;
+}
+
+main .pf-v5-c-table {
+    --pf-v5-c-table--cell--WhiteSpace: normal;
+}
+
+main .pf-v5-c-table :where(td, th) {
+    white-space: normal;
+    overflow-wrap: anywhere;
+}
+
+.pf-v5-c-menu {
+    box-shadow: 0 8px 24px color-mix(in srgb, #000 28%, transparent);
+}
+
+.pf-v5-c-button:disabled,
+.pf-v5-c-button.pf-m-disabled,
+.pf-v5-c-button[aria-disabled="true"],
+.pf-v5-c-menu-toggle:disabled,
+.pf-v5-c-menu-toggle.pf-m-disabled,
+.pf-v5-c-menu-toggle:not(.pf-m-plain):disabled {
+    color: var(--platform-muted);
+    background-color: color-mix(
+        in srgb,
+        var(--platform-text) 8%,
+        var(--platform-surface)
+    );
+    border-color: var(--platform-line);
+    box-shadow: none;
+    cursor: not-allowed;
+}
+
+.pf-v5-c-button.pf-m-plain:disabled,
+.pf-v5-c-button.pf-m-link:disabled,
+.pf-v5-c-menu-toggle.pf-m-plain:disabled,
+.pf-v5-c-menu-toggle.pf-m-plain.pf-m-disabled {
+    background-color: transparent;
+    color: var(--platform-muted);
+}
+
+.pf-v5-c-form-control:disabled,
+.pf-v5-c-form-control > input:disabled,
+input:disabled,
+textarea:disabled,
+select:disabled {
+    color: var(--platform-muted);
+    background-color: color-mix(
+        in srgb,
+        var(--platform-text) 8%,
+        var(--platform-surface)
+    );
+    cursor: not-allowed;
+}

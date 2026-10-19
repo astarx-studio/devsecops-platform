@@ -38,6 +38,11 @@
 # shared/keycloak-ui-shared/alerts/AlertPanel.tsx
 # shared/keycloak-ui-shared/context/KeycloakContext.tsx
 # shared/keycloak-ui-shared/user-profile/UserProfileFields.tsx
+# admin/App.tsx
+# admin/PageNav.tsx
+# admin/colorScheme.ts
+# admin/dashboard/Dashboard.tsx
+# admin/realm-settings/RealmSettingsTabs.tsx
 # === Owned files end =====
 
 # === @keycloakify/email-native v260007.0.0 ===
@@ -105,10 +110,8 @@
 
 # === @keycloakify/keycloak-admin-ui v260700.0.3 ===
 /admin/admin-client.tsx
-/admin/App.tsx
 /admin/banners.module.css
 /admin/Banners.tsx
-/admin/colorScheme.ts
 /admin/environment-types.ts
 /admin/environment.ts
 /admin/ForbiddenSection.tsx
@@ -118,7 +121,6 @@
 /admin/KcPage.tsx
 /admin/page-nav.css
 /admin/PageHeaderClearCachesModal.tsx
-/admin/PageNav.tsx
 /admin/PageNotFoundSection.tsx
 /admin/Root.tsx
 /admin/routes.tsx
@@ -155,7 +157,6 @@
 /admin/components/SwitchControl.tsx
 /admin/context/RecentRealms.tsx
 /admin/dashboard/dashboard.css
-/admin/dashboard/Dashboard.tsx
 /admin/dashboard/ProviderInfo.tsx
 /admin/dashboard/routes.ts
 /admin/events/AdminEvents.tsx
@@ -258,7 +259,6 @@
 /admin/realm-settings/ProfilesTab.tsx
 /admin/realm-settings/realm-settings-section.css
 /admin/realm-settings/RealmSettingsSection.tsx
-/admin/realm-settings/RealmSettingsTabs.tsx
 /admin/realm-settings/routes.ts
 /admin/realm-settings/SessionsTab.tsx
 /admin/realm-settings/TokensTab.tsx
