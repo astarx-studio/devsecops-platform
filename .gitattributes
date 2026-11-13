@@ -1,2 +1,5 @@
 # Shell init scripts must use LF so Alpine containers execute them (Windows clones).
 *.sh text eol=lf
+# GitLab plugin image: seams.txt is matched byte-for-byte by the build-time guard,
+# and Ruby/SQL files are copied verbatim into the image.
+gitlab/** text eol=lf

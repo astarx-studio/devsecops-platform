@@ -155,6 +155,16 @@ GITLAB_ROOT_PASSWORD=change-me-gitlab-root-password
 
 These are pre-filled correctly if you've set your `DOMAIN` and `*_DOMAIN` values. `GITLAB_ROOT_PASSWORD` is the password for GitLab's built-in `root` admin account. Set it to something strong and save it.
 
+```
+GITLAB_PLUGINS_DB_PASSWORD=change-me-gitlab-plugins-db-password
+# GITLAB_PLUGINS_DB_NAME=dsoaas_gitlab_plugins
+# GITLAB_PLUGINS_DB_USER=dsoaas_gitlab_plugins
+# DSOAAS_APPROVALS_BOT_USERNAME=dsoaas-approvals
+# DSOAAS_APPROVALS_NOTE=true
+```
+
+**`GITLAB_PLUGINS_DB_PASSWORD`** (required) is for the separate database that holds the platform GitLab plugins' own data (the approvals audit trail). It's kept apart from GitLab's database on purpose. `docker compose` refuses to start until it's set. Generate one with `openssl rand -hex 24`. The approvals plugin posts a status comment on MRs only if the GitLab user named in `DSOAAS_APPROVALS_BOT_USERNAME` exists; `DSOAAS_APPROVALS_NOTE=false` turns comments off. See [merge request approvals](../03_devs/15_merge_request_approvals.md).
+
 ---
 
 ## GitLab Runner token

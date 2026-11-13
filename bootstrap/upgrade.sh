@@ -9,8 +9,12 @@
 #   2. Reminds you to verify the GitLab upgrade path (no version skipping).
 #   3. Takes a backup (bootstrap/backup.sh) unless SKIP_BACKUP=1.
 #   4. Rewrites the pinned image tag in docker-compose.yml (keeps a *.bak).
-#   5. Pulls the new image and force-recreates only that service.
-#   6. Waits for the container to report healthy.
+#      For gitlab that's the GITLAB_BASE_IMAGE build arg + the dsoaas-gitlab tag.
+#   5. Builds the platform image (stock CE + DSOaaS plugins). The build's seam
+#      guard fails if the new GitLab broke a plugin seam. Then runs
+#      gitlab/test/canary.sh (throwaway GitLab: contract + e2e tests). Any failure
+#      restores docker-compose.yml and stops here, so production is untouched.
+#   6. Force-recreates only that service and waits for it to report healthy.
 #   7. Optionally (with confirmation) bumps gitlab-runner + helper_image to the
 #      matching version and recreates the runner.
 #
@@ -24,6 +28,8 @@
 #                       resolved from Docker Hub and you are asked to confirm it.
 #                       Also accepted as --version.
 #   SKIP_BACKUP=1       Skip the pre-upgrade backup.
+#   SKIP_CANARY=1       Skip the plugin canary (contract + e2e in a throwaway
+#                       GitLab, ~10 min, ~4 GB RAM). The seam guard still runs.
 #   ASSUME_YES=1        Answer "yes" to every confirmation (non-interactive).
 #   RUNNER_VERSION=<x>  Override runner version (e.g. 18.11.2). Default: derived
 #                       from VERSION (strips the "-ce.N" suffix).
@@ -140,15 +146,22 @@ case "${SERVICE}" in
     IMAGE_REPO="gitlab/gitlab-ce"
     LATEST_TAG_REGEX='^[0-9]+\.[0-9]+\.[0-9]+-ce\.0$'
     HAS_RUNNER_SYNC=1
+    # Built locally from gitlab/Dockerfile: the base is a build arg, the result
+    # is tagged dsoaas-gitlab:<same tag>.
+    BUILT_IMAGE_REPO="dsoaas-gitlab"
+    BASE_IMAGE_ARG="GITLAB_BASE_IMAGE"
+    CANARY_SCRIPT="${ROOT}/gitlab/test/canary.sh"
     ;;
   *)
     die "Service '${SERVICE}' is not supported by this upgrade flow yet. Supported: gitlab."
     ;;
 esac
 
-# Current pinned tag straight from docker-compose.yml (first matching image line).
-CURRENT_TAG="$(sed -nE "s|^[[:space:]]*image:[[:space:]]*${IMAGE_REPO}:(.+)$|\1|p" "${COMPOSE_YML}" | head -1 | tr -d '[:space:]')"
-[[ -n "${CURRENT_TAG}" ]] || die "Could not find '${IMAGE_REPO}:' image pin in docker-compose.yml."
+# Current pinned tag straight from docker-compose.yml: the base-image build arg for
+# locally built services, otherwise the first matching image line.
+PIN_KEY="${BASE_IMAGE_ARG:-image}"
+CURRENT_TAG="$(sed -nE "s|^[[:space:]]*${PIN_KEY}:[[:space:]]*${IMAGE_REPO}:(.+)$|\1|p" "${COMPOSE_YML}" | head -1 | tr -d '[:space:]')"
+[[ -n "${CURRENT_TAG}" ]] || die "Could not find '${PIN_KEY}: ${IMAGE_REPO}:' pin in docker-compose.yml."
 
 # No target given → resolve the latest published tag and require explicit confirmation below.
 RESOLVED_LATEST=0
@@ -196,15 +209,42 @@ fi
 # --------------------------------------------------------------------------
 cp "${COMPOSE_YML}" "${COMPOSE_YML}.bak"
 log "Backed up docker-compose.yml -> docker-compose.yml.bak"
-sed -i -E "s|(^[[:space:]]*image:[[:space:]]*${IMAGE_REPO}:).*|\1${VERSION}|" "${COMPOSE_YML}"
+sed -i -E "s|(^[[:space:]]*${PIN_KEY}:[[:space:]]*${IMAGE_REPO}:).*|\1${VERSION}|" "${COMPOSE_YML}"
+if [[ -n "${BUILT_IMAGE_REPO:-}" ]]; then
+  sed -i -E "s|(^[[:space:]]*image:[[:space:]]*${BUILT_IMAGE_REPO}:).*|\1${VERSION}|" "${COMPOSE_YML}"
+fi
 log "Pinned ${IMAGE_REPO}: ${CURRENT_TAG} -> ${VERSION}"
 
+# Put the original compose file back and stop. Used when the new image fails its
+# checks: production hasn't been touched yet at that point.
+abort_before_recreate() {
+  cp "${COMPOSE_YML}.bak" "${COMPOSE_YML}"
+  warn "Restored docker-compose.yml; '${SERVICE}' is still running ${CURRENT_TAG}."
+  die "$1"
+}
+
 # --------------------------------------------------------------------------
-# 3. Pull + recreate only this service.
+# 3. Get the new image (build + canary for plugin images, pull otherwise),
+#    then recreate only this service.
 # --------------------------------------------------------------------------
-log "Pulling ${IMAGE_REPO}:${VERSION}..."
-# shellcheck disable=SC2086
-docker compose ${COMPOSE_EXTRA_ARGS:-} pull "${SERVICE}"
+if [[ -n "${BUILT_IMAGE_REPO:-}" ]]; then
+  log "Building ${BUILT_IMAGE_REPO}:${VERSION} on ${IMAGE_REPO}:${VERSION} (includes plugin seam guard)..."
+  # shellcheck disable=SC2086
+  docker compose ${COMPOSE_EXTRA_ARGS:-} build --pull "${SERVICE}" \
+    || abort_before_recreate "Image build failed. If the seam guard reported missing seams, the plugins need review for ${VERSION}."
+
+  if [[ "${SKIP_CANARY:-0}" == "1" ]]; then
+    warn "SKIP_CANARY=1, skipping plugin contract/e2e canary."
+  else
+    log "Running plugin canary against ${BUILT_IMAGE_REPO}:${VERSION} (throwaway container)..."
+    bash "${CANARY_SCRIPT}" "${BUILT_IMAGE_REPO}:${VERSION}" \
+      || abort_before_recreate "Plugin canary failed for ${VERSION}. See output above."
+  fi
+else
+  log "Pulling ${IMAGE_REPO}:${VERSION}..."
+  # shellcheck disable=SC2086
+  docker compose ${COMPOSE_EXTRA_ARGS:-} pull "${SERVICE}"
+fi
 log "Recreating '${SERVICE}' container..."
 # shellcheck disable=SC2086
 docker compose ${COMPOSE_EXTRA_ARGS:-} up -d --no-deps --force-recreate "${SERVICE}"
@@ -214,6 +254,18 @@ docker compose ${COMPOSE_EXTRA_ARGS:-} up -d --no-deps --force-recreate "${SERVI
 # --------------------------------------------------------------------------
 if wait_healthy "${SERVICE}"; then
   log "'${SERVICE}' upgraded to ${VERSION} and healthy."
+  # Plugins fail open at install time (GitLab keeps running as stock CE), so make
+  # a skipped plugin loud here. The contract script is read-only.
+  if [[ -n "${BUILT_IMAGE_REPO:-}" ]]; then
+    log "Verifying DSOaaS plugins in the running '${SERVICE}' (read-only contract)..."
+    # shellcheck disable=SC2086
+    if ! MSYS_NO_PATHCONV=1 docker compose ${COMPOSE_EXTRA_ARGS:-} exec -T "${SERVICE}" \
+         gitlab-rails runner /opt/dsoaas/test/contract.rb; then
+      warn "Plugin contract FAILED in production: GitLab is up, but approval rules may NOT be enforced."
+      warn "Inspect: docker compose exec gitlab gitlab-rails runner 'pp Dsoaas::Plugins.statuses'"
+      die "Upgrade finished with plugins inactive. Roll back or fix the plugin before relying on approvals."
+    fi
+  fi
 else
   warn "'${SERVICE}' did not report healthy within the timeout."
   warn "Inspect: docker compose logs -f ${SERVICE}"

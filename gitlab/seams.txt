@@ -1,0 +1,39 @@
+# Seam guard for the DSOaaS GitLab plugins (checked at image build time).
+#
+# Format: <path relative to gitlab-rails root><TAB><fixed string that must appear>
+# A path prefixed with "!" must NOT exist.
+#
+# Every line here is something a plugin calls, prepends into, or subclasses.
+# When GitLab renames one of these, the image build fails with the line below,
+# and bootstrap/upgrade.sh aborts before production is recreated.
+
+# CE only: the approvals plugin reuses EE's `not_approved` identifier, which would
+# collide with EE's own approval check.
+!ee
+
+# --- approvals: mergeability check seam ---
+app/models/merge_request.rb	def self.mergeable_state_checks_by_tier
+app/models/merge_request.rb	def self.all_mergeability_checks
+app/models/merge_request.rb	skip_approved_check: merge_when_checks_pass_strat
+app/services/merge_requests/mergeability/check_base_service.rb	class CheckBaseService
+app/services/merge_requests/mergeability/check_base_service.rb	class_attribute :identifier
+app/services/merge_requests/mergeability/check_base_service.rb	def self.set_identifier
+app/services/merge_requests/mergeability/check_base_service.rb	def inactive(
+app/services/merge_requests/mergeability/detailed_merge_status_service.rb	unsuccessful_check.identifier
+app/graphql/types/merge_requests/mergeability_check_identifier_enum.rb	MergeRequest.all_mergeability_checks.each
+app/graphql/types/merge_requests/detailed_merge_status_enum.rb	value: :not_approved
+
+# --- approvals: data the evaluator reads (through models, never SQL) ---
+app/models/concerns/approvable.rb	has_many :approvals
+app/models/approval.rb	sha_attribute :patch_id_sha
+app/models/merge_request.rb	def current_patch_id_sha
+app/models/merge_request.rb	def modified_paths(past_merge_request_diff: nil, fallback_on_overflow: false)
+app/models/merge_request.rb	def target_branch_sha
+app/models/merge_request.rb	def diff_head_sha
+app/models/merge_request.rb	def committer_ids_to_filter_from_approvers
+app/models/group.rb	def member?(user, min_access_level
+
+# --- approvals: optional status note ---
+app/services/notes/create_service.rb	def execute(
+app/services/notes/update_service.rb	def execute(note)
+lib/gitlab/exclusive_lease.rb	def try_obtain

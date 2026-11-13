@@ -462,7 +462,14 @@ services:
   # First boot takes 3-5 minutes (database migrations). shm_size: 256m
   # recommended by GitLab Docker docs to prevent shared memory issues.
   gitlab:
-    image: gitlab/gitlab-ce:19.5.0-ce.0
+    # Stock GitLab CE + additive DSOaaS plugins (gitlab/Dockerfile, gitlab/plugins/).
+    # bootstrap/upgrade.sh bumps GITLAB_BASE_IMAGE and the image tag together, rebuilds,
+    # and runs gitlab/test/canary.sh before recreating this container.
+    build:
+      context: ./gitlab
+      args:
+        GITLAB_BASE_IMAGE: gitlab/gitlab-ce:19.5.3-ce.0
+    image: dsoaas-gitlab:19.5.3-ce.0
     container_name: gitlab
     hostname: gitlab
     restart: unless-stopped
@@ -489,8 +496,22 @@ services:
       REGISTRY_DB_USER: ${REGISTRY_DB_USER:-registry}
       REGISTRY_DB_PASSWORD: ${REGISTRY_DB_PASSWORD:?set REGISTRY_DB_PASSWORD in .env}
       REGISTRY_DB_ENABLED: ${REGISTRY_DB_ENABLED:-false}
+      # DSOaaS plugins: separate database, never gitlabhq_production.
+      GITLAB_PLUGINS_DB_NAME: ${GITLAB_PLUGINS_DB_NAME:-dsoaas_gitlab_plugins}
+      GITLAB_PLUGINS_DB_USER: ${GITLAB_PLUGINS_DB_USER:-dsoaas_gitlab_plugins}
+      GITLAB_PLUGINS_DB_PASSWORD: ${GITLAB_PLUGINS_DB_PASSWORD:?set GITLAB_PLUGINS_DB_PASSWORD in .env}
+      DSOAAS_APPROVALS_BOT_USERNAME: ${DSOAAS_APPROVALS_BOT_USERNAME:-dsoaas-approvals}
+      DSOAAS_APPROVALS_NOTE: ${DSOAAS_APPROVALS_NOTE:-true}
       GITLAB_OMNIBUS_CONFIG: |
         external_url '${GITLAB_EXTERNAL_URL}'
+        # Omnibus doesn't pass container env to Puma/Sidekiq; forward the plugin settings.
+        # The password is URL-encoded because it goes into a connection URL.
+        require 'erb'
+        gitlab_rails['env'] = {
+          'DSOAAS_PLUGINS_DB_URL' => "postgresql://#{ERB::Util.url_encode(ENV['GITLAB_PLUGINS_DB_USER'])}:#{ERB::Util.url_encode(ENV['GITLAB_PLUGINS_DB_PASSWORD'])}@postgres:5432/#{ENV['GITLAB_PLUGINS_DB_NAME']}",
+          'DSOAAS_APPROVALS_BOT_USERNAME' => ENV['DSOAAS_APPROVALS_BOT_USERNAME'],
+          'DSOAAS_APPROVALS_NOTE' => ENV['DSOAAS_APPROVALS_NOTE'],
+        }
         postgresql['enable'] = false
         gitlab_rails['db_adapter'] = 'postgresql'
         gitlab_rails['db_encoding'] = 'unicode'
@@ -618,6 +639,8 @@ services:
       postgres-gitlab-init:
         condition: service_completed_successfully
       postgres-registry-init:
+        condition: service_completed_successfully
+      postgres-gitlab-plugins-init:
         condition: service_completed_successfully
       minio:
         condition: service_healthy
@@ -1198,6 +1221,31 @@ services:
       REGISTRY_DB_PASSWORD: ${REGISTRY_DB_PASSWORD:?set REGISTRY_DB_PASSWORD in .env}
     volumes:
       - ./postgres/init-ensure-registry-db.sh:/scripts/init-ensure-registry-db.sh:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - devops-network
+
+  # ========================================================================
+  # POSTGRES GITLAB PLUGINS INIT — separate DB for DSOaaS GitLab plugin state
+  # (approval audit trail, ...). Isolated from gitlabhq_production by design.
+  # ========================================================================
+  postgres-gitlab-plugins-init:
+    image: postgres:17-alpine
+    container_name: postgres-gitlab-plugins-init
+    restart: "no"
+    entrypoint: ["/bin/sh", "/scripts/init-ensure-gitlab-plugins-db.sh"]
+    environment:
+      PGHOST: postgres
+      PGUSER: ${POSTGRES_ADMIN_USER:?set POSTGRES_ADMIN_USER in .env}
+      PGPASSWORD: ${POSTGRES_ADMIN_PASSWORD:?set POSTGRES_ADMIN_PASSWORD in .env}
+      PGDATABASE: postgres
+      GITLAB_PLUGINS_DB_NAME: ${GITLAB_PLUGINS_DB_NAME:-dsoaas_gitlab_plugins}
+      GITLAB_PLUGINS_DB_USER: ${GITLAB_PLUGINS_DB_USER:-dsoaas_gitlab_plugins}
+      GITLAB_PLUGINS_DB_PASSWORD: ${GITLAB_PLUGINS_DB_PASSWORD:?set GITLAB_PLUGINS_DB_PASSWORD in .env}
+    volumes:
+      - ./postgres/init-ensure-gitlab-plugins-db.sh:/scripts/init-ensure-gitlab-plugins-db.sh:ro
     depends_on:
       postgres:
         condition: service_healthy

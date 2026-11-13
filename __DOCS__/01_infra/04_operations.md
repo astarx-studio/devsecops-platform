@@ -300,7 +300,7 @@ This platform pins specific image versions in `docker-compose.yml` to prevent un
 
 ### Guided GitLab upgrade (`make upgrade`)
 
-For GitLab, [`bootstrap/upgrade.sh`](../../bootstrap/upgrade.sh) automates the runbook above — backup, tag rewrite, pull, recreate, health wait, and an optional matching `gitlab-runner` bump:
+For GitLab, [`bootstrap/upgrade.sh`](../../bootstrap/upgrade.sh) automates the runbook above — backup, tag rewrite, build + canary (instead of pull), recreate, health wait, and an optional matching `gitlab-runner` bump:
 
 ```bash
 # Pin an explicit target version:
@@ -314,7 +314,43 @@ It resolves the current pinned tag, prompts you to confirm the upgrade path, run
 
 When `VERSION` is omitted, the script queries Docker Hub for the highest published `gitlab/gitlab-ce` tag and shows it as the proposed target. **The latest may be several stops ahead of your current version** — the confirmation prompt is your chance to verify the upgrade path and, if needed, re-run with an explicit intermediate `VERSION=<tag>` instead.
 
-Flags (set as make variables): `SKIP_BACKUP=1`, `ASSUME_YES=1` (non-interactive; also auto-accepts an auto-resolved latest version), `RUNNER_VERSION=X.Y.Z` (override derived runner version), `HEALTH_TIMEOUT=<seconds>` (default 900). Run the command once per required upgrade stop.
+**GitLab is built locally, not pulled.** The `gitlab` service is stock CE plus DSOaaS plugins (see [services](../99_maintainers/02_services.md#gitlab)). For it, `make upgrade` rewrites the `GITLAB_BASE_IMAGE` build arg and the `dsoaas-gitlab:<tag>` image tag, then, before touching the running container:
+
+1. **Builds** the image. A seam guard ([`gitlab/seams.txt`](../../gitlab/seams.txt)) fails the build if the new GitLab renamed or removed anything a plugin depends on.
+2. **Runs the canary** ([`gitlab/test/canary.sh`](../../gitlab/test/canary.sh)): boots the new image as a throwaway container with its own embedded DB (no ports, no shared volumes), runs the contract tests and the end-to-end approval scenario, and checks that GitLab's schema wasn't changed by the plugins. Takes ~10 minutes and ~4 GB RAM. `SKIP_CANARY=1` skips it; the seam guard still runs.
+
+After the recreate, `make upgrade` also runs the read-only contract check inside the running GitLab, and exits with an error if a plugin didn't install (GitLab would still be up, but approvals wouldn't be enforced).
+
+#### First deployment of the plugin image
+
+One-time switch from the stock image to `dsoaas-gitlab`, on the same GitLab version (no GitLab migrations run):
+
+1. `.env`: set `GITLAB_PLUGINS_DB_PASSWORD` (e.g. `openssl rand -hex 24`). Compose refuses to start without it.
+2. Build and prove the image without touching production:
+   ```bash
+   docker compose build gitlab
+   ```
+   ```bash
+   bash gitlab/test/canary.sh dsoaas-gitlab:19.5.3-ce.0
+   ```
+3. Create the plugin DB, then swap the container (GitLab is down for the ~2–5 min restart):
+   ```bash
+   docker compose up -d postgres-gitlab-plugins-init
+   ```
+   ```bash
+   docker compose up -d --no-deps --force-recreate gitlab
+   ```
+4. Once healthy, verify (read-only):
+   ```bash
+   docker compose exec gitlab gitlab-rails runner /opt/dsoaas/test/contract.rb
+   ```
+5. Optional: create a regular GitLab user `dsoaas-approvals` so MRs get the status comment. It needs no project or group membership, because the plugin posts through GitLab's services directly. Block the user to turn comments off again.
+
+Rollback: set `gitlab:` back to `image: gitlab/gitlab-ce:<same tag>` (remove `build:`), then `docker compose up -d --no-deps --force-recreate gitlab`. GitLab's database is untouched by the plugin, so nothing else needs restoring.
+
+If either build or canary fails during `make upgrade`, `docker-compose.yml` is restored and production keeps running the old version. Re-check the plugin against the new GitLab (update `gitlab/seams.txt`, the code, and the plugin's `supported` range) before retrying. Rolling back after a successful upgrade is the usual GitLab rollback (restore backup + previous tag). Plugins add nothing to GitLab's schema, so they never need a DB rollback.
+
+Flags (set as make variables): `SKIP_BACKUP=1`, `SKIP_CANARY=1`, `ASSUME_YES=1` (non-interactive; also auto-accepts an auto-resolved latest version), `RUNNER_VERSION=X.Y.Z` (override derived runner version), `HEALTH_TIMEOUT=<seconds>` (default 900). Run the command once per required upgrade stop.
 
 **GitLab upgrades require special care.** GitLab has a strict version upgrade path — you cannot skip from a very old version to a very new one without going through intermediate versions. Always check the [GitLab upgrade path tool](https://gitlab-com.gitlab.io/support/toolbox/upgrade-path/) before upgrading.
 

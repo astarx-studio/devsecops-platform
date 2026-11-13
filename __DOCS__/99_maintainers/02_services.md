@@ -94,7 +94,7 @@ Shared PostgreSQL for **Keycloak** (`KC_DB_*`), **SonarQube** (`SONAR_DB_*`), **
 
 **App databases on compose up:** `postgres-keycloak-init`, `postgres-sonar-init`, `postgres-gitlab-init`, and `postgres-registry-init` create roles, databases, and (for GitLab) required extensions idempotently as `${POSTGRES_ADMIN_USER}`. Fresh installs also run `postgres/init/01-keycloak-database.sh` through `04-registry-database.sh` when the data directory is empty.
 
-**Key environment variables:** `POSTGRES_ADMIN_USER`, `POSTGRES_ADMIN_PASSWORD` (cluster bootstrap + host `psql`); `KC_DB_*`, `SONAR_DB_*`, `GITLAB_DB_*`, `REGISTRY_DB_*` (application users).
+**Key environment variables:** `POSTGRES_ADMIN_USER`, `POSTGRES_ADMIN_PASSWORD` (cluster bootstrap + host `psql`); `KC_DB_*`, `SONAR_DB_*`, `GITLAB_DB_*`, `REGISTRY_DB_*`, `GITLAB_PLUGINS_DB_*` (application users; the last is the DSOaaS GitLab plugins DB, created by `postgres-gitlab-plugins-init`).
 
 **Backup / DR:** `make backup` archives `.vols/` and, when GitLab/registry DBs exist on this instance, writes `backups/gitlabhq_production-*.dump` and `backups/registry-*.dump`. `gitlab-backup` does **not** include the registry metadata database — keep logical dumps with MinIO registry blobs.
 
@@ -246,10 +246,18 @@ No additional iptables configuration is needed inside the container.
 
 | Field      | Value                                                                                     |
 | ---------- | ----------------------------------------------------------------------------------------- |
-| Image      | `gitlab/gitlab-ce:19.5.0-ce.0`                                                            |
+| Image      | `dsoaas-gitlab:19.5.3-ce.0`, built from [`gitlab/Dockerfile`](../../gitlab/Dockerfile) on `gitlab/gitlab-ce:19.5.3-ce.0` |
 | Host ports | `12222→22` (SSH git)                                                                      |
 | Volumes    | `./.vols/gitlab/config`, `./.vols/gitlab/logs`, `./.vols/gitlab/data`                     |
-| Depends on | `postgres` (healthy), `postgres-gitlab-init`, `postgres-registry-init`, `minio` (healthy) |
+| Depends on | `postgres` (healthy), `postgres-gitlab-init`, `postgres-registry-init`, `postgres-gitlab-plugins-init`, `minio` (healthy) |
+
+**Plugins:** the image is stock GitLab CE plus additive DSOaaS plugins in [`gitlab/plugins/`](../../gitlab/plugins/), loaded by `config/initializers/zz_dsoaas_plugins.rb`. No GitLab file is edited. Today there's one plugin, **approvals**: enforced MR approval rules from `.gitlab/approvals.yml` (developer guide: [15_merge_request_approvals.md](../03_devs/15_merge_request_approvals.md)).
+
+- **Seams:** listed in [`gitlab/seams.txt`](../../gitlab/seams.txt) and checked at image build time. The approvals plugin prepends one class method (`MergeRequest.mergeable_state_checks_by_tier`) and subclasses `MergeRequests::Mergeability::CheckBaseService`.
+- **Database isolation:** plugin state lives in its own database (`GITLAB_PLUGINS_DB_*`, default `dsoaas_gitlab_plugins`, created by `postgres-gitlab-plugins-init`). Plugins connect with raw `pg`, not ActiveRecord, and run their own SQL migrations (tracked in `dsoaas_schema_migrations`). `gitlabhq_production` gets no tables, columns or migrations from plugins. The only GitLab-side writes are optional MR comments posted through GitLab's own Notes services by the bot user.
+- **Status:** `docker exec gitlab gitlab-rails runner 'pp Dsoaas::Plugins.statuses'`. An incompatible plugin is skipped and logged (`dsoaas plugin ... skipped`), and GitLab keeps running as stock CE.
+- **Contract check (read-only, safe in production):** `docker exec gitlab gitlab-rails runner /opt/dsoaas/test/contract.rb`.
+- **Removing the plugins:** point `gitlab:` back at `image: gitlab/gitlab-ce:<tag>` (drop `build:`), recreate, and optionally drop the `dsoaas_gitlab_plugins` database. Nothing needs cleaning in GitLab's own DB.
 
 **Databases:** Rails uses shared `postgres` (`GITLAB_DB_*`, default database `gitlabhq_production`). Container registry metadata uses a separate database (`REGISTRY_DB_*`, default `registry`) on the same host. Embedded Omnibus PostgreSQL is disabled (`postgresql['enable'] = false`). Fresh installs: empty DBs are created by `postgres-gitlab-init` / `postgres-registry-init` on first `compose up`. Upgrading from embedded PostgreSQL requires a planned cutover (logical dump/restore of `gitlabhq_production`, then registry metadata import per [GitLab docs](https://docs.gitlab.com/administration/packages/container_registry_metadata_database/)) before relying on this layout.
 

@@ -8,6 +8,7 @@ Here's what's covered:
 
 - **[Your day-to-day workflow](01_workflow_overview.md)** — The big picture of how you work with this platform from code to deployment.
 - **[GitLab repos and CI/CD](02_repo_and_ci.md)** — Where your code lives and how pipelines run automatically.
+- **[Merge request approvals](15_merge_request_approvals.md)** — Require approvals before merging, set per repo in `.gitlab/approvals.yml`.
 - **[Container registry and packages](03_registry_and_packages.md)** — Pushing and pulling Docker images.
 - **[Secrets](04_secrets.md)** — How to access environment variables and sensitive values in your pipelines.
 - **[Deployments](05_deployments.md)** — What happens after a successful build and what's supported today.
