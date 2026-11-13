@@ -138,7 +138,7 @@ end
 if Dsoaas::PluginDB.configured?
   check.call('plugin DB reachable + migrated') do
     Dsoaas::PluginDB.with do |c|
-      c.exec("SELECT to_regclass('dsoaas_approval_evaluations') IS NOT NULL").getvalue(0, 0) == 't'
+      c.exec("SELECT to_regclass('dsoaas_approval_evaluations') IS NOT NULL "              "AND to_regclass('dsoaas_approval_rule_sets') IS NOT NULL").getvalue(0, 0) == 't'
     end == true
   end
 else

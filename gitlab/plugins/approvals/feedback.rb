@@ -44,9 +44,10 @@ module Dsoaas
         end
 
         def note_body(result)
-          lines = [NOTE_MARKER, '**Approval rules** (`.gitlab/approvals.yml` on the target branch)', '']
+          origin = result.source == :console ? 'set in the platform console' : '`.gitlab/approvals.yml` on the target branch'
+          lines = [NOTE_MARKER, "**Approval rules** (#{origin})", '']
           if result.state == :invalid
-            lines << ":x: Rules file is invalid, so merging is blocked: #{code(result.error)}"
+            lines << ":x: Approval rules can't be used, so merging is blocked: #{code(result.error)}"
           else
             lines << (result.state == :passed ? ':white_check_mark: All approval rules satisfied.' : ':hourglass: Waiting for approvals.')
             lines << ''

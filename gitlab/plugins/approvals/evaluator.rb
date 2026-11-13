@@ -2,8 +2,11 @@
 
 module Dsoaas
   module Approvals
-    # Evaluates a merge request against `.gitlab/approvals.yml` read from the
-    # TARGET branch (so an MR can't weaken the rules that govern it).
+    # Evaluates a merge request against its project's approval rules:
+    #   1. rules set in the platform console (plugin DB, see RulesStore), else
+    #   2. `.gitlab/approvals.yml` read from the TARGET branch (so an MR can't
+    #      weaken the rules that govern it), else
+    #   3. none: stock CE behaviour.
     #
     # Reads go through GitLab models only (MergeRequest, Approval, User, Group,
     # repository blobs). It never writes and never issues raw SQL against GitLab tables.
@@ -18,16 +21,17 @@ module Dsoaas
         end
       end
 
-      Result = Struct.new(:state, :rule_results, :error, keyword_init: true) do
-        # :inactive -> no rules file (stock CE behaviour)
+      Result = Struct.new(:state, :rule_results, :error, :source, keyword_init: true) do
+        # :inactive -> no rules anywhere (stock CE behaviour)
         # :passed / :failed -> rules evaluated
-        # :invalid  -> rules file broken; treated as failed (fail-closed)
+        # :invalid  -> rules broken or unreadable; treated as failed (fail-closed)
+        # source: :console or :file
         def blocking?
           %i[failed invalid].include?(state)
         end
 
         def summary
-          { state: state, error: error, rules: Array(rule_results).map(&:to_h) }
+          { state: state, source: source, error: error, rules: Array(rule_results).map(&:to_h) }
         end
       end
 
@@ -38,6 +42,7 @@ module Dsoaas
       end
 
       def call
+        @source = nil
         rules = load_rules
         return Result.new(state: :inactive, rule_results: []) if rules.nil?
 
@@ -59,9 +64,10 @@ module Dsoaas
           RuleResult.new(name: rule.name, required: rule.required, approved_by: approvers.uniq.sort)
         end
 
-        Result.new(state: results.all?(&:satisfied?) ? :passed : :failed, rule_results: results)
+        Result.new(state: results.all?(&:satisfied?) ? :passed : :failed, rule_results: results, source: @source)
       rescue Rules::InvalidConfig => e
-        Result.new(state: :invalid, rule_results: [], error: "#{Rules::PATH}: #{e.message}")
+        where = @source == :console ? 'console rules' : Rules::PATH
+        Result.new(state: :invalid, rule_results: [], error: "#{where}: #{e.message}", source: @source)
       end
 
       private
@@ -72,8 +78,28 @@ module Dsoaas
         merge_request.target_project
       end
 
-      # nil when the target branch has no rules file.
+      # Console rules win; the repository file is the fallback. nil when neither exists.
       def load_rules
+        entry = RulesStore.fetch(project.id)
+        case entry.state
+        when :found
+          @source = :console
+          raise Rules::InvalidConfig, 'stored rules are not a mapping' unless entry.config.is_a?(Hash)
+
+          return Rules.new(entry.config)
+        when :unavailable
+          # Can't tell whether this project has console rules: block rather than
+          # silently fall back to weaker (or no) rules.
+          @source = :console
+          raise Rules::InvalidConfig, 'rules store unavailable, try again shortly'
+        end
+
+        @source = :file
+        load_rules_file
+      end
+
+      # nil when the target branch has no rules file.
+      def load_rules_file
         sha = merge_request.target_branch_sha
         raise Rules::InvalidConfig, "target branch #{merge_request.target_branch} not found" if sha.blank?
 

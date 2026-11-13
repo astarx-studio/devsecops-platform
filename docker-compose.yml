@@ -788,6 +788,11 @@ services:
       VAULT_URL: http://vault:8200
       VAULT_ROOT_TOKEN: ${VAULT_ROOT_TOKEN:?set VAULT_ROOT_TOKEN in .env}
       MONGO_URL: ${MONGO_URL:?set MONGO_URL in .env (include credentials after mongo-init)}
+      # Console-managed MR approval rules live in the GitLab plugins DB (not GitLab's own).
+      GITLAB_PLUGINS_DB_HOST: postgres
+      GITLAB_PLUGINS_DB_NAME: ${GITLAB_PLUGINS_DB_NAME:-dsoaas_gitlab_plugins}
+      GITLAB_PLUGINS_DB_USER: ${GITLAB_PLUGINS_DB_USER:-dsoaas_gitlab_plugins}
+      GITLAB_PLUGINS_DB_PASSWORD: ${GITLAB_PLUGINS_DB_PASSWORD:?set GITLAB_PLUGINS_DB_PASSWORD in .env}
       MONGO_DB_NAME: ${MONGO_DB_NAME:-platform}
       KUBE_API_INTERNAL_URL: ${KUBE_API_INTERNAL_URL}
       # Hardcoded to the container path; the host env var expands incorrectly on

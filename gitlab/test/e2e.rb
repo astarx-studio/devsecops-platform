@@ -213,6 +213,44 @@ mrw = open_mr(project, dave, 'feature-weaken')
 approve(mrw, alice)
 step.call('MR cannot weaken its own rules', status(mrw), :not_approved)
 
+puts 'console rules (plugin DB) win over the file'
+if Dsoaas::PluginDB.configured?
+  set_console_rules = lambda do |config|
+    ok = Dsoaas::PluginDB.with do |c|
+      if config
+        c.exec_params(<<~SQL, [project.id, config.to_json])
+          INSERT INTO dsoaas_approval_rule_sets (project_id, config, updated_by) VALUES ($1, $2::jsonb, 'e2e')
+          ON CONFLICT (project_id) DO UPDATE SET config = EXCLUDED.config, updated_at = now()
+        SQL
+      else
+        c.exec_params('DELETE FROM dsoaas_approval_rule_sets WHERE project_id = $1', [project.id])
+      end
+      true
+    end
+    raise 'plugin DB write failed' unless ok
+
+    Dsoaas::Approvals::RulesStore.expire(project.id)
+  end
+  source = -> { Dsoaas::Approvals::Evaluator.new(MergeRequest.find(mrw.id)).call.source }
+
+  # mrw has 1 approval (alice); the file on the target branch asks for 2.
+  set_console_rules.call({ rules: [{ name: 'console', required: 1 }] })
+  step.call('console rule (1) satisfied -> mergeable', status(mrw), :mergeable)
+  step.call('source is console', source.call, :console)
+
+  set_console_rules.call({ rules: [{ name: 'console', required: 3 }] })
+  step.call('stricter console rule -> not_approved', status(mrw), :not_approved)
+
+  set_console_rules.call({ rules: [] })
+  step.call('invalid console rules fail closed', status(mrw), :not_approved)
+
+  set_console_rules.call(nil)
+  step.call('console rules removed -> file applies again', status(mrw), :not_approved)
+  step.call('source is file', source.call, :file)
+else
+  puts '  skip  plugin DB not configured'
+end
+
 puts 'invalid rules fail closed'
 commit_file(project, admin, MAIN, '.gitlab/approvals.yml', "rules: nope\n")
 commit_file(project, admin, 'feature-b', 'b.txt', "b\n", start_branch: MAIN)

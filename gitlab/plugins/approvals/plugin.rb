@@ -52,6 +52,7 @@ module Dsoaas
         end
 
         def install!
+          load_file('rules_store.rb')
           load_file('evaluator.rb')
           load_file('feedback.rb')
           load_file('check_approval_rules_service.rb')

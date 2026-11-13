@@ -8,7 +8,17 @@ Maintainer internals: [gitlab service → Plugins](../99_maintainers/02_services
 
 ---
 
-## Turn it on
+## Where rules come from
+
+1. **The platform console (preferred).** Open the project in the console and use the **Approvals** tab. Rules saved there can only be changed in the console, so people with access to the repository can't edit them.
+2. **`.gitlab/approvals.yml` in the repository (fallback).** Used only when the project has no rules in the console.
+3. **Neither:** approvals stay optional, exactly like stock GitLab.
+
+Console rules replace the file completely; the two are never combined. The Approvals tab shows which one GitLab is using and, when a file exists, its content. A change saved in the console applies within about 15 seconds. **Remove console rules** puts the project back on the file.
+
+The console has the same options as the file below: rule name, approvals required, approver users and groups, paths, and the three switches. It also checks that the users and groups you enter exist in GitLab.
+
+## Rules in the repository (fallback)
 
 Commit `.gitlab/approvals.yml` to your **default branch** (or whichever branch your MRs target):
 
@@ -28,11 +38,9 @@ committers_can_approve: true   # default true: set false so anyone who pushed co
 reset_on_push: true            # default true: approvals are dropped when the code changes
 ```
 
-If a repository has no `.gitlab/approvals.yml`, approvals stay optional, exactly like stock GitLab.
-
 ## How it behaves
 
-- **Rules come from the target branch.** An MR that edits `.gitlab/approvals.yml` can't loosen its own rules. The change takes effect only for MRs opened *after* it's merged.
+- **File rules come from the target branch.** An MR that edits `.gitlab/approvals.yml` can't loosen its own rules. The change takes effect only for MRs opened *after* it's merged. Anyone who can merge to that branch can change the file, which is why the console is the preferred place.
 - **Every rule that applies must be satisfied.** A rule without `paths` always applies. A rule with `paths` applies when any changed file matches one of its patterns.
 - **Who counts as an approver:**
   - `approvers.users`: listed usernames (no `@` needed).
@@ -41,6 +49,7 @@ If a repository has no `.gitlab/approvals.yml`, approvals stay optional, exactly
   - Blocked users never count.
 - **`reset_on_push`:** an approval only counts for the code it was given on. A rebase that doesn't change the code keeps approvals; a real change drops them.
 - **Broken file = blocked.** If `.gitlab/approvals.yml` is invalid (bad YAML, unknown key, `required` not between 1 and 25), every MR to that branch is blocked until the file is fixed. That way a typo can't switch approvals off.
+- **Rules store down = blocked.** If GitLab can't reach the console rules and has no recent copy of them for the project, merging is blocked until it can, rather than falling back to weaker rules.
 
 ## What you see
 
