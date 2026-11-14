@@ -536,6 +536,9 @@ services:
         }
         nginx['listen_port'] = 80
         nginx['listen_https'] = false
+        # 5x stock nginx defaults (1k / 4x8k). OIDC + oauth2-proxy cookies otherwise
+        # trip "400 Request Header Or Cookie Too Large" on UI paths like /pipelines.
+        nginx['custom_nginx_config'] = "client_header_buffer_size 5k;\nlarge_client_header_buffers 4 40k;\n"
         nginx['proxy_set_headers'] = {
           "X-Forwarded-Proto" => "https",
           "X-Forwarded-Ssl" => "on",

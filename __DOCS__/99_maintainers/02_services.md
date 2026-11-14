@@ -280,6 +280,7 @@ No additional iptables configuration is needed inside the container.
 | `registry_external_url`                 | Container registry public URL                                                                |
 | `gitlab_rails['smtp_*']`                | SMTP config for email notifications                                                          |
 | `gitlab_rails['gitlab_shell_ssh_port']` | Maps to host port 12222                                                                      |
+| `nginx['custom_nginx_config']`          | Header buffers at 5× nginx defaults (`client_header_buffer_size 5k`, `large_client_header_buffers 4 40k`) so OIDC/oauth2-proxy cookies do not return `400 Request Header Or Cookie Too Large` |
 
 **Health check:** `curl --fail http://localhost/-/health`. Interval 30s, timeout 10s, 5 retries, **300s start period**.
 
