@@ -28,3 +28,21 @@ RUN set -e; \
       /opt/gitlab/embedded/bin/ruby -c "$f" >/dev/null; \
     done; \
     chmod -R a+rX ${RAILS_ROOT}/dsoaas_plugins /opt/dsoaas
+
+# Plugin browser assets: published under public/assets/dsoaas/ (GitLab serves
+# /assets/ statically) with a content hash in the file name, plus a manifest the
+# plugin reads to build URLs. A new image means new names, so caching is safe.
+RUN set -e; \
+    out=${RAILS_ROOT}/public/assets/dsoaas; mkdir -p "$out"; \
+    for plugin in ${RAILS_ROOT}/dsoaas_plugins/*/; do \
+      [ -d "${plugin}assets" ] || continue; \
+      manifest="{"; sep=""; \
+      for f in "${plugin}"assets/*; do \
+        b=$(basename "$f"); stem=${b%.*}; ext=${b##*.}; \
+        hash=$(sha256sum "$f" | cut -c1-16); \
+        cp "$f" "$out/$stem-$hash.$ext"; \
+        manifest="$manifest$sep\"$b\":\"$stem-$hash.$ext\""; sep=","; \
+      done; \
+      echo "$manifest}" > "${plugin}assets-manifest.json"; \
+    done; \
+    chmod -R a+rX "$out"

@@ -45,6 +45,27 @@ module Dsoaas
         @registry.each { |plugin| install(plugin) }
       end
 
+      # Optional `early_install!` hook, run while initializers run (before the
+      # middleware stack is built and before to_prepare). Needed for Grape: under
+      # Puma, GitLab's request-metrics middleware memoizes API::API.routes when the
+      # stack is built, so endpoints must be added before that. Same version gate
+      # as install; errors are logged and never stop GitLab from booting.
+      def early_install_all!
+        @registry.each do |plugin|
+          next unless plugin.respond_to?(:early_install!)
+
+          requirement = Gem::Requirement.new(*Array(plugin.supported))
+          next unless requirement.satisfied_by?(Gem::Version.new(Gitlab::VERSION.sub(/-.*/, '')))
+          next if Gitlab.ee?
+
+          plugin.early_install!
+        rescue StandardError, ScriptError => e
+          message = "dsoaas plugin #{plugin.name} early install failed: #{e.class}: #{e.message}"
+          Rails.logger.error(message)
+          warn("[dsoaas] #{message}")
+        end
+      end
+
       def installed?(name)
         @statuses[name.to_s]&.state == :installed
       end
@@ -94,6 +115,8 @@ Dir[File.join(Dsoaas::Plugins::ROOT, '*', 'plugin.rb')].sort.each do |manifest|
 rescue StandardError, ScriptError => e
   warn("[dsoaas] failed to load #{manifest}: #{e.class}: #{e.message}")
 end
+
+Dsoaas::Plugins.early_install_all!
 
 # to_prepare runs before eager loading in production, which matters: GraphQL enums
 # such as MergeabilityCheckIdentifierEnum are built from the check list when their

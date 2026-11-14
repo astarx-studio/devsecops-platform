@@ -12,7 +12,6 @@ import type { ApolloDriverConfig } from '@nestjs/apollo';
 import { AppController } from './app.controller';
 import { AuditActorInterceptor } from './common/audit/audit-actor.interceptor';
 import { OidcJwtStrategy } from './common/guards';
-import { ApprovalRulesModule } from './approval-rules/approval-rules.module';
 import { AppConfigModule, AppConfiguration } from './config';
 import { ConfigsModule } from './configs/configs.module';
 import { GitLabModule } from './gitlab/gitlab.module';
@@ -65,7 +64,6 @@ import { VaultModule } from './vault/vault.module';
     ConfigsModule,
     TemplatesModule,
     ProjectsModule,
-    ApprovalRulesModule,
     McpModule,
   ],
   controllers: [AppController],

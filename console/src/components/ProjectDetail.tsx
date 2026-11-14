@@ -25,7 +25,6 @@ import { graphqlRequest } from '@/lib/client';
 import { MUTATIONS, QUERIES } from "@/lib/graphql";
 import type { DeleteProjectResult, Project } from '@/lib/types';
 import { AppContainerLogPanel } from "./AppContainerLogPanel";
-import { ApprovalRulesPanel } from "./ApprovalRulesPanel";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { DeleteProjectDialog } from './DeleteProjectDialog';
 import { DeploymentTargetPanel } from './DeploymentTargetPanel';
@@ -40,7 +39,7 @@ interface Props {
   onArchived: (project: Project) => void;
 }
 
-type DetailTab = "deployments" | "variables" | "sonar" | "approvals" | "audit" | "app-logs";
+type DetailTab = "deployments" | "variables" | "sonar" | "audit" | "app-logs";
 
 const newTabHint = {
   border: 0,
@@ -360,7 +359,6 @@ export function ProjectDetail({ project, onUpdated, onDeleted, onArchived }: Pro
                 value="sonar"
               />
             )}
-            {!readOnly && <Tab id="project-tab-approvals" aria-controls="project-panel-approvals" label="Approvals" value="approvals" />}
             <Tab
               id="project-tab-audit"
               aria-controls="project-panel-audit"
@@ -389,7 +387,6 @@ export function ProjectDetail({ project, onUpdated, onDeleted, onArchived }: Pro
             {detailTab === "sonar" && !readOnly && (
               <SonarPanel project={project} onUpdated={onUpdated} />
             )}
-            {detailTab === "approvals" && !readOnly && <ApprovalRulesPanel project={project} />}
             {detailTab === "audit" && (
               <Box>
                 {auditLoading && (

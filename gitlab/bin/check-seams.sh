@@ -1,6 +1,7 @@
 #!/bin/sh
 # Verify that every GitLab seam the DSOaaS plugins depend on still exists.
 # Usage: check-seams.sh <seams.txt> <gitlab-rails root>
+# A path may contain * (shell glob): the needle must appear in at least one match.
 # Exits non-zero (failing the image build) and lists each missing seam.
 set -eu
 
@@ -29,6 +30,16 @@ while IFS= read -r line || [ -n "$line" ]; do
   path="${line%%"${TAB}"*}"
   needle="${line#*"${TAB}"}"
   checked=$((checked + 1))
+  case "$path" in
+    *'*'*)
+      # Glob path (e.g. hash-named compiled assets): any matching file will do.
+      if ! grep -qlF -- "${needle}" ${ROOT}/${path} 2>/dev/null; then
+        echo "[seams] MISSING  ${path}: ${needle}" >&2
+        missing=$((missing + 1))
+      fi
+      continue
+      ;;
+  esac
   if [ ! -f "${ROOT}/${path}" ]; then
     echo "[seams] MISSING FILE  ${path}" >&2
     missing=$((missing + 1))

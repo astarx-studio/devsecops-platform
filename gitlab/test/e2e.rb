@@ -84,12 +84,12 @@ def commit_file(project, user, branch, path, content, start_branch: nil)
   raise "commit #{path}: #{result[:message]}" unless result[:status] == :success
 end
 
-def open_mr(project, author, source)
+def open_mr(project, author, source, target: MAIN)
   project = Project.find(project.id)
   project.repository.expire_branches_cache
   MergeRequests::CreateService.new(
     project: project, current_user: author,
-    params: { source_branch: source, target_branch: MAIN, title: "Change #{source}" }
+    params: { source_branch: source, target_branch: target, title: "Change #{source}" }
   ).execute.tap do |mr|
     raise "MR: #{mr.errors.full_messages}" unless mr.persisted?
 
@@ -118,6 +118,47 @@ def wait_until_prepared(mr, head_sha)
   mr.mark_as_unchecked if mr.can_be_merged? && mr.respond_to?(:mark_as_unchecked)
   mr.check_mergeability(async: false)
   MergeRequest.find(mr.id)
+end
+
+# Scratch project with a README on `main`, members added and default-branch
+# protection removed (it races with async permission refresh on new projects and
+# isn't what these tests exercise).
+def make_project(admin, org, name, members = {})
+  project = Projects::CreateService.new(admin, {
+    name: "#{name}-#{RUN}", path: "#{name}-#{RUN}", namespace_id: admin.namespace.id,
+    initialize_with_readme: true, default_branch: 'main', organization_id: org&.id
+  }).execute
+  raise "project: #{project.errors.full_messages}" unless project.persisted?
+
+  members.each { |user, level| project.add_member(user, level) }
+  AuthorizedProjectUpdate::ProjectRecalculateService.new(project).execute
+  60.times do
+    break if Gitlab::UserAccess.new(User.find(admin.id), container: Project.find(project.id))
+      .can_push_to_branch?(project.default_branch || 'main')
+
+    sleep 2
+  end
+  project.protected_branches.reload.each(&:destroy)
+  Project.find(project.id)
+end
+
+TOKENS = {}
+def token_for(user, org)
+  TOKENS[user.id] ||= begin
+    token = PersonalAccessToken.new(user: user, name: "e2e-#{RUN}", scopes: %w[api], expires_at: 2.days.from_now)
+    token.organization_id = org.id if token.respond_to?(:organization_id=) && org
+    token.save!
+    token.token
+  end
+end
+
+# A real REST request through the whole Rails stack (middleware included).
+def rest(method, path, user, org, body = nil)
+  env = { 'HTTP_PRIVATE_TOKEN' => token_for(user, org), 'CONTENT_TYPE' => 'application/json',
+          'HTTP_ACCEPT' => 'application/json', input: body ? body.to_json : '' }
+  res = Rack::MockRequest.new(Rails.application).request(method.to_s.upcase, "/api/v4#{path}", env)
+  data = res.body.empty? ? nil : (JSON.parse(res.body) rescue res.body) # rubocop:disable Style/RescueModifier
+  [res.status, data]
 end
 
 puts "DSOaaS approvals e2e (run #{RUN}) - GitLab #{Gitlab::VERSION}"
@@ -213,39 +254,21 @@ mrw = open_mr(project, dave, 'feature-weaken')
 approve(mrw, alice)
 step.call('MR cannot weaken its own rules', status(mrw), :not_approved)
 
-puts 'console rules (plugin DB) win over the file'
+puts 'GitLab-managed rules win over the file'
 if Dsoaas::PluginDB.configured?
-  set_console_rules = lambda do |config|
-    ok = Dsoaas::PluginDB.with do |c|
-      if config
-        c.exec_params(<<~SQL, [project.id, config.to_json])
-          INSERT INTO dsoaas_approval_rule_sets (project_id, config, updated_by) VALUES ($1, $2::jsonb, 'e2e')
-          ON CONFLICT (project_id) DO UPDATE SET config = EXCLUDED.config, updated_at = now()
-        SQL
-      else
-        c.exec_params('DELETE FROM dsoaas_approval_rule_sets WHERE project_id = $1', [project.id])
-      end
-      true
-    end
-    raise 'plugin DB write failed' unless ok
-
-    Dsoaas::Approvals::RulesStore.expire(project.id)
-  end
+  native = Dsoaas::Approvals::RuleService.new(Project.find(project.id), admin)
   source = -> { Dsoaas::Approvals::Evaluator.new(MergeRequest.find(mrw.id)).call.source }
 
   # mrw has 1 approval (alice); the file on the target branch asks for 2.
-  set_console_rules.call({ rules: [{ name: 'console', required: 1 }] })
-  step.call('console rule (1) satisfied -> mergeable', status(mrw), :mergeable)
-  step.call('source is console', source.call, :console)
+  rule = native.create(name: 'native', approvals_required: 1)
+  step.call('native rule (1) satisfied -> mergeable', status(mrw), :mergeable)
+  step.call('source is native', source.call, :native)
 
-  set_console_rules.call({ rules: [{ name: 'console', required: 3 }] })
-  step.call('stricter console rule -> not_approved', status(mrw), :not_approved)
+  native.update(rule['id'], approvals_required: 3)
+  step.call('stricter native rule -> not_approved', status(mrw), :not_approved)
 
-  set_console_rules.call({ rules: [] })
-  step.call('invalid console rules fail closed', status(mrw), :not_approved)
-
-  set_console_rules.call(nil)
-  step.call('console rules removed -> file applies again', status(mrw), :not_approved)
+  native.destroy(rule['id'])
+  step.call('native rules removed -> file applies again', status(mrw), :not_approved)
   step.call('source is file', source.call, :file)
 else
   puts '  skip  plugin DB not configured'
@@ -264,6 +287,107 @@ step.call('exactly one bot note per MR', notes.size, 1)
 body = notes.first&.note.to_s
 step.call('note shows the security rule as satisfied', body.include?('`security` | 1/1'), true)
 step.call('note has no @mentions', body.include?('@'), false)
+
+if Dsoaas::PluginDB.configured?
+  puts 'native rules via the EE-compatible REST API'
+  lead1 = make_user(admin, org, 'lead1')
+  lead2 = make_user(admin, org, 'lead2')
+  rita  = make_user(admin, org, 'rita') # Reporter: can't approve
+  np = make_project(admin, org, 'native', { lead1 => :developer, lead2 => :developer, alice => :developer,
+    bob => :developer, carol => :developer, dave => :developer, rita => :reporter })
+  base = "/projects/#{np.id}"
+  state = ->(mr) { rest(:get, "#{base}/merge_requests/#{mr.iid}/approval_state", admin, org).last }
+  rule_state = ->(mr, name) { state.call(mr)['rules'].find { |r| r['name'] == name } }
+
+  code, = rest(:post, "#{base}/approval_rules", bob, org, { name: 'nope', approvals_required: 1 })
+  step.call('developer cannot create rules (403)', code, 403)
+  code, body = rest(:get, "#{base}/approval_rules", bob, org)
+  step.call('developer can list rules', [code, body], [200, []])
+
+  puts 'case study 1: two leads, either one'
+  code, leads = rest(:post, "#{base}/approval_rules", admin, org,
+    { name: 'Leads', approvals_required: 1, user_ids: [lead1.id, lead2.id] })
+  step.call('maintainer creates rule (201)', code, 201)
+  step.call('rule has EE shape', [leads['rule_type'], leads['approvals_required'], leads['users'].size],
+    ['regular', 1, 2])
+  commit_file(np, admin, 'case-1', 'one.txt', "1\n", start_branch: 'main')
+  mr1 = open_mr(np, dave, 'case-1', target: 'main')
+  step.call('no approvals -> not_approved', status(mr1), :not_approved)
+  step.call('approvers listed upfront', rule_state.call(mr1, 'Leads')['users'].map { |u| u['id'] }.sort,
+    [lead1.id, lead2.id].sort)
+  approve(mr1, bob)
+  step.call('non-lead approval does not count', status(mr1), :not_approved)
+  approve(mr1, lead2)
+  step.call('one lead approves -> mergeable', status(mr1), :mergeable)
+  code, = rest(:delete, "#{base}/approval_rules/#{leads['id']}", admin, org)
+  step.call('rule deleted (204)', code, 204)
+
+  puts 'case study 2: 3 approvals including a specific person'
+  rest(:post, "#{base}/approval_rules", admin, org, { name: 'Consensus', approvals_required: 3 })
+  code, signoff = rest(:post, "#{base}/approval_rules", admin, org,
+    { name: 'Sign-off', require_all: true, usernames: [alice.username] })
+  step.call('require_all rule created', [code, signoff['require_all'], signoff['approvals_required']], [201, true, 1])
+  commit_file(np, admin, 'case-2', 'two.txt', "2\n", start_branch: 'main')
+  mr2 = open_mr(np, dave, 'case-2', target: 'main')
+  [bob, carol, lead1].each { |u| approve(mr2, u) }
+  step.call('3 approvals without alice -> not_approved', status(mr2), :not_approved)
+  step.call('Consensus met, Sign-off not', [rule_state.call(mr2, 'Consensus')['approved'],
+    rule_state.call(mr2, 'Sign-off')['approved']], [true, false])
+  approve(mr2, alice)
+  step.call('alice approves -> mergeable', status(mr2), :mergeable)
+  code, approvals = rest(:get, "#{base}/merge_requests/#{mr2.iid}/approvals", admin, org)
+  step.call('CE approvals endpoint has EE fields', [code, approvals['approvals_left'], approvals['approval_rules_left']],
+    [200, 0, []])
+
+  puts 'unsatisfiable rules'
+  code, body = rest(:post, "#{base}/approval_rules", admin, org,
+    { name: 'Reporter sign-off', require_all: true, user_ids: [rita.id] })
+  step.call('require_all with a Reporter refused (400)', [code, body.to_s.include?("can't approve")], [400, true])
+  code, = rest(:post, "#{base}/approval_rules", admin, org, { name: 'Too many', approvals_required: 50 })
+  step.call('more approvals than eligible people refused (400)', code, 400)
+  code, = rest(:post, "#{base}/approval_rules", admin, org, { name: 'Consensus', approvals_required: 1 })
+  step.call('duplicate name refused (400)', code, 400)
+  code, = rest(:post, "#{base}/approval_rules", admin, org, { name: 'Ghost', usernames: ['no-such-user-x'] })
+  step.call('unknown user refused (400)', code, 400)
+  User.find(alice.id).block!
+  step.call('required approver blocked -> not_approved', status(mr2), :not_approved)
+  step.call('reason shown', rule_state.call(mr2, 'Sign-off')['unsatisfiable'].to_s.include?(alice.username), true)
+  User.find(alice.id).activate!
+  step.call('approver unblocked -> mergeable again', status(mr2), :mergeable)
+
+  puts 'target branch scoping'
+  rest(:post, "#{base}/approval_rules", admin, org, { name: 'Release', approvals_required: 2, branches: ['release/*'] })
+  step.call('release/* rule does not apply to main', rule_state.call(mr2, 'Release'), nil)
+  commit_file(np, admin, 'release/1.0', 'r.txt', "r\n", start_branch: 'main')
+  commit_file(np, admin, 'case-3', 'three.txt', "3\n", start_branch: 'release/1.0')
+  mr3 = open_mr(np, dave, 'case-3', target: 'release/1.0')
+  step.call('release/* rule applies to release/1.0', rule_state.call(mr3, 'Release')&.dig('approvals_required'), 2)
+
+  puts 'approval settings'
+  code, settings = rest(:post, "#{base}/approvals", admin, org, { merge_requests_author_approval: true })
+  step.call('settings saved', [code, settings['merge_requests_author_approval']], [201, true])
+  code, = rest(:post, "#{base}/approvals", bob, org, { reset_approvals_on_push: false })
+  step.call('developer cannot change settings (403)', code, 403)
+
+  puts 'audit trail'
+  events = Dsoaas::PluginDB.with do |c|
+    c.exec_params('SELECT action FROM dsoaas_approval_rule_events WHERE project_id = $1', [np.id]).column_values(0)
+  end
+  step.call('rule changes audited', (%w[rule.created rule.deleted settings.updated] - events.to_a).empty?, true)
+
+  puts 'legacy console rules migrate'
+  lp = make_project(admin, org, 'legacy', { alice => :developer })
+  Dsoaas::PluginDB.with do |c|
+    c.exec_params('INSERT INTO dsoaas_approval_rule_sets (project_id, config) VALUES ($1, $2::jsonb)',
+      [lp.id, { rules: [{ name: 'old', required: 1, approvers: { users: [alice.username, 'gone-user'] } }],
+                author_can_approve: false }.to_json])
+    migration = Module.new.module_eval(File.read(File.join(Dsoaas::Approvals::DIR, 'migrations', '003_native_rules.rb')))
+    c.transaction { |tx| migration.call(tx) }
+  end
+  Dsoaas::Approvals::RulesStore.expire(lp.id)
+  migrated = Dsoaas::Approvals::RulesStore.fetch(lp.id).rules.first
+  step.call('legacy rule migrated with ids', migrated && [migrated['name'], migrated['user_ids']], ['old', [alice.id]])
+end
 
 puts 'plugin database'
 if Dsoaas::PluginDB.configured?

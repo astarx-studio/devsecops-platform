@@ -18,8 +18,6 @@ export type AuditEventType =
   | 'project.registered'
   | 'project.deployment.upserted'
   | 'project.deployment.removed'
-  | 'project.approval_rules.updated'
-  | 'project.approval_rules.cleared'
   | 'env.profile.revealed'
   | 'env.profile.content_updated'
   | 'env.profile.metadata_updated'
@@ -60,8 +58,6 @@ export class AuditLog {
       'project.registered',
       'project.deployment.upserted',
       'project.deployment.removed',
-      'project.approval_rules.updated',
-      'project.approval_rules.cleared',
       'env.profile.revealed',
       'env.profile.content_updated',
       'env.profile.metadata_updated',

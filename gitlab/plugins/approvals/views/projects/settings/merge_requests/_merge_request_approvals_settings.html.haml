@@ -56,6 +56,7 @@
             %table.table.b-table.gl-table.b-table-stacked-md.gl-mb-0{ role: 'table' }
               %thead
                 %tr
+                  %th= _('Rule')
                   %th= _('Approvers')
                   %th= _('Target branch')
                   %th.gl-text-center= _('Approvals required')
@@ -65,25 +66,27 @@
               %tbody
                 - presented.each do |rule|
                   %tr{ data: { testid: 'dsoaas-approval-rule', rule_id: rule[:id] } }
+                    %td{ 'data-label': _('Rule') }
+                      .gl-font-bold= rule[:name]
+                      - if rule[:file_paths].any?
+                        .gl-text-sm.gl-text-subtle.gl-mt-1
+                          = _('When these paths change:')
+                          = safe_join(rule[:file_paths].map { |p| content_tag(:code, p) }, ', ')
                     %td{ 'data-label': _('Approvers') }
-                      .gl-font-bold.gl-mb-2= rule[:name]
                       - users = ::User.where(id: rules.find { |r| r['id'] == rule[:id] }['user_ids']).order(:username)
                       - groups = ::Group.where(id: rules.find { |r| r['id'] == rule[:id] }['group_ids'])
                       - if users.empty? && groups.empty?
                         %span.gl-text-subtle= _('Any eligible user (Developer role or higher)')
                       - else
-                        .gl-flex.gl-flex-wrap.gl-items-center.gl-gap-2
+                        .gl-flex.gl-flex-wrap.gl-items-center.gl-gap-3
                           - users.each do |user|
-                            = link_to user_path(user), class: 'has-tooltip', title: "#{user.name} (@#{user.username})" do
-                              = render Pajamas::AvatarComponent.new(user, size: 24, alt: user.name)
+                            = link_to user_path(user), class: 'gl-inline-flex gl-items-center gl-gap-2 gl-text-default', title: "@#{user.username}" do
+                              = render Pajamas::AvatarComponent.new(user, size: 24, alt: '')
+                              %span= user.name
                           - groups.each do |group|
                             = render Pajamas::BadgeComponent.new(group.full_path, icon: 'group', variant: :neutral)
                       - if rule[:require_all]
                         .gl-text-sm.gl-text-subtle.gl-mt-2= _('Every listed person must approve')
-                      - if rule[:file_paths].any?
-                        .gl-text-sm.gl-text-subtle.gl-mt-2
-                          = _('Only when these paths change:')
-                          = rule[:file_paths].map { |p| "<code>#{ERB::Util.html_escape(p)}</code>" }.join(', ').html_safe
                     %td{ 'data-label': _('Target branch') }
                       - if rule[:applies_to_all_protected_branches]
                         = _('All protected branches')

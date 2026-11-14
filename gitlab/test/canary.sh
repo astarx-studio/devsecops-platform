@@ -13,6 +13,8 @@
 # Usage:  gitlab/test/canary.sh <image>         e.g. dsoaas-gitlab:19.5.3-ce.0
 # Env:    CANARY_TIMEOUT=<s>  boot timeout (default 1200)
 #         KEEP_CANARY=1       leave the container running for debugging
+#         CANARY_PORT=<port>  also publish the UI on http://127.0.0.1:<port> (local only),
+#                             for checking the plugin UI in a browser
 # Needs ~4 GB free RAM while it runs.
 # =============================================================================
 set -euo pipefail
@@ -38,11 +40,19 @@ trap cleanup EXIT
 
 PLUGIN_DB_URL='postgresql://gitlab@/dsoaas_gitlab_plugins?host=/var/opt/gitlab/postgresql'
 
+EXTERNAL_URL="http://${NAME}"
+PORT_ARGS=()
+if [[ -n "${CANARY_PORT:-}" ]]; then
+  EXTERNAL_URL="http://127.0.0.1:${CANARY_PORT}"
+  PORT_ARGS=(-p "127.0.0.1:${CANARY_PORT}:80")
+fi
+
 log "Starting ${IMAGE} as ${NAME}..."
-docker run -d --name "${NAME}" --hostname "${NAME}" --shm-size 256m \
+docker run -d --name "${NAME}" --hostname "${NAME}" --shm-size 256m ${PORT_ARGS[@]+"${PORT_ARGS[@]}"} \
   -e DSOAAS_CANARY=1 \
   -e GITLAB_OMNIBUS_CONFIG="
-external_url 'http://${NAME}'
+external_url '${EXTERNAL_URL}'
+nginx['listen_port'] = 80
 prometheus_monitoring['enable'] = false
 registry['enable'] = false
 gitlab_pages['enable'] = false

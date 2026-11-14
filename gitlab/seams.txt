@@ -37,3 +37,31 @@ app/models/group.rb	def member?(user, min_access_level
 app/services/notes/create_service.rb	def execute(
 app/services/notes/update_service.rb	def execute(note)
 lib/gitlab/exclusive_lease.rb	def try_obtain
+
+# --- approvals: Settings > Merge requests section (EE's own view hook) ---
+app/views/projects/settings/merge_requests/show.html.haml	render_if_exists 'projects/settings/merge_requests/merge_request_approvals_settings'
+app/helpers/application_helper.rb	def render_if_exists
+app/components/layouts/settings_section_component.rb	class SettingsSectionComponent
+app/components/layouts/crud_component.rb	renders_one :actions
+app/components/pajamas/checkbox_tag_component.rb	renders_one :help_text
+app/components/pajamas/avatar_component.rb	def initialize(item
+app/components/pajamas/button_component.rb	button_options: {},
+
+# --- approvals: EE-compatible REST API (added to CE's class, as EE does) ---
+lib/api/merge_request_approvals.rb	class MergeRequestApprovals < ::API::Base
+lib/api/merge_request_approvals.rb	get 'approvals', urgency: :low
+lib/api/api.rb	mount ::API::MergeRequestApprovals
+lib/api/entities/merge_request_approvals.rb	class MergeRequestApprovals < Grape::Entity
+lib/api/entities/user_basic.rb	class UserBasic
+lib/api/entities/basic_group_details.rb	class BasicGroupDetails
+lib/api/entities/protected_branch.rb	class ProtectedBranch
+lib/api/helpers.rb	def find_merge_request_with_access(
+lib/api/helpers.rb	def declared_params(
+app/models/group.rb	def members_with_parents(
+app/models/user.rb	scope :by_username
+app/models/protected_branch.rb	def self.protected?(project, ref_name)
+
+# --- approvals: MR widget (compiled CE frontend markers the script hooks onto) ---
+public/assets/webpack/*.js	js-mr-approvals
+public/assets/webpack/*.js	approvals-summary-content
+public/assets/webpack/*.js	mrWidget|Approval is optional

@@ -79,15 +79,6 @@ export interface AppConfiguration {
     requiredGroup?: string;
   };
 
-  gitlabPlugins: {
-    /**
-     * PostgreSQL database owned by the DSOaaS GitLab plugins (separate from
-     * GitLab's own). The api stores console-managed approval rules there.
-     * Without a password the approval-rules mutations fail; startup does not.
-     */
-    db: { host: string; port: number; name: string; user: string; password?: string };
-  };
-
   mcp: {
     /** Listener inside the API container. Published separately from GraphQL. */
     port: number;
@@ -166,16 +157,6 @@ const configuration = (): AppConfiguration => {
         optional('AUTO_DEVOPS_PIPELINE_PROJECT') ??
         'system/devsecops-platform/configs/auto-devops-pipeline',
       pipelineFile: optional('AUTO_DEVOPS_PIPELINE_FILE') ?? '.gitlab-ci.yml',
-    },
-
-    gitlabPlugins: {
-      db: {
-        host: optional('GITLAB_PLUGINS_DB_HOST') ?? 'postgres',
-        port: Number.parseInt(optional('GITLAB_PLUGINS_DB_PORT') ?? '5432', 10),
-        name: optional('GITLAB_PLUGINS_DB_NAME') ?? 'dsoaas_gitlab_plugins',
-        user: optional('GITLAB_PLUGINS_DB_USER') ?? 'dsoaas_gitlab_plugins',
-        password: optional('GITLAB_PLUGINS_DB_PASSWORD') || undefined,
-      },
     },
 
     mcp: {
