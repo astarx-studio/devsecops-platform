@@ -22,6 +22,25 @@ http:
         regex: "^https?://[^/]+(.*)"
         replacement: "https://www.__DOMAIN__${1}"
 
+    redirect-qestor-www-to-apex:
+      redirectRegex:
+        permanent: true
+        regex: "^https?://[^/]+(.*)"
+        replacement: "https://qestor.app${1}"
+
+    # Used by the commented cutover routers below. Safe to define now.
+    redirect-qestor-apps-to-app:
+      redirectRegex:
+        permanent: true
+        regex: "^https?://[^/]+(.*)"
+        replacement: "https://qestor.app${1}"
+
+    redirect-qestor-api-apps-to-api:
+      redirectRegex:
+        permanent: true
+        regex: "^https?://[^/]+(.*)"
+        replacement: "https://api.qestor.app${1}"
+
   routers:
     # Company profile (compro-fe) production vanity host
     k3d-custom-www:
@@ -44,3 +63,59 @@ http:
       priority: 20
       tls:
         certResolver: letsencrypt
+
+    # Qestor production vanity hosts. DNS-only A records point at the same edge
+    # as *.apps.<DOMAIN>. These routers do nothing until Traefik is recreated.
+    # Do not recreate until the ACME Cloudflare token can DNS-01 qestor.app and
+    # still renew yadatechnology.com. Kubernetes Ingress hosts stay on the apps
+    # zone until that cutover. Later, production moves to GCP or AWS; this
+    # Traefik path is only the DSOaaS interim.
+    k3d-qestor-app:
+      rule: "Host(`qestor.app`)"
+      entryPoints:
+        - websecure
+      service: k3d-ingress
+      priority: 20
+      tls: {}
+
+    k3d-qestor-api:
+      rule: "Host(`api.qestor.app`)"
+      entryPoints:
+        - websecure
+      service: k3d-ingress
+      priority: 20
+      tls: {}
+
+    # www.qestor.app → apex, path preserved.
+    qestor-www-to-apex:
+      rule: "Host(`www.qestor.app`)"
+      entryPoints:
+        - websecure
+      middlewares:
+        - redirect-qestor-www-to-apex
+      service: noop@internal
+      priority: 20
+      tls: {}
+
+    # Old prod web host. The API host stays put: the current web bundle still
+    # calls qestor-api.apps.<DOMAIN>, and a redirect there would break those calls.
+    k3d-qestor-apps-redirect:
+      rule: "Host(`qestor.apps.__DOMAIN__`)"
+      entryPoints:
+        - websecure
+      middlewares:
+        - redirect-qestor-apps-to-app
+      service: noop@internal
+      priority: 20
+      tls:
+        certResolver: letsencrypt
+    # k3d-qestor-api-apps-redirect:
+    #   rule: "Host(`qestor-api.apps.__DOMAIN__`)"
+    #   entryPoints:
+    #     - websecure
+    #   middlewares:
+    #     - redirect-qestor-api-apps-to-api
+    #   service: noop@internal
+    #   priority: 20
+    #   tls:
+    #     certResolver: letsencrypt

@@ -1,0 +1,9 @@
+# Static Let's Encrypt certificate for qestor.app and *.qestor.app.
+# Issued with DNS-01 against the qestor.app Cloudflare zone. The platform
+# ACME token only covers yadatechnology.com, so these hosts do not use
+# certResolver. Recreate Traefik after replacing the files under
+# .vols/traefik/certs/qestor-app/certificates/.
+tls:
+  certificates:
+    - certFile: /etc/traefik/certs/qestor-app/certificates/qestor.app.crt
+      keyFile: /etc/traefik/certs/qestor-app/certificates/qestor.app.key

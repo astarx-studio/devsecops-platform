@@ -7,7 +7,7 @@
 #             postgres-gitlab-init, postgres-registry-init, mongo-init,
 #             vault-prod-bootstrap, vault-oidc-init,
 #             sonarqube-plugin-init, sonarqube-config-init, sonarqube-init, sonarqube-mcp (profile sonarmcp),
-#             minio, minio-init
+#             minio, minio-init, qestor-app-cert-renew
 # Network:    devops-network (bridge)
 # ==========================================================================
 
@@ -117,6 +117,61 @@ services:
           - ${DEVTOOLS_MINIO_API_DOMAIN}
           - ${DEVTOOLS_MINIO_CONSOLE_DOMAIN}
           - ${N8N_DOMAIN}
+
+  # Renews the static qestor.app certificate. Traefik's ACME token only covers
+  # yadatechnology.com, so this host uses its own Cloudflare token and lego.
+  # Traefik restarts only after the certificate file actually changes.
+  qestor-app-cert-renew:
+    image: docker:cli
+    container_name: qestor-app-cert-renew
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -u
+        echo "qestor.app certificate renewal loop started"
+        while true; do
+          if [ -z "$${CF_DNS_API_TOKEN:-}" ]; then
+            echo "QESTOR_APP_CF_DNS_API_TOKEN is empty; sleeping"
+            sleep 43200
+            continue
+          fi
+          before=$$(stat -c %Y /certs/certificates/qestor.app.crt 2>/dev/null || echo 0)
+          host_certs=$$(docker inspect traefik --format '{{range .Mounts}}{{if eq .Destination "/etc/traefik/certs"}}{{.Source}}{{end}}{{end}}' 2>/dev/null || true)
+          if [ -z "$$host_certs" ]; then
+            echo "traefik cert volume not found; retry in 1h"
+            sleep 3600
+            continue
+          fi
+          host_qestor=$$(printf '%s/qestor-app' "$$host_certs" | sed 's#\\#/#g')
+          docker run --rm \
+            -e CF_DNS_API_TOKEN \
+            -v "$$host_qestor:/certs" \
+            goacme/lego:latest \
+            run --path /certs \
+            --email "$$LEGO_EMAIL" \
+            --dns cloudflare \
+            --dns.propagation.wait 30s \
+            --domains qestor.app \
+            --domains "*.qestor.app" \
+            --accept-tos || echo "lego renew failed"
+          after=$$(stat -c %Y /certs/certificates/qestor.app.crt 2>/dev/null || echo 0)
+          if [ "$$after" != "$$before" ]; then
+            echo "certificate changed; restarting traefik"
+            docker restart traefik
+          else
+            echo "certificate unchanged"
+          fi
+          sleep 43200
+        done
+    environment:
+      CF_DNS_API_TOKEN: ${QESTOR_APP_CF_DNS_API_TOKEN:-}
+      LEGO_EMAIL: ${TRAEFIK_ACME_EMAIL}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./.vols/traefik/certs/qestor-app:/certs
+    networks:
+      - devops-network
 
   # ========================================================================
   # MONGODB — Platform Registry (v2)
