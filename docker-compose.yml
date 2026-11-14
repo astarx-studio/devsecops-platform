@@ -626,6 +626,18 @@ services:
         gitlab_rails['object_store']['objects']['terraform_state']['bucket'] = 'gitlab-terraform-state'
         gitlab_rails['object_store']['objects']['pages']['bucket']          = 'gitlab-pages'
         gitlab_rails['object_store']['objects']['ci_secure_files']['bucket'] = 'gitlab-ci-secure-files'
+        # NTFS bind mounts (.vols on Docker Desktop) surface repo dirs as uid 0.
+        # Without safe.directory=*, Gitaly git fails with "dubious ownership"
+        # (exit 128) on push/fetch/UI after volume copy or host move.
+        # omnibus_gitconfig was removed in GitLab 17+; use gitaly git.config.
+        # Do not restate pack/receive/repack/fetch keys — Gitaly sets those.
+        gitaly['configuration'] = {
+          git: {
+            config: [
+              { key: 'safe.directory', value: '*' }
+            ]
+          }
+        }
     volumes:
       - ./.vols/gitlab/config:/etc/gitlab
       - ./.vols/gitlab/logs:/var/log/gitlab

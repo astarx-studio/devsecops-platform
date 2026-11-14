@@ -171,6 +171,8 @@ This section is the **Compose-host (Windows) backend** only. Linux Compose, Kube
 
 Must run on the **host** (Git Bash / Task Scheduler). A container `df` sees the Docker VHDX guest filesystem, not the host NTFS volume where `.vols/gitlab` lives. After a cross-volume move/junction, set `WATCHDOG_DF_PATH` to a path on the real data drive (e.g. `D:/devsecops-platform`) so Git Bash does not report free space for the wrong volume.
 
+**Git push / UI “empty repo” after a `.vols` copy or host move:** NTFS bind mounts often show hashed repositories as uid `0` while Gitaly runs as `git` (998). Git then refuses the tree (`fatal: detected dubious ownership`, Gitaly exit 128). The stack sets Gitaly `git.config` `safe.directory = *` in `GITLAB_OMNIBUS_CONFIG` for this (`omnibus_gitconfig` was removed in GitLab 17+ and will crash reconfigure). If a running container predates that setting, apply immediately with `docker exec gitlab git config --system --add safe.directory '*'` then `gitlab-ctl restart gitaly`.
+
 ```bash
 make watchdog                      # one check (safe to schedule every 1–2 min)
 make watchdog ARGS='--loop 120'    # long-running
