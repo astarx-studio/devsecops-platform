@@ -1,36 +1,132 @@
-'use client';
+"use client";
 
-import AddIcon from '@mui/icons-material/Add';
-import AppRegistrationIcon from '@mui/icons-material/AppRegistration';
-import HistoryIcon from "@mui/icons-material/History";
-import KeyOutlinedIcon from "@mui/icons-material/KeyOutlined";
-import { Box, Container, Grid, Tab, Tabs, Typography } from "@mui/material";
+import AddOutlinedIcon from "@mui/icons-material/AddOutlined";
+import AppRegistrationOutlinedIcon from "@mui/icons-material/AppRegistrationOutlined";
+import CheckCircleOutlineIcon from "@mui/icons-material/CheckCircleOutline";
+import FolderOpenOutlinedIcon from "@mui/icons-material/FolderOpenOutlined";
+import {
+  Box,
+  Button,
+  Drawer,
+  Paper,
+  Stack,
+  Typography,
+} from "@mui/material";
+import dynamic from "next/dynamic";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useState } from "react";
 
-import type { Project } from "@/lib/types";
-import { LogsPanel } from "@/components/LogsPanel";
-import { CreateProjectForm } from "@/components/CreateProjectForm";
-import { McpAccessPanel } from "@/components/McpAccessPanel";
-import { ProjectDetail } from "@/components/ProjectDetail";
+import { ConsoleNavigation } from "@/components/ConsoleNavigation";
+import { OverviewPanel } from "@/components/OverviewPanel";
+import { PageHeader } from "@/components/PageHeader";
+import { PanelFallback } from "@/components/PanelFallback";
 import { ProjectList, type ListCategory } from "@/components/ProjectList";
-import { RegisterProjectForm } from "@/components/RegisterProjectForm";
 import { SettingsBar } from "@/components/SettingsBar";
+import {
+  CONSOLE_SECTIONS,
+  isConsoleSection,
+  type ConsoleSection,
+} from "@/lib/console-sections";
+import type { Project } from "@/lib/types";
+
+const CreateProjectForm = dynamic(
+  () => import("@/components/CreateProjectForm").then((mod) => mod.CreateProjectForm),
+  { loading: () => <PanelFallback label="the form" /> },
+);
+const RegisterProjectForm = dynamic(
+  () => import("@/components/RegisterProjectForm").then((mod) => mod.RegisterProjectForm),
+  { loading: () => <PanelFallback label="the form" /> },
+);
+const McpAccessPanel = dynamic(
+  () => import("@/components/McpAccessPanel").then((mod) => mod.McpAccessPanel),
+  { loading: () => <PanelFallback label="MCP" /> },
+);
+const LogsPanel = dynamic(
+  () => import("@/components/LogsPanel").then((mod) => mod.LogsPanel),
+  { loading: () => <PanelFallback label="logs" /> },
+);
+const ProjectDetail = dynamic(
+  () => import("@/components/ProjectDetail").then((mod) => mod.ProjectDetail),
+  { loading: () => <PanelFallback label="the project" /> },
+);
+
+function ProvisioningAside({ type }: { type: "create" | "register" }) {
+  const items =
+    type === "create"
+      ? [
+          "Use a unique, slash-separated GitLab group path.",
+          "Choose Auto DevOps or an approved platform template.",
+          "Deployment and publishing capabilities are applied during provisioning.",
+        ]
+      : [
+          "Find the numeric project ID on the GitLab project overview.",
+          "Deployment wiring connects Vault, CI, and deployment targets.",
+          "Branch options can be set globally or per environment.",
+        ];
+
+  return (
+    <Paper variant="outlined" sx={{ p: 2.5, alignSelf: "start", bgcolor: "#f0f4f4" }}>
+      <Typography variant="h6" component="h2" sx={{ mb: 0.75 }}>
+        {type === "create" ? "Provisioning checklist" : "Before you register"}
+      </Typography>
+      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+        {type === "create"
+          ? "A few decisions now establish the project’s delivery foundation."
+          : "Confirm the repository and delivery model before connecting it."}
+      </Typography>
+      <Stack spacing={1.75}>
+        {items.map((item) => (
+          <Stack key={item} direction="row" spacing={1.25} alignItems="flex-start">
+            <CheckCircleOutlineIcon sx={{ fontSize: 19, color: "primary.main", mt: 0.15 }} />
+            <Typography variant="body2" color="text.secondary">
+              {item}
+            </Typography>
+          </Stack>
+        ))}
+      </Stack>
+    </Paper>
+  );
+}
 
 export function ConsolePage() {
+  const searchParams = useSearchParams();
+  const initialView = searchParams.get("view");
+  const [section, setSection] = useState<ConsoleSection>(
+    isConsoleSection(initialView) ? initialView : "overview",
+  );
   const [selected, setSelected] = useState<Project | null>(null);
   const [refreshToken, setRefreshToken] = useState(0);
-  const [tab, setTab] = useState(0);
   const [listCategory, setListCategory] = useState<ListCategory>("active");
+  const [navigationOpen, setNavigationOpen] = useState(false);
   const router = useRouter();
-  const searchParams = useSearchParams();
   const preferredId = searchParams.get("id");
   const preferredSlug = searchParams.get("slug");
+
+  const navigate = useCallback(
+    (nextSection: ConsoleSection) => {
+      setSection(nextSection);
+      setNavigationOpen(false);
+      const next = new URLSearchParams(searchParams.toString());
+      if (nextSection === "overview") next.delete("view");
+      else next.set("view", nextSection);
+      if (nextSection !== "projects") {
+        next.delete("id");
+        next.delete("slug");
+      }
+      const query = next.toString();
+      router.replace(query ? `/?${query}` : "/", { scroll: false });
+    },
+    [router, searchParams],
+  );
 
   const selectProject = useCallback(
     (project: Project) => {
       setSelected(project);
+      setSection("projects");
+      setListCategory(project.archived ? "archived" : "active");
+      setNavigationOpen(false);
       const next = new URLSearchParams(searchParams.toString());
+      next.set("view", "projects");
       next.set("id", project.id);
       next.delete("slug");
       router.replace(`/?${next.toString()}`, { scroll: false });
@@ -38,26 +134,35 @@ export function ConsolePage() {
     [router, searchParams],
   );
 
-  const bumpRefresh = useCallback(() => setRefreshToken((n) => n + 1), []);
+  const bumpRefresh = useCallback(() => setRefreshToken((value) => value + 1), []);
 
   const handleCreated = useCallback(
     (project: Project) => {
       setSelected(project);
-      setTab(0);
+      setSection("projects");
+      setListCategory("active");
       bumpRefresh();
+      const next = new URLSearchParams(searchParams.toString());
+      next.set("view", "projects");
+      next.set("id", project.id);
+      next.delete("slug");
+      router.replace(`/?${next.toString()}`, { scroll: false });
     },
-    [bumpRefresh],
+    [bumpRefresh, router, searchParams],
+  );
+
+  const createAction = (
+    <Button
+      variant="contained"
+      startIcon={<AddOutlinedIcon />}
+      onClick={() => navigate("create")}
+    >
+      Create project
+    </Button>
   );
 
   return (
-    <Box
-      sx={{
-        minHeight: "100vh",
-        display: "flex",
-        flexDirection: "column",
-        position: "relative",
-      }}
-    >
+    <Box sx={{ minHeight: "100dvh", bgcolor: "background.default" }}>
       <Box
         component="a"
         href="#main"
@@ -68,191 +173,188 @@ export function ConsolePage() {
           main.focus();
         }}
         sx={{
-          position: "absolute",
-          left: 8,
-          top: -48,
+          position: "fixed",
+          left: 16,
+          top: -56,
           zIndex: (theme) => theme.zIndex.tooltip,
           bgcolor: "primary.main",
-          color: "background.default",
+          color: "primary.contrastText",
           px: 2,
           py: 1,
           borderRadius: 1,
           fontWeight: 600,
-          "&:focus": { top: 8 },
+          "&:focus": { top: 12 },
         }}
       >
         Skip to main content
       </Box>
-      <SettingsBar />
-      <Container
-        component="main"
-        id="main"
-        tabIndex={-1}
-        maxWidth="xl"
-        sx={{ flex: 1, py: 2, "&:focus": { outline: "none" } }}
+
+      <Box
+        component="aside"
+        sx={{
+          display: { xs: "none", md: "block" },
+          position: "fixed",
+          inset: "0 auto 0 0",
+          width: 248,
+          zIndex: (theme) => theme.zIndex.drawer,
+        }}
       >
-        <Tabs
-          value={tab}
-          onChange={(_, v) => setTab(v)}
-          aria-label="Console sections"
-          selectionFollowsFocus
-          sx={{ mb: 2 }}
+        <ConsoleNavigation section={section} onNavigate={navigate} />
+      </Box>
+      <Drawer
+        open={navigationOpen}
+        onClose={() => setNavigationOpen(false)}
+        ModalProps={{ keepMounted: true }}
+        sx={{ display: { md: "none" } }}
+        PaperProps={{ sx: { width: 280 } }}
+      >
+        <ConsoleNavigation section={section} onNavigate={navigate} />
+      </Drawer>
+
+      <Box sx={{ ml: { md: "248px" }, minWidth: 0 }}>
+        <SettingsBar
+          sectionTitle={CONSOLE_SECTIONS[section].shortTitle}
+          onOpenNavigation={() => setNavigationOpen(true)}
+        />
+        <Box
+          component="main"
+          id="main"
+          tabIndex={-1}
+          sx={{
+            maxWidth: 1600,
+            mx: "auto",
+            px: { xs: 2, sm: 3, lg: 4 },
+            py: { xs: 2.5, md: 3.5 },
+            "&:focus": { outline: "none" },
+          }}
         >
-          <Tab
-            id="tab-projects"
-            aria-controls="panel-projects"
-            label="Projects"
+          <PageHeader
+            title={CONSOLE_SECTIONS[section].title}
+            description={CONSOLE_SECTIONS[section].description}
+            actions={
+              section === "overview" || section === "projects"
+                ? createAction
+                : section === "create"
+                  ? <Button variant="outlined" onClick={() => navigate("register")}>Register existing instead</Button>
+                  : undefined
+            }
           />
-          <Tab
-            id="tab-create"
-            aria-controls="panel-create"
-            icon={<AddIcon />}
-            iconPosition="start"
-            label="Create"
-          />
-          <Tab
-            id="tab-register"
-            aria-controls="panel-register"
-            icon={<AppRegistrationIcon />}
-            iconPosition="start"
-            label="Register"
-          />
-          <Tab
-            id="tab-mcp"
-            aria-controls="panel-mcp"
-            icon={<KeyOutlinedIcon />}
-            iconPosition="start"
-            label="MCP"
-          />
-          <Tab
-            id="tab-logs"
-            aria-controls="panel-logs"
-            icon={<HistoryIcon />}
-            iconPosition="start"
-            label="Logs"
-          />
-        </Tabs>
 
-        {tab === 0 && (
-          <Grid
-            container
-            spacing={2}
-            role="tabpanel"
-            id="panel-projects"
-            aria-labelledby="tab-projects"
-            sx={{
-              height: { xs: "auto", md: "calc(100vh - 220px)" },
-              minHeight: { xs: 0, md: 480 },
-            }}
-          >
-            <Grid
-              item
-              xs={12}
-              md={4}
+          {section === "overview" && (
+            <OverviewPanel
+              refreshToken={refreshToken}
+              onNavigate={navigate}
+              onSelectProject={selectProject}
+            />
+          )}
+
+          {section === "projects" && (
+            <Box
               sx={{
-                height: { xs: "auto", md: "100%" },
-                minHeight: { xs: 420, md: 0 },
+                display: "grid",
+                gridTemplateColumns: { xs: "minmax(0, 1fr)", lg: "minmax(300px, 350px) minmax(0, 1fr)" },
+                gap: 2,
+                height: { lg: "calc(100dvh - 222px)" },
+                minHeight: { lg: 600 },
+                alignItems: "stretch",
               }}
             >
-              <ProjectList
-                selectedId={selected?.id ?? null}
-                onSelect={selectProject}
-                preferredId={preferredId}
-                preferredSlug={preferredSlug}
-                refreshToken={refreshToken}
-                category={listCategory}
-                onCategoryChange={(cat) => {
-                  setListCategory(cat);
-                  setSelected(null);
-                }}
-                onDetected={bumpRefresh}
-              />
-            </Grid>
-            <Grid
-              item
-              xs={12}
-              md={8}
-              sx={{
-                height: { xs: "auto", md: "100%" },
-                minHeight: { xs: 320, md: 0 },
-              }}
-            >
-              {selected ? (
-                <ProjectDetail
-                  project={selected}
-                  onUpdated={(p) => {
-                    setSelected(p);
-                    bumpRefresh();
-                  }}
-                  onDeleted={() => {
+              <Box sx={{ minHeight: { xs: 480, lg: 0 }, minWidth: 0 }}>
+                <ProjectList
+                  selectedId={selected?.id ?? null}
+                  onSelect={selectProject}
+                  preferredId={preferredId}
+                  preferredSlug={preferredSlug}
+                  refreshToken={refreshToken}
+                  category={listCategory}
+                  onCategoryChange={(category) => {
+                    setListCategory(category);
                     setSelected(null);
-                    bumpRefresh();
                   }}
-                  onArchived={(p) => {
-                    setSelected(p);
-                    setListCategory("archived");
-                    bumpRefresh();
-                  }}
+                  onDetected={bumpRefresh}
                 />
+              </Box>
+              <Box sx={{ minHeight: { xs: 440, lg: 0 }, minWidth: 0 }}>
+                {selected ? (
+                  <ProjectDetail
+                    project={selected}
+                    onUpdated={(project) => {
+                      setSelected(project);
+                      bumpRefresh();
+                    }}
+                    onDeleted={() => {
+                      setSelected(null);
+                      bumpRefresh();
+                      const next = new URLSearchParams(searchParams.toString());
+                      next.delete("id");
+                      next.delete("slug");
+                      router.replace(`/?${next.toString()}`, { scroll: false });
+                    }}
+                    onArchived={(project) => {
+                      setSelected(project);
+                      setListCategory("archived");
+                      bumpRefresh();
+                    }}
+                  />
+                ) : (
+                  <Paper
+                    variant="outlined"
+                    role="status"
+                    sx={{
+                      height: "100%",
+                      minHeight: 300,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      p: 4,
+                      textAlign: "center",
+                    }}
+                  >
+                    <Stack alignItems="center" spacing={1.5} maxWidth={360}>
+                      <FolderOpenOutlinedIcon sx={{ fontSize: 42, color: "text.disabled" }} />
+                      <Typography variant="h6" component="h2">
+                        Select a project to manage it
+                      </Typography>
+                      <Typography variant="body2" color="text.secondary">
+                        Review delivery configuration, variables, quality gates, audit events, and application logs.
+                      </Typography>
+                      <Button variant="outlined" startIcon={<AppRegistrationOutlinedIcon />} onClick={() => navigate("register")}>
+                        Register existing project
+                      </Button>
+                    </Stack>
+                  </Paper>
+                )}
+              </Box>
+            </Box>
+          )}
+
+          {(section === "create" || section === "register") && (
+            <Box
+              sx={{
+                display: "grid",
+                gridTemplateColumns: { xs: "1fr", lg: "minmax(0, 1fr) 300px" },
+                gap: 2,
+                maxWidth: 1100,
+                alignItems: "start",
+              }}
+            >
+              {section === "create" ? (
+                <CreateProjectForm onCreated={handleCreated} />
               ) : (
-                <Box
-                  role="status"
-                  sx={{
-                    height: { xs: "auto", md: "100%" },
-                    minHeight: 160,
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    border: 1,
-                    borderColor: "divider",
-                    borderRadius: 1,
-                    p: 3,
-                  }}
-                >
-                  <Typography color="text.secondary">
-                    Select a project from the list. On a small screen, the list
-                    is above this area.
-                  </Typography>
-                </Box>
+                <RegisterProjectForm onRegistered={handleCreated} />
               )}
-            </Grid>
-          </Grid>
-        )}
+              <ProvisioningAside type={section} />
+            </Box>
+          )}
 
-        {tab === 1 && (
-          <Box
-            maxWidth={560}
-            role="tabpanel"
-            id="panel-create"
-            aria-labelledby="tab-create"
-          >
-            <CreateProjectForm onCreated={handleCreated} />
-          </Box>
-        )}
-
-        {tab === 2 && (
-          <Box
-            maxWidth={560}
-            role="tabpanel"
-            id="panel-register"
-            aria-labelledby="tab-register"
-          >
-            <RegisterProjectForm onRegistered={handleCreated} />
-          </Box>
-        )}
-
-        {tab === 3 && (
-          <Box role="tabpanel" id="panel-mcp" aria-labelledby="tab-mcp">
-            <McpAccessPanel />
-          </Box>
-        )}
-
-        {tab === 4 && (
-          <Box role="tabpanel" id="panel-logs" aria-labelledby="tab-logs">
-            <LogsPanel />
-          </Box>
-        )}
-      </Container>
+          {section === "logs" && (
+            <Paper variant="outlined" sx={{ p: { xs: 2, md: 3 } }}>
+              <LogsPanel />
+            </Paper>
+          )}
+          {section === "mcp" && <McpAccessPanel />}
+        </Box>
+      </Box>
     </Box>
   );
 }

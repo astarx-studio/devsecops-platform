@@ -141,72 +141,74 @@ export function DeploymentTargetPanel({ project, onUpdated }: Props) {
           {ciWarning}
         </Alert>
       )}
-      <Table size="small" aria-label="Deployment targets">
-        <TableHead>
-          <TableRow>
-            <TableCell>Key</TableCell>
-            <TableCell>Apps / host</TableCell>
-            <TableCell>Ref</TableCell>
-            <TableCell>NS / cluster</TableCell>
-            <TableCell>Status</TableCell>
-            <TableCell align="right">Actions</TableCell>
-          </TableRow>
-        </TableHead>
-        <TableBody>
-          {project.deploymentTargets.map((t) => (
-            <TableRow key={t.key}>
-              <TableCell>{t.key}</TableCell>
-              <TableCell
-                sx={{
-                  maxWidth: 220,
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                }}
-              >
-                {formatAppsSummary(t)}
-              </TableCell>
-              <TableCell>
-                <Chip
-                  size="small"
-                  label={t.deployRef}
-                  color={t.deployRef === "none" ? "default" : "primary"}
-                  variant="outlined"
-                />
-              </TableCell>
-              <TableCell>
-                {t.kubeNamespace} / {clusterProfileLabel(t.clusterProfile)}
-              </TableCell>
-              <TableCell>
-                <Chip
-                  size="small"
-                  label={t.enabled ? "enabled" : "disabled"}
-                  color={t.enabled ? "success" : "default"}
-                />
-              </TableCell>
-              <TableCell align="right">
-                <Button
-                  size="small"
-                  onClick={() => openUpsert(t)}
-                  disabled={busy}
-                  aria-label={`Edit ${t.key} target`}
-                >
-                  Edit
-                </Button>
-                <Button
-                  size="small"
-                  color="error"
-                  startIcon={<DeleteIcon />}
-                  onClick={() => setRemoveKey(t.key)}
-                  disabled={busy}
-                  aria-label={`Remove ${t.key} target`}
-                >
-                  Remove
-                </Button>
-              </TableCell>
+      <Stack sx={{ minWidth: 0, overflowX: "auto" }}>
+        <Table size="small" aria-label="Deployment targets" sx={{ minWidth: 680 }}>
+          <TableHead>
+            <TableRow>
+              <TableCell>Key</TableCell>
+              <TableCell>Apps / host</TableCell>
+              <TableCell>Ref</TableCell>
+              <TableCell>NS / cluster</TableCell>
+              <TableCell>Status</TableCell>
+              <TableCell align="right">Actions</TableCell>
             </TableRow>
-          ))}
-        </TableBody>
-      </Table>
+          </TableHead>
+          <TableBody>
+            {project.deploymentTargets.map((t) => (
+              <TableRow key={t.key}>
+                <TableCell>{t.key}</TableCell>
+                <TableCell
+                  sx={{
+                    maxWidth: 220,
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                  }}
+                >
+                  {formatAppsSummary(t)}
+                </TableCell>
+                <TableCell>
+                  <Chip
+                    size="small"
+                    label={t.deployRef}
+                    color={t.deployRef === "none" ? "default" : "primary"}
+                    variant="outlined"
+                  />
+                </TableCell>
+                <TableCell>
+                  {t.kubeNamespace} / {clusterProfileLabel(t.clusterProfile)}
+                </TableCell>
+                <TableCell>
+                  <Chip
+                    size="small"
+                    label={t.enabled ? "enabled" : "disabled"}
+                    color={t.enabled ? "success" : "default"}
+                  />
+                </TableCell>
+                <TableCell align="right">
+                  <Button
+                    size="small"
+                    onClick={() => openUpsert(t)}
+                    disabled={busy}
+                    aria-label={`Edit ${t.key} target`}
+                  >
+                    Edit
+                  </Button>
+                  <Button
+                    size="small"
+                    color="error"
+                    startIcon={<DeleteIcon />}
+                    onClick={() => setRemoveKey(t.key)}
+                    disabled={busy}
+                    aria-label={`Remove ${t.key} target`}
+                  >
+                    Remove
+                  </Button>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </Stack>
 
       <DeploymentTargetDialog
         open={dialogOpen}

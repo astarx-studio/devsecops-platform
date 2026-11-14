@@ -106,55 +106,57 @@ export function AuditLogPanel() {
 
       {error && <Alert severity="error">{error}</Alert>}
 
-      <Table size="small" aria-label="Platform audit logs">
-        <TableHead>
-          <TableRow>
-            <TableCell>When</TableCell>
-            <TableCell>Event</TableCell>
-            <TableCell>Project</TableCell>
-            <TableCell>Actor</TableCell>
-            <TableCell>Details</TableCell>
-          </TableRow>
-        </TableHead>
-        <TableBody>
-          {visible.length === 0 && (
+      <Box sx={{ overflowX: "auto" }}>
+        <Table size="small" aria-label="Platform audit logs" sx={{ minWidth: 720 }}>
+          <TableHead>
             <TableRow>
-              <TableCell colSpan={5}>
-                <Typography role="status" variant="body2">
-                  {loading
-                    ? "Loading logs…"
-                    : rows.length === 0
-                      ? "No audit events yet."
-                      : "No logs match this filter."}
-                </Typography>
-              </TableCell>
+              <TableCell>When</TableCell>
+              <TableCell>Event</TableCell>
+              <TableCell>Project</TableCell>
+              <TableCell>Actor</TableCell>
+              <TableCell>Details</TableCell>
             </TableRow>
-          )}
-          {visible.map((row) => {
-            const details = formatAuditMetadata(row.metadata);
-            const project = row.gitlabPath || row.effectiveSlug || "—";
-            return (
-              <TableRow key={row.id}>
-                <TableCell sx={{ whiteSpace: "nowrap" }}>
-                  {formatAuditWhen(row.createdAt)}
-                </TableCell>
-                <TableCell>{auditEventLabel(row.eventType)}</TableCell>
-                <TableCell>{project}</TableCell>
-                <TableCell>{row.actor || "—"}</TableCell>
-                <TableCell
-                  sx={{
-                    whiteSpace: "pre-wrap",
-                    wordBreak: "break-word",
-                    maxWidth: 420,
-                  }}
-                >
-                  {details || "—"}
+          </TableHead>
+          <TableBody>
+            {visible.length === 0 && (
+              <TableRow>
+                <TableCell colSpan={5}>
+                  <Typography role="status" variant="body2">
+                    {loading
+                      ? "Loading logs…"
+                      : rows.length === 0
+                        ? "No audit events yet."
+                        : "No logs match this filter."}
+                  </Typography>
                 </TableCell>
               </TableRow>
-            );
-          })}
-        </TableBody>
-      </Table>
+            )}
+            {visible.map((row) => {
+              const details = formatAuditMetadata(row.metadata);
+              const project = row.gitlabPath || row.effectiveSlug || "—";
+              return (
+                <TableRow key={row.id}>
+                  <TableCell sx={{ whiteSpace: "nowrap" }}>
+                    {formatAuditWhen(row.createdAt)}
+                  </TableCell>
+                  <TableCell>{auditEventLabel(row.eventType)}</TableCell>
+                  <TableCell>{project}</TableCell>
+                  <TableCell>{row.actor || "—"}</TableCell>
+                  <TableCell
+                    sx={{
+                      whiteSpace: "pre-wrap",
+                      wordBreak: "break-word",
+                      maxWidth: 420,
+                    }}
+                  >
+                    {details || "—"}
+                  </TableCell>
+                </TableRow>
+              );
+            })}
+          </TableBody>
+        </Table>
+      </Box>
     </Stack>
   );
 }

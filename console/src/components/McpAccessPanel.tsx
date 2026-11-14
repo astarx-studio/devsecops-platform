@@ -177,7 +177,7 @@ export function McpAccessPanel() {
   const revokeTarget = keys.find((key) => key.id === revokeId);
 
   return (
-    <Paper sx={{ p: 2, maxWidth: 880 }}>
+    <Paper variant="outlined" sx={{ p: { xs: 2, md: 3 }, maxWidth: "none" }}>
       <Stack spacing={2}>
         <Typography component="h2" variant="subtitle1" fontWeight={600}>
           MCP access

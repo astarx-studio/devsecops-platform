@@ -1,13 +1,29 @@
-'use client';
+"use client";
 
-import RefreshIcon from '@mui/icons-material/Refresh';
-import { Alert, AppBar, Box, Button, Stack, Toolbar, Typography } from '@mui/material';
-import { useCallback, useEffect } from 'react';
+import MenuOutlinedIcon from "@mui/icons-material/MenuOutlined";
+import RefreshIcon from "@mui/icons-material/Refresh";
+import {
+  Alert,
+  AppBar,
+  Box,
+  Button,
+  IconButton,
+  Stack,
+  Toolbar,
+  Tooltip,
+  Typography,
+} from "@mui/material";
+import { useCallback, useEffect } from "react";
 
-import { useHealth } from '@/context/HealthContext';
+import { useHealth } from "@/context/HealthContext";
 
-export function SettingsBar() {
-  const { healthStatus, refreshHealth } = useHealth();
+interface SettingsBarProps {
+  sectionTitle: string;
+  onOpenNavigation: () => void;
+}
+
+export function SettingsBar({ sectionTitle, onOpenNavigation }: SettingsBarProps) {
+  const { healthStatus, health, refreshing, refreshHealth } = useHealth();
 
   const onRefresh = useCallback(() => {
     void refreshHealth();
@@ -17,59 +33,82 @@ export function SettingsBar() {
     void refreshHealth();
   }, [refreshHealth]);
 
+  const healthy = health?.status.toLowerCase() === "ok";
+  const unreachable = healthStatus?.startsWith("unreachable") ?? false;
+
   return (
     <AppBar
-      position="static"
-      color="transparent"
+      position="sticky"
+      color="inherit"
       elevation={0}
-      sx={{ borderBottom: 1, borderColor: "divider" }}
+      sx={{
+        top: 0,
+        zIndex: (theme) => theme.zIndex.appBar,
+        borderBottom: 1,
+        borderColor: "divider",
+        bgcolor: "rgba(251,252,252,0.96)",
+        backdropFilter: "blur(10px)",
+      }}
     >
-      <Toolbar sx={{ gap: 2, flexWrap: "wrap", py: 1 }}>
-        <Typography component="h1" variant="h6" sx={{ mr: 1, fontWeight: 600 }}>
-          DSOaaS Management
-        </Typography>
+      <Toolbar sx={{ minHeight: { xs: 64, md: 68 }, px: { xs: 1.5, sm: 3, lg: 4 }, gap: 1.5 }}>
+        <IconButton
+          aria-label="Open console navigation"
+          onClick={onOpenNavigation}
+          sx={{ display: { md: "none" } }}
+        >
+          <MenuOutlinedIcon />
+        </IconButton>
+        <Stack direction="row" spacing={1} alignItems="center" sx={{ flex: 1, minWidth: 0 }}>
+          <Typography variant="body2" color="text.secondary" sx={{ display: { xs: "none", sm: "block" } }}>
+            Control plane
+          </Typography>
+          <Typography variant="body2" color="text.disabled" sx={{ display: { xs: "none", sm: "block" } }}>
+            /
+          </Typography>
+          <Typography variant="body2" fontWeight={600} noWrap>
+            {sectionTitle}
+          </Typography>
+        </Stack>
         <Typography
           variant="caption"
           color="text.secondary"
-          sx={{ alignSelf: "center" }}
+          sx={{ display: { xs: "none", lg: "block" }, mr: 1 }}
         >
-          operator console
+          Management API
         </Typography>
-        <Stack
-          direction="row"
-          spacing={1}
-          flex={1}
-          flexWrap="wrap"
-          useFlexGap
-          justifyContent="flex-end"
-        >
-          <Button
-            size="small"
-            startIcon={<RefreshIcon />}
-            onClick={onRefresh}
-            variant="outlined"
-          >
-            API health
-          </Button>
-        </Stack>
-        {healthStatus && (
-          <Box sx={{ width: "100%" }}>
-            <Alert
-              role={healthStatus.startsWith("unreachable") ? "alert" : "status"}
-              severity={
-                healthStatus.startsWith("ok")
-                  ? "info"
-                  : healthStatus.startsWith("unreachable")
-                    ? "error"
-                    : "warning"
+        <Tooltip title={healthStatus ?? "Check management API health"} enterDelay={400}>
+          <span>
+            <Button
+              size="small"
+              variant="outlined"
+              color={unreachable ? "error" : healthy ? "success" : "inherit"}
+              startIcon={
+                <Box
+                  component="span"
+                  sx={{
+                    width: 7,
+                    height: 7,
+                    borderRadius: "50%",
+                    bgcolor: unreachable ? "error.main" : healthy ? "success.main" : "warning.main",
+                  }}
+                />
               }
-              sx={{ py: 0 }}
+              onClick={onRefresh}
+              disabled={refreshing}
+              aria-label="Refresh management API health"
+              sx={{ px: 1.5 }}
             >
-              API health is mongo and vault only. {healthStatus}
-            </Alert>
-          </Box>
-        )}
+              {refreshing ? "Checking API" : unreachable ? "API unavailable" : healthy ? "API operational" : "Check API"}
+              <RefreshIcon sx={{ ml: 0.75, fontSize: 15 }} />
+            </Button>
+          </span>
+        </Tooltip>
       </Toolbar>
+      {unreachable && (
+        <Alert severity="error" square sx={{ py: 0.25 }}>
+          The management API is unreachable. {healthStatus}
+        </Alert>
+      )}
     </AppBar>
   );
 }

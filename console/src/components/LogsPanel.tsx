@@ -1,10 +1,19 @@
 "use client";
 
 import { Box, Tab, Tabs } from "@mui/material";
+import dynamic from "next/dynamic";
 import { useState } from "react";
 
-import { AppContainerLogPanel } from "@/components/AppContainerLogPanel";
 import { AuditLogPanel } from "@/components/AuditLogPanel";
+import { PanelFallback } from "@/components/PanelFallback";
+
+const AppContainerLogPanel = dynamic(
+  () =>
+    import("@/components/AppContainerLogPanel").then(
+      (mod) => mod.AppContainerLogPanel,
+    ),
+  { loading: () => <PanelFallback label="app logs" /> },
+);
 
 export function LogsPanel() {
   const [tab, setTab] = useState(0);
