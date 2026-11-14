@@ -44,7 +44,7 @@ module Dsoaas
         end
 
         def note_body(result)
-          origin = result.source == :console ? 'set in the platform console' : '`.gitlab/approvals.yml` on the target branch'
+          origin = result.source == :native ? 'Settings > Merge requests' : '`.gitlab/approvals.yml` on the target branch'
           lines = [NOTE_MARKER, "**Approval rules** (#{origin})", '']
           if result.state == :invalid
             lines << ":x: Approval rules can't be used, so merging is blocked: #{code(result.error)}"
@@ -58,6 +58,7 @@ module Dsoaas
               # must not notify anyone), no references, no table breakage.
               who = r.approved_by.any? ? r.approved_by.map { |u| code(u) }.join(', ') : '-'
               icon = r.satisfied? ? ':white_check_mark:' : ':x:'
+              who = "#{who} (#{code(r.unsatisfiable)})" if r.unsatisfiable
               lines << "| #{icon} #{code(r.name)} | #{r.approved_by.size}/#{r.required} | #{who} |"
             end
           end

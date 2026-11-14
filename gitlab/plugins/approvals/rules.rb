@@ -14,7 +14,11 @@ module Dsoaas
     #     - name: security
     #       required: 1
     #       paths: ["infra/**", "**/Dockerfile"]                    # omit = always applies
+    #       branches: [main, "release/*"]                           # omit = all target branches
     #       approvers: { groups: [security] }
+    #     - name: sign-off
+    #       require_all: true                                       # every listed user must approve
+    #       approvers: { users: [alice] }
     #   author_can_approve: false       # default false
     #   committers_can_approve: true    # default true
     #   reset_on_push: true             # default true
@@ -25,7 +29,7 @@ module Dsoaas
 
       class InvalidConfig < StandardError; end
 
-      Rule = Struct.new(:name, :required, :paths, :users, :groups, keyword_init: true) do
+      Rule = Struct.new(:name, :required, :paths, :users, :groups, :branches, :require_all, keyword_init: true) do
         def any_approver?
           users.empty? && groups.empty?
         end
@@ -89,7 +93,7 @@ module Dsoaas
         raw.each_with_index.map do |item, index|
           raise InvalidConfig, "rule ##{index + 1} must be a mapping" unless item.is_a?(Hash)
 
-          unknown = item.keys.map(&:to_s) - %w[name required paths approvers]
+          unknown = item.keys.map(&:to_s) - %w[name required paths approvers branches require_all]
           raise InvalidConfig, "rule ##{index + 1}: unknown key(s): #{unknown.join(', ')}" if unknown.any?
 
           name = item['name'].to_s.strip
@@ -98,23 +102,37 @@ module Dsoaas
 
           names << name
 
-          required = item['required']
-          unless required.is_a?(Integer) && required.between?(1, 25)
-            raise InvalidConfig, "rule #{name}: required must be an integer from 1 to 25"
-          end
-
           approvers = item['approvers'] || {}
           raise InvalidConfig, "rule #{name}: approvers must be a mapping" unless approvers.is_a?(Hash)
 
           unknown = approvers.keys.map(&:to_s) - %w[users groups]
           raise InvalidConfig, "rule #{name}: unknown approvers key(s): #{unknown.join(', ')}" if unknown.any?
 
+          users = string_list(approvers, 'users', name).map { |u| u.delete_prefix('@') }.uniq
+          groups = string_list(approvers, 'groups', name).map { |g| g.delete_prefix('@') }.uniq
+          require_all = boolean(item, 'require_all', false)
+
+          if require_all
+            raise InvalidConfig, "rule #{name}: require_all needs approvers.users" if users.empty?
+            raise InvalidConfig, "rule #{name}: require_all can't use groups" if groups.any?
+            raise InvalidConfig, "rule #{name}: don't set required together with require_all" if item.key?('required')
+
+            required = users.size
+          else
+            required = item['required']
+            unless required.is_a?(Integer) && required.between?(1, 25)
+              raise InvalidConfig, "rule #{name}: required must be an integer from 1 to 25"
+            end
+          end
+
           Rule.new(
             name: name,
             required: required,
             paths: string_list(item, 'paths', name),
-            users: string_list(approvers, 'users', name).map { |u| u.delete_prefix('@') },
-            groups: string_list(approvers, 'groups', name).map { |g| g.delete_prefix('@') }
+            users: users,
+            groups: groups,
+            branches: string_list(item, 'branches', name),
+            require_all: require_all
           )
         end
       end

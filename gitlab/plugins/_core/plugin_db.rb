@@ -12,18 +12,28 @@ module Dsoaas
   #     query analyzers, schema validation), and an extra AR database would also
   #     have to be declared in GitLab's gitlab-ctl-managed database.yml. A raw
   #     pool can't touch gitlabhq_production and GitLab's tooling never sees it.
-  #   - Plugin migrations are plain SQL under <plugin>/migrations/*.sql, tracked
-  #     in dsoaas_schema_migrations in THIS database. GitLab's db:migrate never
-  #     runs them.
-  #   - Best-effort: nothing a plugin decides may depend on this database. When
-  #     it's unset or unreachable, `with` returns nil and a breaker stops retries
-  #     for BREAKER_SECONDS so a down DB can't slow GitLab requests.
+  #   - Plugin migrations live under <plugin>/migrations/: `.sql` files, or `.rb`
+  #     files evaluating to a lambda `->(conn) { ... }` for data migrations that
+  #     need GitLab models (read-only use). Tracked in dsoaas_schema_migrations in
+  #     THIS database; GitLab's db:migrate never runs them.
+  #   - Two entry points:
+  #       `with`  - best-effort reads/side writes: nil when unset or unreachable,
+  #                 and a breaker stops retries for BREAKER_SECONDS;
+  #       `with!` - writes a user is waiting for: raises Unavailable instead of
+  #                 returning nil, and SQL errors (e.g. a unique violation)
+  #                 propagate to the caller instead of tripping the breaker.
   #   - Lazy and fork-safe: no connection is opened at boot (Puma preloads in the
   #     master and forks), and a pool created in another process is discarded.
   module PluginDB
     ENV_URL = 'DSOAAS_PLUGINS_DB_URL'
     BREAKER_SECONDS = 60
     STATEMENT_TIMEOUT = '2s'
+
+    # Connection-level failures (vs. SQL errors such as constraint violations).
+    CONNECTION_ERRORS = [PG::ConnectionBad, PG::UnableToSend, ConnectionPool::Error, Timeout::Error,
+                         SystemCallError].freeze
+
+    class Unavailable < StandardError; end
 
     @mutex = Mutex.new
     @migrations = {} # plugin name => migrations dir
@@ -49,9 +59,25 @@ module Dsoaas
 
         ensure_migrated!
         pool.with { |conn| yield conn }
-      rescue PG::Error, ConnectionPool::Error, Timeout::Error, SystemCallError => e
+      rescue *CONNECTION_ERRORS => e
         trip!(e)
         nil
+      rescue PG::Error => e
+        Rails.logger.warn("dsoaas plugin_db query failed: #{e.class}: #{e.message}")
+        nil
+      end
+
+      # Like `with`, but for writes a user is waiting on: raises Unavailable when
+      # the database can't be reached, and lets SQL errors propagate.
+      def with!
+        raise Unavailable, "#{ENV_URL} is not set" unless configured?
+        raise Unavailable, 'plugin database recently unreachable, retrying shortly' if tripped?
+
+        ensure_migrated!
+        pool.with { |conn| yield conn }
+      rescue *CONNECTION_ERRORS => e
+        trip!(e)
+        raise Unavailable, "plugin database unreachable: #{e.class}"
       end
 
       def status
@@ -130,12 +156,19 @@ module Dsoaas
           migrations.each do |plugin, dir|
             applied = conn.exec_params('SELECT version FROM dsoaas_schema_migrations WHERE plugin = $1', [plugin])
                           .column_values(0)
-            Dir[File.join(dir, '*.sql')].sort.each do |file|
-              version = File.basename(file, '.sql')
+            Dir[File.join(dir, '*.{sql,rb}')].sort_by { |f| File.basename(f) }.each do |file|
+              version = File.basename(file, '.*')
               next if applied.include?(version)
 
               conn.transaction do |tx|
-                tx.exec(File.read(file))
+                if file.end_with?('.rb')
+                  # rubocop:disable Security/Eval -- our own migration file, shipped in the image
+                  migration = Module.new.module_eval(File.read(file), file)
+                  # rubocop:enable Security/Eval
+                  migration.call(tx)
+                else
+                  tx.exec(File.read(file))
+                end
                 tx.exec_params('INSERT INTO dsoaas_schema_migrations (plugin, version) VALUES ($1, $2)', [plugin, version])
               end
               Rails.logger.info("dsoaas plugin_db applied #{plugin}/#{version}")
