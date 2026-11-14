@@ -368,7 +368,7 @@ services:
       OIDC_SCOPES: openid email profile groups
       OIDC_ADMIN_GROUPS: admins
       OIDC_MEMBER_GROUPS: users
-      N8N_INSTANCE_AI_MODEL: ${N8N_INSTANCE_AI_MODEL:-custom/nvidia/nemotron-3-nano-omni}
+      N8N_INSTANCE_AI_MODEL: ${N8N_INSTANCE_AI_MODEL:-custom/nvidia/nemotron-3-nano-4b}
       N8N_INSTANCE_AI_MODEL_URL: ${N8N_INSTANCE_AI_MODEL_URL:-https://lm.apps.yadatechnology.com/v1}
       N8N_INSTANCE_AI_MODEL_API_KEY: ${N8N_INSTANCE_AI_MODEL_API_KEY:?set N8N_INSTANCE_AI_MODEL_API_KEY in devtools/.env}
       N8N_INSTANCE_AI_SANDBOX_ENABLED: "true"
