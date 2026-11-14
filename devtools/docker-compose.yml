@@ -47,8 +47,11 @@ services:
       POSTGRES_PASSWORD: ${DEVTOOLS_PG_PASSWORD:?set DEVTOOLS_PG_PASSWORD in devtools/.env}
     # Reclaim leaked GUI/JDBC idle sessions (Navicat via Traefik :25432 is the usual
     # offender). Pools reconnect; apps should set pool maxIdleTime <= this timeout.
+    # Default Postgres 100 fills under multi-app + Navicat load; bump via env.
     command:
       - postgres
+      - -c
+      - max_connections=${DEVTOOLS_PG_MAX_CONNECTIONS:-500}
       - -c
       - idle_session_timeout=${DEVTOOLS_PG_IDLE_SESSION_TIMEOUT:-10min}
       - -c
