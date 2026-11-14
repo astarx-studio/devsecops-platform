@@ -163,3 +163,26 @@ export interface McpAccessKey {
   lastUsedAt?: string | null;
   revokedAt?: string | null;
 }
+
+export type CompanyOnboardingState =
+  | "awaiting_destination"
+  | "rule_enabled"
+  | "instructions_sent"
+  | "kc_actions_sent"
+  | "failed"
+  | "offboarded";
+
+export interface CompanyOnboarding {
+  companyEmail: string;
+  personalEmail: string;
+  firstName: string;
+  lastName: string;
+  state: CompanyOnboardingState;
+  statusLabel: string;
+  cloudflareDestinationId?: string | null;
+  cloudflareRuleId?: string | null;
+  mailgunLogin?: string | null;
+  keycloakUserId?: string | null;
+  lastError?: string | null;
+  updatedAt: string;
+}

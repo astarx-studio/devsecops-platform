@@ -23,7 +23,12 @@ export type AuditEventType =
   | 'env.profile.metadata_updated'
   | 'mcp.key.created'
   | 'mcp.key.revoked'
-  | 'app.logs.read';
+  | 'app.logs.read'
+  | 'onboarding.started'
+  | 'onboarding.destination_pending'
+  | 'onboarding.invited'
+  | 'onboarding.failed'
+  | 'onboarding.offboarded';
 
 export type AuditLogDocument = HydratedDocument<AuditLog>;
 
@@ -64,6 +69,11 @@ export class AuditLog {
       'mcp.key.created',
       'mcp.key.revoked',
       'app.logs.read',
+      'onboarding.started',
+      'onboarding.destination_pending',
+      'onboarding.invited',
+      'onboarding.failed',
+      'onboarding.offboarded',
     ]),
   })
   eventType!: AuditEventType;

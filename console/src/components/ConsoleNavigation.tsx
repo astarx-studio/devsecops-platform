@@ -6,6 +6,7 @@ import FolderOutlinedIcon from "@mui/icons-material/FolderOutlined";
 import GridViewOutlinedIcon from "@mui/icons-material/GridViewOutlined";
 import HistoryOutlinedIcon from "@mui/icons-material/HistoryOutlined";
 import KeyOutlinedIcon from "@mui/icons-material/KeyOutlined";
+import PeopleAltOutlinedIcon from "@mui/icons-material/PeopleAltOutlined";
 import { Box, ButtonBase, List, ListItem, ListItemButton, ListItemIcon, ListItemText, Typography } from "@mui/material";
 import type { ComponentType } from "react";
 
@@ -44,6 +45,7 @@ const groups: Array<{
     items: [
       { id: "logs", icon: HistoryOutlinedIcon },
       { id: "mcp", icon: KeyOutlinedIcon },
+      { id: "people", icon: PeopleAltOutlinedIcon },
     ],
   },
 ];

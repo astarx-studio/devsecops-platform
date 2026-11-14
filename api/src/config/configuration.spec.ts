@@ -53,6 +53,10 @@ describe('configuration', () => {
     expect(config.mongo.url).toBe('mongodb://mongo:27017');
     expect(config.mongo.dbName).toBe('platform');
     expect(config.kube.configDir).toBe('/etc/dsoaas/kubeconfigs');
+    expect(config.onboarding.keycloakBaseUrl).toBe('http://keycloak:8080');
+    expect(config.onboarding.mailgunApiBase).toBe('https://api.mailgun.net');
+    expect(config.onboarding.keycloakRealm).toBe('devops');
+    expect(config.onboarding.mailgunDomain).toBe('test.net');
   });
 
   it('should throw on missing DOMAIN', () => {

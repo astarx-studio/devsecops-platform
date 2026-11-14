@@ -5,6 +5,7 @@ export type ConsoleSection =
   | "register"
   | "logs"
   | "mcp"
+  | "people";
 
 export const CONSOLE_SECTIONS: Record<
   ConsoleSection,
@@ -45,6 +46,12 @@ export const CONSOLE_SECTIONS: Record<
     shortTitle: "MCP access",
     description:
       "Issue scoped credentials for IDE clients and manage their access lifecycle.",
+  },
+  people: {
+    title: "People & onboarding",
+    shortTitle: "People",
+    description:
+      "Provision company email and platform access, then track each onboarding to completion.",
   },
 };
 

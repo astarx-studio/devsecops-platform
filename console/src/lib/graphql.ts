@@ -160,6 +160,24 @@ export const QUERIES = {
       }
     }
   `,
+  companyOnboardings: `
+    query CompanyOnboardings($limit: Int, $query: String) {
+      companyOnboardings(limit: $limit, query: $query) {
+        companyEmail
+        personalEmail
+        firstName
+        lastName
+        state
+        statusLabel
+        cloudflareDestinationId
+        cloudflareRuleId
+        mailgunLogin
+        keycloakUserId
+        lastError
+        updatedAt
+      }
+    }
+  `,
 } as const;
 
 export const MUTATIONS = {
@@ -325,6 +343,53 @@ export const MUTATIONS = {
         workspacePath
         filename
         contentType
+      }
+    }
+  `,
+  startCompanyOnboarding: `
+    mutation StartCompanyOnboarding($input: StartCompanyOnboardingInput!) {
+      startCompanyOnboarding(input: $input) {
+        companyEmail
+        personalEmail
+        firstName
+        lastName
+        state
+        statusLabel
+        cloudflareDestinationId
+        cloudflareRuleId
+        mailgunLogin
+        keycloakUserId
+        lastError
+        updatedAt
+      }
+    }
+  `,
+  resumeCompanyOnboarding: `
+    mutation ResumeCompanyOnboarding($companyEmail: String!) {
+      resumeCompanyOnboarding(companyEmail: $companyEmail) {
+        companyEmail
+        personalEmail
+        firstName
+        lastName
+        state
+        statusLabel
+        lastError
+        mailgunLogin
+        updatedAt
+      }
+    }
+  `,
+  offboardCompanyEmail: `
+    mutation OffboardCompanyEmail($companyEmail: String!) {
+      offboardCompanyEmail(companyEmail: $companyEmail) {
+        companyEmail
+        personalEmail
+        firstName
+        lastName
+        state
+        statusLabel
+        lastError
+        updatedAt
       }
     }
   `,

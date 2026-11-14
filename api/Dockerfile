@@ -34,6 +34,7 @@ RUN addgroup -S appgroup && adduser -S appuser -G appgroup
 
 COPY --from=prod-deps /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
+COPY assets/logo-light.png ./assets/logo-light.png
 COPY package.json ./
 
 USER appuser

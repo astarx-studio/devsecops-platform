@@ -140,7 +140,7 @@ Shared PostgreSQL for **Keycloak** (`KC_DB_*`), **SonarQube** (`SONAR_DB_*`), **
 **Operational notes:**
 
 - `realm-export.json` on disk is a **template** with `${VAR}` placeholders. The entrypoint runs `sed` to produce the actual import file inside the container.
-- Realm import runs once on first start. If you modify `realm-export.json` after the realm already exists, it will not be re-imported automatically. You must either delete the Keycloak data (destructive) or use the admin console / CLI to apply changes manually. Account console scope repair for an existing realm: `bash bootstrap/patch-keycloak-account.sh` (see [Keycloak administration](../02_admin/03_keycloak.md#account-console-profile-and-password-reset)). Theme selection for an existing realm: `bash bootstrap/patch-keycloak-theme.sh` (see [Keycloak administration](../02_admin/03_keycloak.md#platform-theme)). Profile photo attribute for an existing realm: `bash bootstrap/patch-keycloak-profile-picture.sh`.
+- Realm import runs once on first start. If you modify `realm-export.json` after the realm already exists, it will not be re-imported automatically. You must either delete the Keycloak data (destructive) or use the admin console / CLI to apply changes manually. Account console scope repair for an existing realm: `bash bootstrap/patch-keycloak-account.sh` (see [Keycloak administration](../02_admin/03_keycloak.md#account-console-profile-and-password-reset)). Theme selection for an existing realm: `bash bootstrap/patch-keycloak-theme.sh` (see [Keycloak administration](../02_admin/03_keycloak.md#platform-theme)). Profile photo attribute for an existing realm: `bash bootstrap/patch-keycloak-profile-picture.sh`. Company-email onboarding client for an existing realm: `bash bootstrap/patch-keycloak-onboarding.sh` (see [Company email](../02_admin/10_company_email.md)).
 - `start-dev` loads `/opt/keycloak/providers/platform-theme.jar` without a separate `kc.sh build`. A theme change still needs `docker compose build keycloak` and a container recreate.
 - The Keycloak image keeps its Apache-2.0 `NOTICE`. The platform UI does not use the Keycloak logo or wordmark.
 - The bootstrap admin account is created automatically. After initial setup, create a permanent admin user via the admin console and optionally disable the bootstrap account.
@@ -361,6 +361,17 @@ The entrypoint script checks if `GITLAB_RUNNER_TOKEN` equals `FILL_AFTER_STARTUP
 | `DSOAAS_MCP_PUBLIC_URL`    | Optional override of the console URL. Default `https://${MCP_DOMAIN}/mcp`.           |
 | `NODE_ENV`                 | `production` in production                                                           |
 | `LOG_LEVEL`                | `info` by default                                                                    |
+| `MAILGUN_API_KEY`          | Mailgun private API key for People onboarding (SMTP credentials and the setup mail)  |
+| `MAILGUN_DOMAIN`           | Company email domain. Defaults to `SMTP_DOMAIN`, then `DOMAIN`                       |
+| `MAILGUN_API_BASE`         | `https://api.mailgun.net` (use `https://api.eu.mailgun.net` for an EU account)       |
+| `CLOUDFLARE_EMAIL_API_TOKEN` | Email Routing token. Zone rules Edit and account addresses Edit. Not the tunnel or DNS token |
+| `CLOUDFLARE_EMAIL_ZONE_ID` | Zone id of the company domain                                                        |
+| `CLOUDFLARE_EMAIL_ACCOUNT_ID` | Account id that owns the destination addresses                                    |
+| `KEYCLOAK_BASE_URL`        | Admin API base. `http://keycloak:8080` from the api container                        |
+| `KC_REALM`                 | Realm for new people. `devops`                                                       |
+| `KEYCLOAK_ONBOARDING_CLIENT_ID` | Service-account client. Created by `bootstrap/patch-keycloak-onboarding.sh`     |
+| `KEYCLOAK_ONBOARDING_CLIENT_SECRET` | That client's secret. Never sent to the browser                               |
+| `SMTP_FROM_EMAIL` / `SMTP_FROM_NAME` | From address on the setup mail. Not used as a person's SMTP password           |
 
 **Health check:** `node -e "require('http').get('http://127.0.0.1:3000/health', r => process.exit(r.statusCode === 200 ? 0 : 1))"`. Interval 15s, timeout 5s, 3 retries, 15s start period.
 

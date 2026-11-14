@@ -17,6 +17,7 @@ import { ConfigsModule } from './configs/configs.module';
 import { GitLabModule } from './gitlab/gitlab.module';
 import { K8sModule } from './k8s/k8s.module';
 import { McpModule } from './mcp/mcp.module';
+import { OnboardingModule } from './onboarding/onboarding.module';
 import { ProjectsModule } from './projects/projects.module';
 import { TemplatesModule } from './templates/templates.module';
 import { VaultModule } from './vault/vault.module';
@@ -65,6 +66,7 @@ import { VaultModule } from './vault/vault.module';
     TemplatesModule,
     ProjectsModule,
     McpModule,
+    OnboardingModule,
   ],
   controllers: [AppController],
   providers: [OidcJwtStrategy, { provide: APP_INTERCEPTOR, useClass: AuditActorInterceptor }],

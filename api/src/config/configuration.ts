@@ -95,6 +95,22 @@ export interface AppConfiguration {
     /** Admin password for Web API provisioning (SONAR_ADMIN_PASSWORD). */
     adminPassword?: string;
   };
+
+  /** Company-email onboarding. Missing values fail that mutation, not process start. */
+  onboarding: {
+    mailgunApiKey?: string;
+    mailgunDomain?: string;
+    mailgunApiBase: string;
+    cloudflareEmailToken?: string;
+    cloudflareZoneId?: string;
+    cloudflareAccountId?: string;
+    keycloakBaseUrl: string;
+    keycloakRealm: string;
+    keycloakClientId?: string;
+    keycloakClientSecret?: string;
+    smtpFromEmail?: string;
+    smtpFromName: string;
+  };
 }
 
 const configuration = (): AppConfiguration => {
@@ -107,6 +123,10 @@ const configuration = (): AppConfiguration => {
   };
 
   const optional = (key: string): string | undefined => process.env[key];
+  const present = (key: string): string | undefined => {
+    const value = process.env[key]?.trim();
+    return value ? value : undefined;
+  };
 
   const domain = required('DOMAIN');
   const vaultToken = optional('VAULT_ROOT_TOKEN') ?? '';
@@ -179,6 +199,21 @@ const configuration = (): AppConfiguration => {
       internalUrl: optional('SONARQUBE_INTERNAL_URL') ?? 'http://sonarqube:9000',
       adminUser: optional('SONAR_ADMIN_USER'),
       adminPassword: optional('SONAR_ADMIN_PASSWORD'),
+    },
+
+    onboarding: {
+      mailgunApiKey: present('MAILGUN_API_KEY'),
+      mailgunDomain: present('MAILGUN_DOMAIN') ?? present('SMTP_DOMAIN') ?? domain,
+      mailgunApiBase: present('MAILGUN_API_BASE') ?? 'https://api.mailgun.net',
+      cloudflareEmailToken: present('CLOUDFLARE_EMAIL_API_TOKEN'),
+      cloudflareZoneId: present('CLOUDFLARE_EMAIL_ZONE_ID'),
+      cloudflareAccountId: present('CLOUDFLARE_EMAIL_ACCOUNT_ID'),
+      keycloakBaseUrl: present('KEYCLOAK_BASE_URL') ?? 'http://keycloak:8080',
+      keycloakRealm: present('KC_REALM') ?? 'devops',
+      keycloakClientId: present('KEYCLOAK_ONBOARDING_CLIENT_ID'),
+      keycloakClientSecret: present('KEYCLOAK_ONBOARDING_CLIENT_SECRET'),
+      smtpFromEmail: present('SMTP_FROM_EMAIL'),
+      smtpFromName: present('SMTP_FROM_NAME') ?? 'YADA DSOaaS',
     },
   };
 };

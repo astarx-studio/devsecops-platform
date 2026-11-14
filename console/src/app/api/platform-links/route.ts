@@ -10,5 +10,7 @@ export function GET() {
     vaultUi: vaultDomain ? `https://${vaultDomain}/ui/` : null,
     appsDomain: appsDomain || null,
     mcpEndpoint: process.env.DSOAAS_MCP_PUBLIC_URL?.trim() || null,
+    companyEmailDomain:
+      process.env.SMTP_DOMAIN?.trim() || process.env.DOMAIN?.trim() || null,
   });
 }

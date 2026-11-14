@@ -144,6 +144,10 @@ If you need to update SMTP settings on an existing installation (without a full 
 4. Click **Test connection** to verify it works
 5. Save
 
+For registering a person together with a company address (Cloudflare forward, Mailgun send login, and the YADA invite), use the operator console **People** tab. On an existing realm, create the service account first with `bash bootstrap/patch-keycloak-onboarding.sh`. See [Company email](10_company_email.md).
+
+The company domain publishes BIMI at `default._bimi.yadatechnology.com`. The logo is the SVG in `bimi/logo.svg`, served at `https://bimi.yadatechnology.com/logo.svg` by the Cloudflare Worker `yada-bimi`. DMARC for that domain is `p=quarantine` at 100 percent, which BIMI requires. Mail that fails DMARC is treated as spam. Gmail still hides the logo until a certificate authority issues a VMC or CMC for it.
+
 ---
 
 ## Things that require a full reset to change

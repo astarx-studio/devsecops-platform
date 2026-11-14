@@ -45,6 +45,10 @@ const LogsPanel = dynamic(
   () => import("@/components/LogsPanel").then((mod) => mod.LogsPanel),
   { loading: () => <PanelFallback label="logs" /> },
 );
+const PeopleOnboardingPanel = dynamic(
+  () => import("@/components/PeopleOnboardingPanel").then((mod) => mod.PeopleOnboardingPanel),
+  { loading: () => <PanelFallback label="people" /> },
+);
 const ProjectDetail = dynamic(
   () => import("@/components/ProjectDetail").then((mod) => mod.ProjectDetail),
   { loading: () => <PanelFallback label="the project" /> },
@@ -353,6 +357,7 @@ export function ConsolePage() {
             </Paper>
           )}
           {section === "mcp" && <McpAccessPanel />}
+          {section === "people" && <PeopleOnboardingPanel />}
         </Box>
       </Box>
     </Box>
