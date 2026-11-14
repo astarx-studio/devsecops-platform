@@ -1,0 +1,49 @@
+{
+  "name": "hitl-proxy",
+  "version": "1.0.0",
+  "private": true,
+  "description": "HITL Proxy — local human-in-the-loop ask-question for Cursor agents",
+  "type": "module",
+  "main": "dist/electron/main.cjs",
+  "scripts": {
+    "dev": "concurrently -k \"npm:dev:server\" \"npm:dev:client\"",
+    "dev:server": "tsx watch src/server/index.ts",
+    "dev:client": "vite",
+    "dev:ui": "npm run build:electron && electron .",
+    "build": "npm run build:client && npm run build:server && npm run build:electron",
+    "build:client": "vite build",
+    "build:server": "tsc -p tsconfig.server.json",
+    "build:electron": "node scripts/copy-electron.mjs",
+    "start": "node dist/server/index.js",
+    "start:stdio": "node dist/stdio/mcp-bridge.js",
+    "start:ui": "electron .",
+    "typecheck": "tsc -p tsconfig.server.json --noEmit && tsc -p tsconfig.client.json --noEmit",
+    "install:windows": "powershell -ExecutionPolicy Bypass -File scripts/install-windows.ps1",
+    "uninstall:windows": "powershell -ExecutionPolicy Bypass -File scripts/uninstall-windows.ps1"
+  },
+  "dependencies": {
+    "@emotion/react": "^11.14.0",
+    "@emotion/styled": "^11.14.0",
+    "@mui/icons-material": "^6.4.8",
+    "@mui/material": "^6.4.8",
+    "cors": "^2.8.5",
+    "express": "^4.21.2",
+    "nanoid": "^5.1.5",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.30.0"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^4.17.21",
+    "@types/node": "^22.13.10",
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "@vitejs/plugin-react": "^4.3.4",
+    "concurrently": "^9.1.2",
+    "electron": "^35.1.2",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.2",
+    "vite": "^6.2.2"
+  }
+}

@@ -454,6 +454,18 @@ Create and revoke are audited as `mcp.key.created` and `mcp.key.revoked` (prefix
 
 ---
 
+## HITL Proxy (local desktop — not a compose service)
+
+Human-in-the-loop ask-question for Cursor agents runs as a **local Windows app**, not in Docker:
+
+- **Windows service** — headless HTTP API + MCP on `127.0.0.1` (stop only via Services / Task Manager → Services).
+- **Electron tray UI** — starts with Windows, starts/closes to tray; pending questions open an always-on-top bottom-right window.
+- **MCP** — stdio (primary) and `POST http://127.0.0.1:<port>/mcp` with Bearer token.
+
+**Source / install:** [`hitl-proxy/`](../../hitl-proxy/README.md).
+
+---
+
 ## postgres-vault-init
 
 | Field      | Value                                |
