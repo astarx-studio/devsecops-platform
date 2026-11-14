@@ -1,0 +1,144 @@
+-# DSOaaS approvals plugin. Rendered by CE's own
+-#   render_if_exists 'projects/settings/merge_requests/merge_request_approvals_settings'
+-# in projects/settings/merge_requests/show.html.haml (the hook GitLab EE uses).
+-# Data is read here; every change goes through the REST API (settings.js).
+- project = @project
+- can_edit = can?(current_user, :admin_project, project)
+- service = Dsoaas::Approvals::RuleService.new(project, current_user)
+- load_error = nil
+- begin
+  - entry = service.entry
+- rescue Dsoaas::PluginDB::Unavailable => e
+  - load_error = e.message
+- rules = load_error ? [] : entry.rules
+- settings = load_error ? Dsoaas::Approvals::RulesStore::DEFAULT_SETTINGS : entry.settings
+- presented = rules.map { |row| Dsoaas::Approvals::RestAPI::Presenters.project_rule(row, project, current_user) }
+- file_path = Dsoaas::Approvals::Rules::PATH
+- default_branch = project.default_branch
+- file_blob = default_branch.present? && project.repository.exists? ? project.repository.blob_at(default_branch, file_path) : nil
+- protected_branches = project.protected_branches.order(:name).map { |b| { id: b.id, name: b.name } }
+- branch_rules_path = project_settings_repository_branch_rules_path(project)
+
+= render ::Layouts::SettingsSectionComponent.new(_('Merge request approvals'),
+  id: 'js-merge-request-approval-settings',
+  testid: 'merge-request-approval-settings') do |c|
+  - c.with_description do
+    = _('Define approval rules and settings to ensure separation of duties for new merge requests.')
+    = _('The same rules also appear on each branch rule in')
+    = link_to(_('Settings > Repository > Branch rules'), project_settings_repository_path(project, anchor: 'branch-rules')) + '.'
+  - c.with_body do
+    #js-dsoaas-approval-settings{ data: { api_base: "#{Gitlab.config.gitlab.relative_url_root}/api/v4/projects/#{project.id}",
+      project_id: project.id,
+      can_edit: can_edit.to_s,
+      rules: presented.to_json,
+      protected_branches: protected_branches.to_json,
+      branch_rules_path: branch_rules_path,
+      current_username: current_user&.username } }
+      - if load_error
+        = render Pajamas::AlertComponent.new(variant: :danger, dismissible: false, title: _('Approval rules are unavailable')) do |a|
+          - a.with_body do
+            = load_error
+
+      = render ::Layouts::CrudComponent.new(_('Approval rules'),
+        icon: 'approval',
+        count: rules.size,
+        options: { class: 'gl-mb-5', data: { testid: 'dsoaas-approval-rules' } }) do |crud|
+        - if can_edit && !load_error
+          - crud.with_actions do
+            = render Pajamas::ButtonComponent.new(size: :small, button_options: { class: 'js-dsoaas-add-rule', data: { testid: 'add-approval-rule' } }) do
+              = _('Add approval rule')
+        - crud.with_body do
+          - if rules.empty?
+            .gl-text-subtle.gl-p-3{ data: { testid: 'dsoaas-approval-rules-empty' } }
+              - if file_blob
+                = _('No approval rules are set here, so GitLab enforces the fallback file')
+                = link_to file_path, project_blob_path(project, File.join(default_branch, file_path))
+                = _('from the default branch. Anyone who can merge to that branch can change it; add a rule here to take over.')
+              - else
+                = _('No approval rules. Approval is optional: merge requests can be merged without approval.')
+          - else
+            %table.table.b-table.gl-table.b-table-stacked-md.gl-mb-0{ role: 'table' }
+              %thead
+                %tr
+                  %th= _('Rule')
+                  %th= _('Approvers')
+                  %th= _('Target branch')
+                  %th.gl-text-center= _('Approvals required')
+                  - if can_edit
+                    %th.gl-text-right
+                      %span.gl-sr-only= _('Actions')
+              %tbody
+                - presented.each do |rule|
+                  %tr{ data: { testid: 'dsoaas-approval-rule', rule_id: rule[:id] } }
+                    %td{ 'data-label': _('Rule') }
+                      .gl-font-bold= rule[:name]
+                      - if rule[:file_paths].any?
+                        .gl-text-sm.gl-text-subtle.gl-mt-1
+                          = _('When these paths change:')
+                          = safe_join(rule[:file_paths].map { |p| content_tag(:code, p) }, ', ')
+                    %td{ 'data-label': _('Approvers') }
+                      - users = ::User.where(id: rules.find { |r| r['id'] == rule[:id] }['user_ids']).order(:username)
+                      - groups = ::Group.where(id: rules.find { |r| r['id'] == rule[:id] }['group_ids'])
+                      - if users.empty? && groups.empty?
+                        %span.gl-text-subtle= _('Any eligible user (Developer role or higher)')
+                      - else
+                        .gl-flex.gl-flex-wrap.gl-items-center.gl-gap-3
+                          - users.each do |user|
+                            = link_to user_path(user), class: 'gl-inline-flex gl-items-center gl-gap-2 gl-text-default', title: "@#{user.username}" do
+                              = render Pajamas::AvatarComponent.new(user, size: 24, alt: '')
+                              %span= user.name
+                          - groups.each do |group|
+                            = render Pajamas::BadgeComponent.new(group.full_path, icon: 'group', variant: :neutral)
+                      - if rule[:require_all]
+                        .gl-text-sm.gl-text-subtle.gl-mt-2= _('Every listed person must approve')
+                    %td{ 'data-label': _('Target branch') }
+                      - targets = Dsoaas::Approvals::RuleTargets.resolve(project, rules.find { |r| r['id'] == rule[:id] })
+                      - if rule[:applies_to_all_protected_branches]
+                        = _('All protected branches')
+                      - elsif targets.names.empty?
+                        = _('All branches')
+                      - else
+                        .gl-flex.gl-flex-wrap.gl-gap-2
+                          - targets.linked.each do |branch|
+                            = link_to project_settings_repository_branch_rules_path(project, branch: branch.name),
+                              class: 'gl-inline-flex gl-items-center gl-gap-1', title: _('Open branch rule') do
+                              = sprite_icon('branch', size: 12)
+                              %code= branch.name
+                          - targets.patterns.each do |pattern|
+                            %code{ title: targets.stale.include?(pattern) ? _('Its branch rule was deleted; still applies to this name.') : nil }= pattern
+                    %td.gl-text-center{ 'data-label': _('Approvals required') }
+                      - if rule[:require_all]
+                        = format(_('All (%{count})'), count: rule[:approvals_required])
+                      - else
+                        = rule[:approvals_required]
+                    - if can_edit
+                      %td.gl-text-right{ 'data-label': _('Actions') }
+                        .gl-inline-flex.gl-gap-2
+                          = render Pajamas::ButtonComponent.new(size: :small, icon: 'pencil', category: :tertiary,
+                            button_options: { class: 'js-dsoaas-edit-rule has-tooltip', title: _('Edit'), 'aria-label': format(_('Edit %{name}'), name: rule[:name]), data: { rule_id: rule[:id] } })
+                          = render Pajamas::ButtonComponent.new(size: :small, icon: 'remove', category: :tertiary,
+                            button_options: { class: 'js-dsoaas-delete-rule has-tooltip', title: _('Delete'), 'aria-label': format(_('Delete %{name}'), name: rule[:name]), data: { rule_id: rule[:id], rule_name: rule[:name] } })
+
+      %fieldset.js-dsoaas-approval-options{ disabled: !can_edit || load_error.present? }
+        %legend.gl-text-base.gl-font-bold.gl-mb-3.gl-border-b-0= _('Approval settings')
+        = render Pajamas::CheckboxTagComponent.new(name: 'merge_requests_author_approval', checked: !settings['merge_requests_author_approval'],
+          checkbox_options: { class: 'js-dsoaas-setting', data: { setting: 'merge_requests_author_approval', inverted: 'true' } }) do |cb|
+          - cb.with_label do
+            = _('Prevent approval by merge request creator')
+        = render Pajamas::CheckboxTagComponent.new(name: 'merge_requests_disable_committers_approval', checked: settings['merge_requests_disable_committers_approval'],
+          checkbox_options: { class: 'js-dsoaas-setting', data: { setting: 'merge_requests_disable_committers_approval' } }) do |cb|
+          - cb.with_label do
+            = _('Prevent approvals by users who add commits')
+        = render Pajamas::CheckboxTagComponent.new(name: 'reset_approvals_on_push', checked: settings['reset_approvals_on_push'],
+          checkbox_options: { class: 'js-dsoaas-setting', data: { setting: 'reset_approvals_on_push' } }) do |cb|
+          - cb.with_label do
+            = _('Remove all approvals when commits are added to the source branch')
+          - cb.with_help_text do
+            = _('Approvals stay when a rebase leaves the changes the same.')
+        - if can_edit && !load_error
+          = render Pajamas::ButtonComponent.new(variant: :confirm, button_options: { class: 'js-dsoaas-save-settings gl-mt-3', data: { testid: 'save-approval-settings' } }) do
+            = _('Save changes')
+
+= stylesheet_link_tag Dsoaas::Approvals::Assets.path('approvals.css'), media: 'all'
+= javascript_include_tag Dsoaas::Approvals::Assets.path('editor.js'), defer: true, nonce: content_security_policy_nonce
+= javascript_include_tag Dsoaas::Approvals::Assets.path('settings.js'), defer: true, nonce: content_security_policy_nonce

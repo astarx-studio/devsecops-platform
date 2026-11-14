@@ -94,7 +94,7 @@ Shared PostgreSQL for **Keycloak** (`KC_DB_*`), **SonarQube** (`SONAR_DB_*`), **
 
 **App databases on compose up:** `postgres-keycloak-init`, `postgres-sonar-init`, `postgres-gitlab-init`, and `postgres-registry-init` create roles, databases, and (for GitLab) required extensions idempotently as `${POSTGRES_ADMIN_USER}`. Fresh installs also run `postgres/init/01-keycloak-database.sh` through `04-registry-database.sh` when the data directory is empty.
 
-**Key environment variables:** `POSTGRES_ADMIN_USER`, `POSTGRES_ADMIN_PASSWORD` (cluster bootstrap + host `psql`); `KC_DB_*`, `SONAR_DB_*`, `GITLAB_DB_*`, `REGISTRY_DB_*` (application users).
+**Key environment variables:** `POSTGRES_ADMIN_USER`, `POSTGRES_ADMIN_PASSWORD` (cluster bootstrap + host `psql`); `KC_DB_*`, `SONAR_DB_*`, `GITLAB_DB_*`, `REGISTRY_DB_*`, `GITLAB_PLUGINS_DB_*` (application users; the last is the DSOaaS GitLab plugins DB, created by `postgres-gitlab-plugins-init`).
 
 **Backup / DR:** `make backup` archives `.vols/` and, when GitLab/registry DBs exist on this instance, writes `backups/gitlabhq_production-*.dump` and `backups/registry-*.dump`. `gitlab-backup` does **not** include the registry metadata database — keep logical dumps with MinIO registry blobs.
 
@@ -246,10 +246,26 @@ No additional iptables configuration is needed inside the container.
 
 | Field      | Value                                                                                     |
 | ---------- | ----------------------------------------------------------------------------------------- |
-| Image      | `gitlab/gitlab-ce:19.5.0-ce.0`                                                            |
+| Image      | `dsoaas-gitlab:19.5.3-ce.0`, built from [`gitlab/Dockerfile`](../../gitlab/Dockerfile) on `gitlab/gitlab-ce:19.5.3-ce.0` |
 | Host ports | `12222→22` (SSH git)                                                                      |
 | Volumes    | `./.vols/gitlab/config`, `./.vols/gitlab/logs`, `./.vols/gitlab/data`                     |
-| Depends on | `postgres` (healthy), `postgres-gitlab-init`, `postgres-registry-init`, `minio` (healthy) |
+| Depends on | `postgres` (healthy), `postgres-gitlab-init`, `postgres-registry-init`, `postgres-gitlab-plugins-init`, `minio` (healthy) |
+
+**Plugins:** the image is stock GitLab CE plus additive DSOaaS plugins in [`gitlab/plugins/`](../../gitlab/plugins/), loaded by `config/initializers/zz_dsoaas_plugins.rb`. No GitLab file is edited. Today there's one plugin, **approvals**: EE-style merge request approval rules, managed in GitLab under Settings → Merge requests and on each branch rule (Settings → Repository → Branch rules), shown in the MR widget, available through EE's REST API, with `.gitlab/approvals.yml` as a fallback (developer guide: [15_merge_request_approvals.md](../03_devs/15_merge_request_approvals.md)).
+
+- **Version gate:** each plugin's `supported.txt` holds the GitLab range it was reviewed against. The plugin reads it at boot (and skips itself outside it), and `gitlab/bin/check-versions.rb` fails the image build outside it.
+- **Seams:** listed in [`gitlab/seams.txt`](../../gitlab/seams.txt) and checked at image build time (glob paths are allowed for hash-named compiled assets). Needles match only the parts the plugin uses (e.g. a method's leading parameters), so additive GitLab changes pass. The contract test checks the real signatures. Each piece uses a hook GitLab EE itself uses: enforcement prepends `MergeRequest.mergeable_state_checks_by_tier`; the settings section is the partial CE renders through `render_if_exists 'projects/settings/merge_requests/merge_request_approvals_settings'`; the REST endpoints are added to CE's `API::MergeRequestApprovals` during initializers (before Puma's request-metrics middleware memoizes `API::API.routes`). The MR page and the branch rules pages have no hook (compiled Vue apps), so a Rack middleware appends scripts to them:
+  - `mr_widget.js` on MR pages attaches to CE's `.js-mr-approvals` widget;
+  - `branch_rules.js` on Settings → Repository adds a count per branch rule;
+  - on a branch rule's page, `branch_rules.js` adds a section using the shared `editor.js`.
+
+  The scripts hook onto CE markers (`rule-target-card`, `allowed-to-merge-content`, `branch-content`). Each does nothing if those markers disappear.
+- **Database isolation:** plugin state lives in its own database (`GITLAB_PLUGINS_DB_*`, default `dsoaas_gitlab_plugins`, created by `postgres-gitlab-plugins-init`). Plugins connect with raw `pg`, not ActiveRecord, and run their own SQL migrations (tracked in `dsoaas_schema_migrations`). `gitlabhq_production` gets no tables, columns or migrations from plugins. The only GitLab-side writes are optional MR comments posted through GitLab's own Notes services by the bot user.
+- **Rule storage:** native rules live in `dsoaas_approval_rules` / `dsoaas_approval_project_settings` (users, groups and branch rules by ID; `protected_branches` maps a branch rule's ID to its name at last save, the fallback if that branch rule is deleted; migration `004` linked existing branch names), with an audit trail in `dsoaas_approval_rule_events`, all in the plugin database. Every write goes through the plugin's REST API (the settings page uses it too) and expires the cache. The plugin reads rules on each mergeability check, with a 15-second cache plus a 30-day last-known copy in GitLab's Rails cache. Any native rule wins over `.gitlab/approvals.yml`. If the plugin DB is unreachable and no cached copy exists, the check blocks merging. `dsoaas_approval_rule_sets` holds console-era rules, copied into the native tables by migration `003` and otherwise unused.
+- **Extras fail independently:** the REST API, settings section and MR widget are "extras"; if one fails to install it's logged and listed in `Dsoaas::Approvals::Plugin.extras`, while enforcement keeps working.
+- **Status:** `docker exec gitlab gitlab-rails runner 'pp Dsoaas::Plugins.statuses'`. An incompatible plugin is skipped and logged (`dsoaas plugin ... skipped`), and GitLab keeps running as stock CE.
+- **Contract check (read-only, safe in production):** `docker exec gitlab gitlab-rails runner /opt/dsoaas/test/contract.rb`.
+- **Removing the plugins:** point `gitlab:` back at `image: gitlab/gitlab-ce:<tag>` (drop `build:`), recreate, and optionally drop the `dsoaas_gitlab_plugins` database. Nothing needs cleaning in GitLab's own DB.
 
 **Databases:** Rails uses shared `postgres` (`GITLAB_DB_*`, default database `gitlabhq_production`). Container registry metadata uses a separate database (`REGISTRY_DB_*`, default `registry`) on the same host. Embedded Omnibus PostgreSQL is disabled (`postgresql['enable'] = false`). Fresh installs: empty DBs are created by `postgres-gitlab-init` / `postgres-registry-init` on first `compose up`. Upgrading from embedded PostgreSQL requires a planned cutover (logical dump/restore of `gitlabhq_production`, then registry metadata import per [GitLab docs](https://docs.gitlab.com/administration/packages/container_registry_metadata_database/)) before relying on this layout.
 

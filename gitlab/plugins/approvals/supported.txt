@@ -1,0 +1,6 @@
+# GitLab versions this plugin was reviewed against (Gem::Requirement, one per line).
+# Read by plugin.rb at runtime AND by gitlab/bin/check-versions.rb at image build:
+# building on a GitLab outside this range fails, so a new major/minor can only
+# ship after someone re-checks the seams and widens the range here.
+>= 19.5
+< 20.0
