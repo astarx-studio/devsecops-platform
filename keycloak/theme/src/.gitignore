@@ -11,8 +11,15 @@
 # admin/assets/favicon.svg
 # admin/assets/logo.svg
 # email/html/template.ftl
+# email/html/password-reset.ftl
+# email/html/executeActions.ftl
+# email/html/email-verification.ftl
 # email/messages/messages_en.properties
 # account/root/Root.tsx
+# account/routes.tsx
+# account/utils/useAccountAlerts.ts
+# shared/SessionExpirationWarningOverlay.tsx
+# shared/keycloak-ui-shared/alerts/Alerts.tsx
 # account/root/PageNav.tsx
 # account/components/page/Page.tsx
 # account/personal-info/PersonalInfo.tsx
@@ -39,6 +46,7 @@
 # shared/keycloak-ui-shared/context/KeycloakContext.tsx
 # shared/keycloak-ui-shared/user-profile/UserProfileFields.tsx
 # admin/App.tsx
+# admin/Banners.tsx
 # admin/PageNav.tsx
 # admin/colorScheme.ts
 # admin/dashboard/Dashboard.tsx
@@ -50,7 +58,6 @@
 /email/html/email-test.ftl
 /email/html/email-update-confirmation.ftl
 /email/html/email-verification-with-code.ftl
-/email/html/email-verification.ftl
 /email/html/event-login_error.ftl
 /email/html/event-remove_credential.ftl
 /email/html/event-remove_totp.ftl
@@ -59,10 +66,8 @@
 /email/html/event-update_totp.ftl
 /email/html/event-user_disabled_by_permanent_lockout.ftl
 /email/html/event-user_disabled_by_temporary_lockout.ftl
-/email/html/executeActions.ftl
 /email/html/identity-provider-link.ftl
 /email/html/org-invite.ftl
-/email/html/password-reset.ftl
 /email/messages/messages_ar.properties
 /email/messages/messages_ca.properties
 /email/messages/messages_cs.properties
@@ -111,7 +116,6 @@
 # === @keycloakify/keycloak-admin-ui v260700.0.3 ===
 /admin/admin-client.tsx
 /admin/banners.module.css
-/admin/Banners.tsx
 /admin/environment-types.ts
 /admin/environment.ts
 /admin/ForbiddenSection.tsx
@@ -793,14 +797,12 @@
 /admin/user-federation/ldap/mappers/LdapMapperList.tsx
 
 # === @keycloakify/keycloak-ui-shared v260700.0.3 ===
-/shared/SessionExpirationWarningOverlay.tsx
 /shared/keycloak-ui-shared/index.ts
 /shared/keycloak-ui-shared/main.ts
 /shared/@patternfly/react-core/index.tsx
 /shared/@patternfly/react-icons/index.tsx
 /shared/@patternfly/react-styles/index.tsx
 /shared/@patternfly/react-table/index.tsx
-/shared/keycloak-ui-shared/alerts/Alerts.tsx
 /shared/keycloak-ui-shared/buttons/FormSubmitButton.tsx
 /shared/keycloak-ui-shared/context/environment.ts
 /shared/keycloak-ui-shared/context/ErrorPage.tsx
@@ -868,7 +870,6 @@
 /account/index.ts
 /account/KcContext.ts
 /account/KcPage.tsx
-/account/routes.tsx
 /account/api/constants.ts
 /account/api/methods.ts
 /account/api/parse-links.ts
@@ -923,7 +924,6 @@
 /account/root/header.module.css
 /account/utils/formatDate.ts
 /account/utils/joinPath.ts
-/account/utils/useAccountAlerts.ts
 /account/utils/usePromise.ts
 /account/assets/passkeys/1password-dark.svg
 /account/assets/passkeys/1password-light.svg

@@ -4,12 +4,11 @@ import CircularProgress from "@mui/material/CircularProgress";
 import CssBaseline from "@mui/material/CssBaseline";
 import Drawer from "@mui/material/Drawer";
 import { ThemeProvider } from "@mui/material/styles";
-import { AlertVariant } from "../../shared/@patternfly/react-core";
+import { AlertVariant, useAlerts } from "../../shared/keycloak-ui-shared/alerts/Alerts";
 import {
-    useAlerts,
     useEnvironment,
     type KeycloakContext
-} from "../../shared/keycloak-ui-shared";
+} from "../../shared/keycloak-ui-shared/context/KeycloakContext";
 import { useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import {

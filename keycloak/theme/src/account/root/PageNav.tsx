@@ -12,7 +12,7 @@ import ListItemText from "@mui/material/ListItemText";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import { useTranslation } from "react-i18next";
 import { matchPath, useHref, useLinkClickHandler, useLocation } from "react-router-dom";
-import { useEnvironment } from "../../shared/keycloak-ui-shared";
+import { useEnvironment } from "../../shared/keycloak-ui-shared/context/KeycloakContext";
 import type { AccountEnvironment, Feature } from "..";
 import type { TFuncKey } from "../i18n-type";
 import fetchContentJson from "../content/fetchContent";

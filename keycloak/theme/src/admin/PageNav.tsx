@@ -16,7 +16,7 @@ import Stack from "@mui/material/Stack";
 import Typography from "@mui/material/Typography";
 import { useTranslation } from "react-i18next";
 import { NavLink } from "react-router-dom";
-import { useEnvironment } from "../shared/keycloak-ui-shared";
+import { useEnvironment } from "../shared/keycloak-ui-shared/context/KeycloakContext";
 import { useAccess } from "./context/access/Access";
 import { useRealm } from "./context/realm-context/RealmContext";
 import { useServerInfo } from "./context/server-info/ServerInfoProvider";

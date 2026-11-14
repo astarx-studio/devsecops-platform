@@ -9,7 +9,7 @@ import "./account.css";
 
 import { useReducer, useEffect } from "react";
 import { startColorSchemeManagement } from "./colorScheme";
-import { KeycloakProvider } from "../shared/keycloak-ui-shared";
+import { KeycloakProvider } from "../shared/keycloak-ui-shared/context/KeycloakContext";
 import { environment } from "./environment";
 import { i18n } from "./i18n/i18n";
 import { Root } from "./root/Root";

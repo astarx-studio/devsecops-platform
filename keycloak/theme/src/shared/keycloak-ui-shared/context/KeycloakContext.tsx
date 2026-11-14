@@ -13,7 +13,9 @@
 
 import { Keycloak } from "oidc-spa/keycloak-js";
 import {
+    lazy,
     PropsWithChildren,
+    Suspense,
     createContext,
     useContext,
     useEffect,
@@ -22,8 +24,11 @@ import {
     useState
 } from "react";
 import { AlertProvider } from "../alerts/Alerts";
-import { ErrorPage } from "./ErrorPage";
 import { Help } from "./HelpContext";
+
+const ErrorPage = lazy(() =>
+    import("./ErrorPage").then(module => ({ default: module.ErrorPage }))
+);
 import { BaseEnvironment } from "./environment";
 
 export type KeycloakContext<T extends BaseEnvironment = BaseEnvironment> =
@@ -99,7 +104,11 @@ export const KeycloakProvider = <T extends BaseEnvironment>({
     }, [keycloak, externalKeycloak]);
 
     if (error) {
-        return <ErrorPage error={error} />;
+        return (
+            <Suspense fallback={null}>
+                <ErrorPage error={error} />
+            </Suspense>
+        );
     }
 
     if (!init) {

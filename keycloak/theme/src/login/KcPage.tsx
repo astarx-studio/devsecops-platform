@@ -3,11 +3,14 @@ import type { ClassKey } from "keycloakify/login";
 import "./main.css";
 import type { KcContext } from "./KcContext";
 import { useI18n } from "./i18n";
-import DefaultPage from "keycloakify/login/DefaultPage";
 import Template from "./Template";
 import Login from "./pages/Login";
-import LoginPasskeysConditionalAuthenticate from "./pages/LoginPasskeysConditionalAuthenticate";
-import WebauthnAuthenticate from "./pages/WebauthnAuthenticate";
+
+const DefaultPage = lazy(() => import("keycloakify/login/DefaultPage"));
+const LoginPasskeysConditionalAuthenticate = lazy(
+    () => import("./pages/LoginPasskeysConditionalAuthenticate")
+);
+const WebauthnAuthenticate = lazy(() => import("./pages/WebauthnAuthenticate"));
 const UserProfileFormFields = lazy(
     () => import("keycloakify/login/UserProfileFormFields")
 );
@@ -20,7 +23,7 @@ export default function KcPage(props: { kcContext: KcContext }) {
     const { i18n } = useI18n({ kcContext });
 
     return (
-        <Suspense>
+        <Suspense fallback={<LoginFallback />}>
             {(() => {
                 switch (kcContext.pageId) {
                     case "login.ftl":
@@ -72,3 +75,19 @@ export default function KcPage(props: { kcContext: KcContext }) {
 }
 
 const classes = {} satisfies { [key in ClassKey]?: string };
+
+function LoginFallback() {
+    return (
+        <div
+            role="status"
+            style={{
+                minHeight: "100vh",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center"
+            }}
+        >
+            Loading
+        </div>
+    );
+}

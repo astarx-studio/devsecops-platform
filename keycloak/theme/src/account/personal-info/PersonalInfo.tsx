@@ -3,8 +3,13 @@ import Alert from "@mui/material/Alert";
 import Button from "@mui/material/Button";
 import CircularProgress from "@mui/material/CircularProgress";
 import Stack from "@mui/material/Stack";
-import { AlertVariant } from "../../shared/@patternfly/react-core";
-import { beerify, debeerify, setUserProfileServerError, useEnvironment } from "../../shared/keycloak-ui-shared";
+import { AlertVariant } from "../../shared/keycloak-ui-shared/alerts/Alerts";
+import { useEnvironment } from "../../shared/keycloak-ui-shared/context/KeycloakContext";
+import {
+    beerify,
+    debeerify,
+    setUserProfileServerError
+} from "../../shared/keycloak-ui-shared/user-profile/utils";
 import type { TFunction } from "i18next";
 import type { ErrorOption } from "react-hook-form";
 import { useForm } from "react-hook-form";

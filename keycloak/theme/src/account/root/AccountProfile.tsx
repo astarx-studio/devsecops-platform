@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { useEnvironment } from "../../shared/keycloak-ui-shared";
+import { useEnvironment } from "../../shared/keycloak-ui-shared/context/KeycloakContext";
 import type { AccountEnvironment } from "..";
 import { getPersonalInfo } from "../api/methods";
 import { pictureValue } from "../utils/gravatar";

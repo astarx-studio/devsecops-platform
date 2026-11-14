@@ -11,13 +11,18 @@
 
 import { useState } from "react";
 import Box from "@mui/material/Box";
+import CircularProgress from "@mui/material/CircularProgress";
 import CssBaseline from "@mui/material/CssBaseline";
 import Drawer from "@mui/material/Drawer";
 import { ThemeProvider } from "@mui/material/styles";
 import { Suspense, useEffect, type PropsWithChildren } from "react";
 import { Outlet } from "react-router-dom";
 import { SessionExpirationWarningOverlay } from "../shared/SessionExpirationWarningOverlay";
-import { ErrorBoundaryFallback, ErrorBoundaryProvider, KeycloakSpinner, mainPageContentId } from "../shared/keycloak-ui-shared";
+import {
+    ErrorBoundaryFallback,
+    ErrorBoundaryProvider
+} from "../shared/keycloak-ui-shared/utils/ErrorBoundary";
+import { mainPageContentId } from "../shared/keycloak-ui-shared/scroll-form/ScrollForm";
 import { createDawnTheme } from "../theme/dawnTheme";
 import { readPlatformMode, type PlatformMode } from "../theme/colorMode";
 import { AdminClientProvider } from "./admin-client";
@@ -76,13 +81,25 @@ export const App = () => {
                 <ThemeProvider theme={createDawnTheme(mode)}>
                     <CssBaseline />
                     <Box sx={{ display: "flex", minHeight: "100vh" }}>
-                        <Header mode={mode} onToggleMode={() => setMode(mode === "dark" ? "light" : "dark")} onOpenNav={() => setNavOpen(true)} />
+                        <Header
+                            mode={mode}
+                            onToggleMode={() =>
+                                setMode(mode === "dark" ? "light" : "dark")
+                            }
+                            onOpenNav={() => setNavOpen(true)}
+                        />
                         <Drawer
                             variant="temporary"
                             open={navOpen}
                             onClose={() => setNavOpen(false)}
                             ModalProps={{ keepMounted: true }}
-                            sx={{ display: { xs: "block", md: "none" }, "& .MuiDrawer-paper": { width: drawerWidth, boxSizing: "border-box" } }}
+                            sx={{
+                                display: { xs: "block", md: "none" },
+                                "& .MuiDrawer-paper": {
+                                    width: drawerWidth,
+                                    boxSizing: "border-box"
+                                }
+                            }}
                             PaperProps={{ className: "platform-sidebar" }}
                         >
                             <ToolbarSpacer />
@@ -94,7 +111,10 @@ export const App = () => {
                                 display: { xs: "none", md: "block" },
                                 width: drawerWidth,
                                 flexShrink: 0,
-                                "& .MuiDrawer-paper": { width: drawerWidth, boxSizing: "border-box" }
+                                "& .MuiDrawer-paper": {
+                                    width: drawerWidth,
+                                    boxSizing: "border-box"
+                                }
                             }}
                             PaperProps={{ className: "platform-sidebar" }}
                             open
@@ -105,13 +125,30 @@ export const App = () => {
                         <Box
                             id={mainPageContentId}
                             component="main"
-                            sx={{ flexGrow: 1, minWidth: 0, p: { xs: 2, sm: 3 }, width: { md: `calc(100% - ${drawerWidth}px)` } }}
+                            sx={{
+                                flexGrow: 1,
+                                minWidth: 0,
+                                p: { xs: 2, sm: 3 },
+                                width: { md: `calc(100% - ${drawerWidth}px)` }
+                            }}
                         >
                             <ToolbarSpacer />
                             <Banners />
                             <PageBreadCrumbs />
                             <ErrorBoundaryFallback fallback={ErrorRenderer}>
-                                <Suspense fallback={<KeycloakSpinner />}>
+                                <Suspense
+                                    fallback={
+                                        <Box
+                                            sx={{
+                                                display: "flex",
+                                                justifyContent: "center",
+                                                py: 8
+                                            }}
+                                        >
+                                            <CircularProgress />
+                                        </Box>
+                                    }
+                                >
                                     <AuthWall>
                                         <Outlet />
                                     </AuthWall>
