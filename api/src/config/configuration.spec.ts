@@ -94,7 +94,7 @@ describe('configuration', () => {
     delete process.env.VAULT_ROOT_TOKEN;
 
     expect(() => configuration()).toThrow(
-      'Missing required environment variable: VAULT_ROOT_TOKEN',
+      'Missing Vault credentials: set VAULT_ROOT_TOKEN or both VAULT_ROLE_ID and VAULT_SECRET_ID',
     );
   });
 
