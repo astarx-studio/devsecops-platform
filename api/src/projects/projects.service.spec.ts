@@ -139,6 +139,7 @@ describe('ProjectsService', () => {
       deleteProject: deleteProjectFn,
       tryDeleteProject: tryDeleteProjectFn,
       getProject: getProjectFn,
+      applyRegistryRetentionPolicy: jest.fn().mockResolvedValue(undefined),
       setProjectCiVariables: setProjectCiVariablesFn,
       setProjectCiVariable: jest.fn().mockResolvedValue(undefined),
       deleteProjectCiVariable: jest.fn().mockResolvedValue(undefined),

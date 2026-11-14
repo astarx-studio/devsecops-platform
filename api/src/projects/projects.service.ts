@@ -1708,6 +1708,8 @@ externalSecret:
       );
     }
 
+    await this.gitlabService.applyRegistryRetentionPolicy(input.gitlabProjectId);
+
     const existing = await this.projectModel
       .findOne({ gitlabProjectId: input.gitlabProjectId })
       .exec();
@@ -2043,6 +2045,14 @@ externalSecret:
           );
         }
         continue;
+      }
+
+      try {
+        await this.gitlabService.applyRegistryRetentionPolicy(glProject.id);
+      } catch (err) {
+        this.logger.warn(
+          `Reconciliation: registry retention policy failed for "${glProject.path_with_namespace}": ${(err as Error).message}`,
+        );
       }
 
       const existing = await this.projectModel.findOne({ gitlabProjectId: glProject.id }).exec();

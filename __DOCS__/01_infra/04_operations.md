@@ -216,6 +216,8 @@ Only add exclusions you accept from a security standpoint on a dedicated DevSecO
 
 This stack uses the **registry metadata database** (`REGISTRY_DB_ENABLED=true`). Offline `gitlab-ctl registry-garbage-collect` is **not compatible** and will refuse to run. Untagged layers are removed by **online GC** (continuous; typically ~24h after a tag/manifest becomes unreferenced).
 
+**Default:** the Management API enables this policy when it creates, forks, or registers a GitLab project, and again on `reconcileGitLabProjects`. The script below re-applies it to projects that already exist (or were created outside the API).
+
 **Apply / re-apply cleanup policies** on all registry-enabled projects (optional maintainer script):
 
 ```bash

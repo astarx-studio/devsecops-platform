@@ -31,6 +31,20 @@ export interface GitLabProject {
   marked_for_deletion_at?: string | null;
 }
 
+/**
+ * Container Registry cleanup applied to every project this platform creates,
+ * forks, or registers. GitLab only accepts keep_n of 1|5|10|25|50|100.
+ * Keep in sync with bootstrap/gitlab-registry-retention.sh.
+ */
+export const REGISTRY_RETENTION_POLICY = {
+  enabled: true,
+  cadence: '1d',
+  keep_n: 5,
+  older_than: '7d',
+  name_regex: '.*',
+  name_regex_keep: 'latest-.*',
+} as const;
+
 export interface GitLabListProjectsOptions {
   /** When false, includes marked_for_deletion_* fields (default true for list). */
   simple?: boolean;
@@ -166,6 +180,7 @@ export class GitLabService {
     );
 
     this.logger.log(`Forked project created: "${data.path_with_namespace}" (id=${data.id})`);
+    await this.applyRegistryRetentionPolicy(data.id);
     return data;
   }
 
@@ -297,7 +312,23 @@ export class GitLabService {
     );
 
     this.logger.log(`Project created: "${data.path_with_namespace}" (id=${data.id})`);
+    await this.applyRegistryRetentionPolicy(data.id);
     return data;
+  }
+
+  /**
+   * Enables the platform Container Registry cleanup policy on a project.
+   * Keeps the newest 5 tags older than 7 days, and always keeps `latest-*`.
+   */
+  async applyRegistryRetentionPolicy(projectId: number): Promise<void> {
+    this.logger.log(`Applying registry retention policy to project ${projectId}`);
+    await firstValueFrom(
+      this.httpService.put(
+        `${this.baseUrl}/api/v4/projects/${projectId}`,
+        { container_expiration_policy_attributes: REGISTRY_RETENTION_POLICY },
+        { headers: this.headers },
+      ),
+    );
   }
 
   /**

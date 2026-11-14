@@ -55,6 +55,7 @@ sequenceDiagram
 **Key behaviors:**
 - The group hierarchy walk is idempotent. If the group already exists, it is reused.
 - GitLab project creation or fork must succeed; duplicate names in the same namespace still fail with GitLab `409`.
+- After create, fork, or `registerGitLabProject`, the API enables the Container Registry cleanup policy (`keep_n` 5, tags older than 7 days, `latest-*` kept). `reconcileGitLabProjects` re-applies it.
 - Vault write is always performed for the project secret path.
 - Kubernetes steps degrade gracefully when an environment's kubeconfig is absent.
 

@@ -92,6 +92,7 @@ describe('GitLabService', () => {
 
       getFn.mockReturnValueOnce(of(axiosResponse([templateProject])));
       postFn.mockReturnValueOnce(of(axiosResponse(forkedProject)));
+      putFn.mockReturnValueOnce(of(axiosResponse(forkedProject)));
 
       const result = await service.forkTemplate('nestjs-app', 42, 'webapp');
 
@@ -100,6 +101,18 @@ describe('GitLabService', () => {
       expect(postFn).toHaveBeenCalledWith(
         expect.stringContaining('/projects/50/fork'),
         expect.objectContaining({ namespace_id: 42, name: 'webapp' }),
+        expect.any(Object),
+      );
+      expect(putFn).toHaveBeenCalledWith(
+        expect.stringContaining('/api/v4/projects/99'),
+        expect.objectContaining({
+          container_expiration_policy_attributes: expect.objectContaining({
+            enabled: true,
+            keep_n: 5,
+            older_than: '7d',
+            name_regex_keep: 'latest-.*',
+          }),
+        }),
         expect.any(Object),
       );
     });
@@ -198,6 +211,7 @@ describe('GitLabService', () => {
     it('should create a new project with correct params', async () => {
       const project = gitlabProjectFactory({ id: 77, name: 'my-lib' });
       postFn.mockReturnValueOnce(of(axiosResponse(project)));
+      putFn.mockReturnValueOnce(of(axiosResponse(project)));
 
       const result = await service.createNewProject(10, 'my-lib', 'A library', true);
 
@@ -211,6 +225,39 @@ describe('GitLabService', () => {
           visibility: 'internal',
           initialize_with_readme: true,
         }),
+        expect.any(Object),
+      );
+      expect(putFn).toHaveBeenCalledWith(
+        expect.stringContaining('/api/v4/projects/77'),
+        expect.objectContaining({
+          container_expiration_policy_attributes: expect.objectContaining({
+            enabled: true,
+            keep_n: 5,
+          }),
+        }),
+        expect.any(Object),
+      );
+    });
+  });
+
+  describe('applyRegistryRetentionPolicy', () => {
+    it('should enable keep_n 5 / 7d cleanup on the project', async () => {
+      putFn.mockReturnValueOnce(of(axiosResponse({})));
+
+      await service.applyRegistryRetentionPolicy(42);
+
+      expect(putFn).toHaveBeenCalledWith(
+        expect.stringContaining('/api/v4/projects/42'),
+        {
+          container_expiration_policy_attributes: {
+            enabled: true,
+            cadence: '1d',
+            keep_n: 5,
+            older_than: '7d',
+            name_regex: '.*',
+            name_regex_keep: 'latest-.*',
+          },
+        },
         expect.any(Object),
       );
     });

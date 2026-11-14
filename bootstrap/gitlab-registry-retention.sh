@@ -5,7 +5,10 @@
 # Optional maintainer script (not part of greenfield bootstrap).
 # Requires GITLAB_ROOT_TOKEN + GITLAB_DOMAIN in .env (repo root).
 #
-# Default policy (Auto DevOps-friendly, disk-tight):
+# Default policy (Auto DevOps-friendly, disk-tight).
+# Keep in sync with REGISTRY_RETENTION_POLICY in api/src/gitlab/gitlab.service.ts.
+# New / forked / registered projects get this from the Management API; this
+# script re-applies it to projects that already exist.
 #   - cadence 1d, keep_n 5 per project (GitLab allows 1|5|10|25|50|100 only;
 #     policy is per image repo, not platform-wide),
 #     delete tags older than 7d matching .*
