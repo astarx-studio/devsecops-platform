@@ -337,6 +337,7 @@ The host **disk watchdog** reuses the same `SMTP_*` values (see [Disk watchdog](
 ## Disk watchdog
 
 ```
+WATCHDOG_DF_PATH=D:/devsecops-platform
 WATCHDOG_WARN_FREE_GB=80
 WATCHDOG_SHUTDOWN_FREE_GB=50
 WATCHDOG_NOTIFY_EMAILS=ops@yourdomain.com,oncall@yourdomain.com
@@ -347,7 +348,9 @@ WATCHDOG_DATA_STOP_TIMEOUT=600
 WATCHDOG_EDGE_STOP_TIMEOUT=120
 ```
 
-`WATCHDOG_WARN_FREE_GB` — email a **warning** once when free space on the repo volume drops to this many GiB (or below), and stay there until space recovers above the warn line.
+`WATCHDOG_DF_PATH` — host path whose volume free space is measured. Set this after a cross-volume move or C:→D: junction so Git Bash does not `df` the wrong drive.
+
+`WATCHDOG_WARN_FREE_GB` — email a **warning** once when free space on that volume drops to this many GiB (or below), and stay there until space recovers above the warn line.
 
 `WATCHDOG_SHUTDOWN_FREE_GB` — start **graceful shutdown** at this many GiB free (must be ≤ warn). Quiesce → drain → ordered stop.
 

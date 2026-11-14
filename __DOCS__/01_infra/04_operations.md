@@ -169,7 +169,7 @@ GitLab CE has no maintenance mode. A hard `compose stop` while a push is in Gita
 
 This section is the **Compose-host (Windows) backend** only. Linux Compose, Kubernetes, and the shared policy contract are [milestone 05 — failsafe backends](../XX_milestone/05_failsafe_backends.md).
 
-Must run on the **host** (Git Bash / Task Scheduler). A container `df` sees the Docker VHDX, not `C:` where `.vols/gitlab` lives.
+Must run on the **host** (Git Bash / Task Scheduler). A container `df` sees the Docker VHDX guest filesystem, not the host NTFS volume where `.vols/gitlab` lives. After a cross-volume move/junction, set `WATCHDOG_DF_PATH` to a path on the real data drive (e.g. `D:/devsecops-platform`) so Git Bash does not report free space for the wrong volume.
 
 ```bash
 make watchdog                      # one check (safe to schedule every 1–2 min)
@@ -179,12 +179,15 @@ make watchdog ARGS='--test-email'  # SMTP + WATCHDOG_NOTIFY_EMAILS
 make watchdog ARGS='--clear'       # after a trip; then docker compose up -d
 ```
 
-Two tiers (`.env`, GiB free on the repo filesystem):
+Host volume and tiers (`.env`, GiB free):
 
 | Var | Default | Action |
 |---|---|---|
+| `WATCHDOG_DF_PATH` | (repo root / junction target) | Path whose **host** volume is measured |
 | `WATCHDOG_WARN_FREE_GB` | `80` | Email **warning** once per excursion |
 | `WATCHDOG_SHUTDOWN_FREE_GB` | `50` | Quiesce → drain → ordered stop |
+
+Host `df` of that path tracks bind-mount growth and Docker VHDX *file* growth when both live on the same drive; it does **not** see free space *inside* the VHDX guest.
 
 Emails (same `SMTP_*` as GitLab/Keycloak) to `WATCHDOG_NOTIFY_EMAILS`: warning, shutdown-init, shutdown-failing (drain timeout or a `compose stop` group failed), shutdown-successful.
 
@@ -204,10 +207,10 @@ Use `bootstrap/watchdog-hidden.vbs` (wscript, window style 0) so Task Scheduler 
 
 ### Reduce Defender I/O amplification (local ops)
 
-Windows Defender realtime scanning of the VHDX and `.vols` registry blobs can multiply disk traffic. Optional **local** exclusions (do not commit machine-specific paths into the stack):
+Windows Defender realtime scanning of the VHDX and `.vols` registry blobs can multiply disk traffic. Optional **local** exclusions (do not commit machine-specific paths into the stack; retarget after a disk move):
 
-- `%LOCALAPPDATA%\Docker\wsl\disk\`
-- Repo `.vols\gitlab\data\gitlab-rails\shared\registry\`
+- Docker disk image dir (e.g. `D:\Docker\wsl\disk\` after relocate; formerly `%LOCALAPPDATA%\Docker\wsl\disk\`)
+- Repo `.vols\gitlab\data\gitlab-rails\shared\registry\` (under the live repo root, e.g. `D:\devsecops-platform\...`)
 - Repo `.vols\minio\data\` (optional)
 
 Only add exclusions you accept from a security standpoint on a dedicated DevSecOps host.

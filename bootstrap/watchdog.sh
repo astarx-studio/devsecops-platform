@@ -3,10 +3,13 @@
 # watchdog.sh — disk failsafe (warn → drain → ordered stop)
 # =============================================================================
 # Optional maintainer script. MUST run on the Windows/Linux *host* (Git Bash /
-# Task Scheduler), not inside a container — bind-mounted .vols live on C: and
-# `df` inside Docker Desktop is the VHDX, not NTFS.
+# Task Scheduler), not inside a container — bind-mounted .vols live on the
+# host NTFS volume (see WATCHDOG_DF_PATH). `df` inside Docker Desktop is the
+# VHDX guest filesystem, not host free space.
 #
-# Tiers (GiB free on the repo volume, all overridable in .env):
+# Tiers (GiB free on the measured host volume, all overridable in .env):
+#   WATCHDOG_DF_PATH           — path whose volume is measured (set after
+#                                cross-volume moves / junctions; e.g. D:/…)
 #   WATCHDOG_WARN_FREE_GB      — email once per excursion (default 80)
 #   WATCHDOG_SHUTDOWN_FREE_GB  — quiesce, drain, ordered stop (default 50)
 #
@@ -123,9 +126,48 @@ ${2:-}
 EOF
 }
 
+# Path whose host volume free space we measure. Cross-volume NTFS junctions
+# under /c/... can make Git Bash `df` report the wrong drive — prefer an
+# explicit WATCHDOG_DF_PATH on the real volume (e.g. D:/devsecops-platform).
+df_target() {
+  local target win_root resolved
+  if [[ -n "${WATCHDOG_DF_PATH:-}" ]]; then
+    echo "${WATCHDOG_DF_PATH}"
+    return
+  fi
+  # Resolve NTFS junction / symlink target when ROOT is still a C: path.
+  if command -v cygpath >/dev/null 2>&1; then
+    win_root="$(cygpath -w "${ROOT}" 2>/dev/null || true)"
+  else
+    win_root="${ROOT}"
+  fi
+  if [[ -n "${win_root}" ]] && command -v powershell.exe >/dev/null 2>&1; then
+    resolved="$(powershell.exe -NoProfile -Command "
+      \$p = '${win_root}' -replace \"'\", \"''\"
+      \$i = Get-Item -LiteralPath \$p -Force -ErrorAction SilentlyContinue
+      if (\$null -eq \$i) { exit 0 }
+      if (\$i.LinkType -eq 'Junction' -or \$i.LinkType -eq 'SymbolicLink') {
+        \$t = \$i.Target
+        if (\$t -is [array]) { \$t = \$t[0] }
+        Write-Output \$t
+      }
+    " 2>/dev/null | tr -d '\r' | tail -n1)"
+    if [[ -n "${resolved}" ]]; then
+      if command -v cygpath >/dev/null 2>&1; then
+        cygpath -u "${resolved}" 2>/dev/null || echo "${resolved}"
+      else
+        echo "${resolved}"
+      fi
+      return
+    fi
+  fi
+  echo "${ROOT}"
+}
+
 free_gb() {
-  local avail
-  avail="$(df -Pk "${ROOT}" | awk 'NR==2 {print $4}')"
+  local avail target
+  target="$(df_target)"
+  avail="$(df -Pk "${target}" 2>/dev/null | awk 'NR==2 {print $4}')"
   if [[ -z "${avail}" || ! "${avail}" =~ ^[0-9]+$ ]]; then
     echo 0
     return
