@@ -15,6 +15,7 @@ import { GitLabService, type GitLabRepositoryCommitAction } from '../gitlab/gitl
 import { isGitLabProjectPendingDeletion } from '../gitlab/gitlab-project.util';
 import { K8sService } from '../k8s/k8s.service';
 import { VaultService } from '../vault/vault.service';
+import { buildChartValuesYaml, mergeChartValuesYaml } from './deploy/chart-values.util';
 import {
   BUILD_JOBS_CI_PATH,
   buildManagedIncludes,
@@ -173,10 +174,16 @@ export class ProjectsService {
       ref = gl.default_branch;
     }
 
+    const existing = await this.gitlabService.getFileContent(
+      doc.gitlabProjectId,
+      'chart-values.yaml',
+      ref,
+    );
+    const content = mergeChartValuesYaml(existing, doc.runtimeEnvEnabled ?? true);
     await this.gitlabService.upsertFile(
       doc.gitlabProjectId,
       'chart-values.yaml',
-      ProjectsService.buildChartValues(doc.runtimeEnvEnabled ?? true),
+      content,
       'chore: update chart-values env profile settings',
       ref,
     );
@@ -335,14 +342,7 @@ export class ProjectsService {
    * @param runtimeEnvEnabled - When false, disables Vault envFrom for static/baked apps
    */
   static buildChartValues(runtimeEnvEnabled = true): string {
-    return `# Chart value overrides for the dsoaas-app Helm chart.
-# Committed by the platform API during project provisioning.
-# Project metadata (path, env, host) is injected by the pipeline at deploy time
-# via --set flags; do not duplicate it here.
-# Use this file for app-specific overrides: probes, resources, replicaCount, extraEnv.
-externalSecret:
-  enabled: ${runtimeEnvEnabled ? 'true' : 'false'}
-`;
+    return buildChartValuesYaml(runtimeEnvEnabled);
   }
 
   /**
