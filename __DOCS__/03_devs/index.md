@@ -19,6 +19,7 @@ Here's what's covered:
 - **[Shared DevTools RabbitMQ](11_shared_devtools_rabbitmq.md)** — External AMQP + Management UI via edge TCP `25672` / `25682` (vhosts `dev` / `stg`).
 - **[Shared DevTools MinIO](13_shared_devtools_minio.md)** — Shared S3 (`s3-devtools` / TCP `29000`); users `admin` + `cfa`.
 - **[Shared DevTools MySQL](14_shared_devtools_mysql.md)** — External `mysql` access to `esa_dev` via edge TCP `23306`.
+- **[Shared DevTools pgvector](16_shared_devtools_pgvector.md)** — Postgres 17 with the `vector` extension via edge TCP `25433` (database `vectors`).
 - **[Shared DevTools logging](12_shared_devtools_logging.md)** — Grafana/Loki for all DSOaaS-deployed app logs (`https://grafana.devops.<DOMAIN>`).
 
 ---

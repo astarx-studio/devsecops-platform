@@ -1,0 +1,21 @@
+{
+  "name": "ai-review-worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Queued, isolated merge request reviewer with a swappable LLM provider.",
+  "main": "src/main.js",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "start": "node src/main.js",
+    "test": "node --test \"test/**/*.test.js\""
+  },
+  "dependencies": {
+    "ajv": "8.17.1",
+    "amqplib": "0.10.5",
+    "minio": "8.0.5",
+    "pg": "8.13.1",
+    "picomatch": "4.0.2",
+    "yaml": "2.6.1"
+  }
+}

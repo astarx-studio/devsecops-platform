@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}New scan{% endblock %}
+{% block body %}
+<h1>New scan</h1>
+{% if error %}<div class="msg error">{{ error }}</div>{% endif %}
+{% if not targets %}
+<div class="card"><p>Add a target first.</p><a class="btn" href="/targets/new">Add target</a></div>
+{% elif not target %}
+<form class="card" method="get" action="/scans/new">
+  <label for="target_id">Target</label>
+  <select id="target_id" name="target_id">{% for t in targets %}<option value="{{ t.id }}">{{ t.name }} ({{ t.base_url }})</option>{% endfor %}</select>
+  <p style="margin-top:14px"><button type="submit">Continue</button></p>
+</form>
+{% else %}
+{% for b in blockers %}<div class="msg warn">{{ b }}</div>{% endfor %}
+<form class="card" method="post" action="/scans/new">
+  <input type="hidden" name="target_id" value="{{ target.id }}">
+  <h2>{{ target.name }}</h2>
+  <p>{{ target.base_url }} · {{ ENVS[target.environment] }} · login: {{ AUTH_TYPES[target.auth_type].split(" (")[0] }} ·
+     API definition: {% if target.apidef_kind %}{{ (target.apidef_summary.endpoints or [])|length - (target.apidef_excluded or [])|length }} of {{ (target.apidef_summary.endpoints or [])|length }} endpoints{% else %}none (crawl only){% endif %}
+     · <a href="/targets/{{ target.id }}">change</a></p>
+
+  <label>Profile</label>
+  {% for key, (label, desc) in PROFILES.items() %}
+  <label class="inline"><input type="radio" name="profile" value="{{ key }}" {{ "checked" if (key == "passive" and target.environment == "prod") or (key == "standard" and target.environment != "prod") }}>
+    <span><strong>{{ label }}</strong>: {{ desc }}.
+    {% if key == "passive" %}About 30 minutes plus the server scan. Safe for production.{% elif key == "standard" %}Up to 2 hours. For development and staging.{% else %}Up to 5 hours. For a thorough test before a release.{% endif %}</span></label>
+  {% endfor %}
+
+  <label>Network route</label>
+  <label class="inline"><input type="radio" name="route" value="internal" checked><span><strong>Internal</strong>: through the platform's reverse proxy. Faster, and scan traffic does not leave this server.</span></label>
+  <label class="inline"><input type="radio" name="route" value="public"><span><strong>Public</strong>: over the internet, the way an outside attacker reaches it.</span></label>
+  <p class="hint">Every scan also runs OpenVAS against the public address of the server (about 30 to 60 minutes).</p>
+
+  <label>Confirmation</label>
+  <label class="inline"><input type="checkbox" name="confirm_authorised" value="1" required><span>I am authorised to test this target, and its owners know a scan is running.</span></label>
+  {% if target.environment == "prod" %}
+  <label class="inline"><input type="checkbox" name="confirm_prod" value="1"><span>This is production. I understand Standard and Deep scans submit forms and send attack payloads that can create or change data. (Only needed for Standard or Deep.)</span></label>
+  {% endif %}
+  <p style="margin-top:14px"><button type="submit" {{ "disabled" if blockers }}>Start scan</button> <a class="btn secondary" href="/">Cancel</a></p>
+  <p class="hint">Scans run one at a time. If another scan is running, this one waits in the queue.</p>
+</form>
+{% endif %}
+{% endblock %}

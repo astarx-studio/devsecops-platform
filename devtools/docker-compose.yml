@@ -1,6 +1,6 @@
 # =============================================================================
-# devtools stack — shared Postgres + MySQL + RabbitMQ + MinIO + logging
-# (Loki/Grafana/Alloy) for app teams on this host.
+# devtools stack — shared Postgres + pgvector + MySQL + RabbitMQ + MinIO +
+# logging (Loki/Grafana/Alloy) for app teams on this host.
 #
 # Independent Compose project (deliberately separate from the main platform
 # stack). Run from the devsecops-platform repo root:
@@ -16,6 +16,7 @@
 #   Postgres  → logical DBs created by project-specific scripts in
 #               postgres-init/ (gitignored; copy from *.sample.sh)
 #   RabbitMQ  → vhosts dev / stg  (created by rabbitmq-init/ensure-vhosts.sh)
+#   pgvector  → Postgres 17 + vector extension (database `vectors`)
 #   MySQL     → users admin (ALL) + esa_dev (esa_dev.*); DBs via mysql-init
 #   MinIO     → users admin (root) + cfa (readwrite); buckets cfa-dev / cfa-stg
 #   Logging   → Loki labels (namespace / app / container); Grafana UI via
@@ -28,6 +29,12 @@ networks:
   devops-network:
     external: true
     name: ${DOCKER_NETWORK:-devops-network}
+  # AI MR reviewer: model runner + worker, plus n8n so the estimator can call
+  # the runner. internal = no route out, so devtools-llm (no auth of its own)
+  # is unreachable from the rest of devops-network and has no internet.
+  ai-review:
+    internal: true
+    name: ai-review
 
 services:
   # DNS: devtools-postgres (service/container name). Fixed static IP so the
@@ -94,6 +101,55 @@ services:
       devops-network:
         ipv4_address: ${DEVTOOLS_MYSQL_STATIC_IP:-172.19.0.104}
 
+  # Postgres 17 with pgvector. Separate from devtools-postgres so embedding
+  # workloads do not share the CFA/Qestor connection pool. Extension is
+  # applied by devtools-pgvector-init (safe to re-run).
+  devtools-pgvector:
+    image: pgvector/pgvector:pg17
+    container_name: devtools-pgvector
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DEVTOOLS_PGVECTOR_DB:-vectors}
+      POSTGRES_USER: ${DEVTOOLS_PGVECTOR_USER:?set DEVTOOLS_PGVECTOR_USER in devtools/.env}
+      POSTGRES_PASSWORD: ${DEVTOOLS_PGVECTOR_PASSWORD:?set DEVTOOLS_PGVECTOR_PASSWORD in devtools/.env}
+    command:
+      - postgres
+      - -c
+      - max_connections=${DEVTOOLS_PGVECTOR_MAX_CONNECTIONS:-100}
+      - -c
+      - idle_session_timeout=${DEVTOOLS_PGVECTOR_IDLE_SESSION_TIMEOUT:-10min}
+      - -c
+      - idle_in_transaction_session_timeout=${DEVTOOLS_PGVECTOR_IDLE_IN_TX_TIMEOUT:-5min}
+    volumes:
+      - ./.vols/pgvector:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DEVTOOLS_PGVECTOR_USER:-vectors} -d postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      devops-network:
+        ipv4_address: ${DEVTOOLS_PGVECTOR_STATIC_IP:-172.19.0.106}
+
+  devtools-pgvector-init:
+    image: pgvector/pgvector:pg17
+    container_name: devtools-pgvector-init
+    depends_on:
+      devtools-pgvector:
+        condition: service_healthy
+    restart: "no"
+    environment:
+      PGHOST: devtools-pgvector
+      PGUSER: ${DEVTOOLS_PGVECTOR_USER:?set DEVTOOLS_PGVECTOR_USER in devtools/.env}
+      PGPASSWORD: ${DEVTOOLS_PGVECTOR_PASSWORD:?set DEVTOOLS_PGVECTOR_PASSWORD in devtools/.env}
+      PGDATABASE: ${DEVTOOLS_PGVECTOR_DB:-vectors}
+    volumes:
+      - ./pgvector-init/ensure-extension.sh:/ensure-extension.sh:ro
+    entrypoint: ["/bin/sh", "/ensure-extension.sh"]
+    networks:
+      - devops-network
+
   devtools-mysql-init:
     image: mysql:8.4
     container_name: devtools-mysql-init
@@ -151,6 +207,9 @@ services:
       RMQ_USER: ${DEVTOOLS_RMQ_USER:?set DEVTOOLS_RMQ_USER in devtools/.env}
       RMQ_PASS: ${DEVTOOLS_RMQ_PASSWORD:?set DEVTOOLS_RMQ_PASSWORD in devtools/.env}
       RMQ_HOST: devtools-rabbitmq
+      AI_REVIEW_RMQ_PASSWORD: ${AI_REVIEW_RMQ_PASSWORD:-}
+      AI_REVIEW_RMQ_N8N_PASSWORD: ${AI_REVIEW_RMQ_N8N_PASSWORD:-}
+      QESTOR_ESTIMATOR_RMQ_PASSWORD: ${QESTOR_ESTIMATOR_RMQ_PASSWORD:-}
     volumes:
       - ./rabbitmq-init/ensure-vhosts.sh:/ensure-vhosts.sh:ro
     entrypoint: ["/bin/sh", "/ensure-vhosts.sh"]
@@ -280,6 +339,7 @@ services:
       DEVTOOLS_MINIO_CFA_USER: ${DEVTOOLS_MINIO_CFA_USER:-cfa}
       DEVTOOLS_MINIO_CFA_PASSWORD: ${DEVTOOLS_MINIO_CFA_PASSWORD:?set DEVTOOLS_MINIO_CFA_PASSWORD in devtools/.env}
       MINIO_ENDPOINT: http://devtools-minio:9000
+      AI_REVIEW_MINIO_PASSWORD: ${AI_REVIEW_MINIO_PASSWORD:-}
     volumes:
       - ./minio-init/ensure-users.sh:/ensure-users.sh:ro
     entrypoint: ["/bin/sh", "/ensure-users.sh"]
@@ -398,6 +458,8 @@ services:
     networks:
       devops-network:
         ipv4_address: ${N8N_STATIC_IP:-172.19.0.105}
+      # Estimator calls devtools-llm. The runner stays off devops-network.
+      ai-review:
 
   # Code sandbox for the n8n assistant. Internal only. The runner is privileged
   # Docker-in-Docker and must not be published. TLS names are sandbox-api and
@@ -499,5 +561,118 @@ services:
     networks:
       - devops-network
 
+  # ---------------------------------------------------------------------------
+  # AI merge request reviewer (see ai-review-worker/README.md).
+  # n8n POSTs jobs to the worker; the worker queues them in RabbitMQ (one at a
+  # time), reads code from git objects, asks the model, and publishes results
+  # that n8n turns into the MR note and approval.
+  # ---------------------------------------------------------------------------
+
+  # One-shot: download the GGUF files. The only model step with internet.
+  devtools-llm-pull:
+    image: curlimages/curl:8.11.1
+    container_name: devtools-llm-pull
+    user: "0:0"
+    restart: "no"
+    environment:
+      LLM_MODELS: ${AI_REVIEW_LLM_MODELS:-}
+    volumes:
+      - llm-models:/models
+      - ./llm/pull-models.sh:/pull-models.sh:ro
+    entrypoint: ["/bin/sh", "/pull-models.sh"]
+    networks:
+      - devops-network
+
+  # llama-swap + PrismML llama.cpp. The model loads on the first request and
+  # unloads after ttl idle seconds (llm/llama-swap.yaml), so it holds no VRAM
+  # between reviews. Internal network only: no egress, no published port.
+  devtools-llm:
+    build: ./llm
+    image: devtools-llm:local
+    container_name: devtools-llm
+    restart: unless-stopped
+    depends_on:
+      devtools-llm-pull:
+        condition: service_completed_successfully
+    gpus: all
+    cpus: 6
+    mem_limit: 16g
+    volumes:
+      - llm-models:/models:ro
+      - ./llm/llama-swap.yaml:/config/llama-swap.yaml:ro
+    networks:
+      - ai-review
+
+  devtools-ai-review-db-init:
+    image: postgres:16-alpine
+    container_name: devtools-ai-review-db-init
+    depends_on:
+      devtools-postgres:
+        condition: service_healthy
+    restart: "no"
+    environment:
+      PGHOST: devtools-postgres
+      PGUSER: ${DEVTOOLS_PG_USER:?set DEVTOOLS_PG_USER in devtools/.env}
+      PGPASSWORD: ${DEVTOOLS_PG_PASSWORD:?set DEVTOOLS_PG_PASSWORD in devtools/.env}
+      AI_REVIEW_PG_PASSWORD: ${AI_REVIEW_PG_PASSWORD:-}
+    volumes:
+      - ./ai-review-worker/db/ensure-db.sh:/ensure-db.sh:ro
+    entrypoint: ["/bin/sh", "/ensure-db.sh"]
+    networks:
+      - devops-network
+
+  # The worker treats every repo as hostile: read-only root, no capabilities,
+  # non-root, no docker.sock, and repo code never runs (files come from git
+  # objects). Its GitLab token only needs read_repository.
+  devtools-ai-review-worker:
+    build: ./ai-review-worker
+    image: devtools-ai-review-worker:local
+    container_name: devtools-ai-review-worker
+    restart: unless-stopped
+    depends_on:
+      devtools-ai-review-db-init:
+        condition: service_completed_successfully
+      devtools-rabbitmq-init:
+        condition: service_completed_successfully
+    # MinIO artifacts are best-effort (a failed write is logged, the review
+    # continues), so the worker does not wait on devtools-minio-init.
+    read_only: true
+    tmpfs:
+      - /tmp:size=256m
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    cpus: 2
+    mem_limit: 2g
+    pids_limit: 256
+    environment:
+      AI_REVIEW_PORT: "8791"
+      AI_REVIEW_CONFIG: /config/review.yaml
+      AI_REVIEW_REPOS_DIR: /repos
+      AI_REVIEW_INTAKE_TOKEN: ${AI_REVIEW_INTAKE_TOKEN:-}
+      AI_REVIEW_PG_URL: postgres://ai_review:${AI_REVIEW_PG_PASSWORD:-}@devtools-postgres:5432/ai_review
+      AI_REVIEW_AMQP_URL: amqp://ai-review:${AI_REVIEW_RMQ_PASSWORD:-}@devtools-rabbitmq:5672/ai-review
+      GITLAB_URL: ${AI_REVIEW_GITLAB_URL:-https://gitlab.devops.yadatechnology.com}
+      AI_REVIEW_GITLAB_TOKEN: ${AI_REVIEW_GITLAB_TOKEN:-}
+      AI_REVIEW_MINIO_ENDPOINT: http://devtools-minio:9000
+      AI_REVIEW_MINIO_ACCESS_KEY: ai-review
+      AI_REVIEW_MINIO_SECRET_KEY: ${AI_REVIEW_MINIO_PASSWORD:-}
+      AI_REVIEW_MINIO_BUCKET: ai-review
+      AI_REVIEW_QESTOR_LOOKUP_URL: http://devtools-n8n:5678/webhook/ai-review-qestor-items
+      AI_REVIEW_QESTOR_LOOKUP_TOKEN: ${AI_REVIEW_QESTOR_LOOKUP_TOKEN:-}
+      # Cloud provider keys, only read when review.yaml model.api_key_env names them.
+      AI_REVIEW_ANTHROPIC_API_KEY: ${AI_REVIEW_ANTHROPIC_API_KEY:-}
+      AI_REVIEW_OPENAI_API_KEY: ${AI_REVIEW_OPENAI_API_KEY:-}
+      AI_REVIEW_KIMI_API_KEY: ${AI_REVIEW_KIMI_API_KEY:-}
+    volumes:
+      - ai-review-repos:/repos
+      - ./ai-review-worker/config:/config:ro
+      - ./llm/llama-swap.yaml:/llm-config/llama-swap.yaml:ro
+    networks:
+      - devops-network
+      - ai-review
+
 volumes:
   n8n-sandbox-tls:
+  llm-models:
+  ai-review-repos:

@@ -1,0 +1,597 @@
+# =============================================================================
+# va stack — vulnerability assessment for web apps and APIs on this platform
+#
+#   launcher   https://${VA_DOMAIN}        start scans, progress, reports, manual
+#   DefectDojo https://${VA_DOJO_DOMAIN}   findings store: triage, history
+#   OpenVAS    (no UI)                     host/network scan, driven by the launcher
+#   ZAP, Nuclei, testssl.sh, Trivy         one-shot containers started per scan
+#
+# Independent Compose project, same pattern as devtools/. From the repo root:
+#
+#   make va-up        (checks storage, then: docker compose -p va -f va/docker-compose.yml up -d --build)
+#   make va-down
+#
+# Joins the existing devops-network (external) only for ingress through Traefik.
+# Everything else talks on va-internal.
+#
+# Storage: databases and OpenVAS data are named volumes (inside Docker's own
+# disk). Scan output, reports, uploads and caches are a bind mount under
+# ${VA_VOLS_DIR:-./.vols}; on this host va/.vols is a junction to C: created by
+# va/setup-storage.ps1. See __DOCS__/04_va/01_operations.md.
+# =============================================================================
+
+name: va
+
+networks:
+  devops-network:
+    external: true
+    name: ${DOCKER_NETWORK:-devops-network}
+  va-internal:
+    # Fixed name: the launcher attaches scanner containers to it by name.
+    name: va-internal
+
+volumes:
+  va-postgres-data: { name: va-postgres-data }
+  va-valkey-data: { name: va-valkey-data }
+  va-dojo-media: { name: va-dojo-media }
+  gpg_data_vol: { name: va-gvm-gpg-data }
+  scap_data_vol: { name: va-gvm-scap-data }
+  cert_data_vol: { name: va-gvm-cert-data }
+  data_objects_vol: { name: va-gvm-data-objects }
+  gvmd_data_vol: { name: va-gvm-gvmd-data }
+  psql_data_vol: { name: va-gvm-psql-data }
+  vt_data_vol: { name: va-gvm-vt-data }
+  notus_data_vol: { name: va-gvm-notus-data }
+  psql_socket_vol: { name: va-gvm-psql-socket }
+  gvmd_socket_vol: { name: va-gvm-gvmd-socket }
+  ospd_openvas_socket_vol: { name: va-gvm-ospd-socket }
+  redis_socket_vol: { name: va-gvm-redis-socket }
+  openvas_data_vol: { name: va-gvm-openvas-data }
+  openvas_log_data_vol: { name: va-gvm-openvas-log }
+
+x-dojo-env: &dojo-env
+  DD_DATABASE_URL: postgresql://defectdojo:${VA_DOJO_DB_PASSWORD:?set VA_DOJO_DB_PASSWORD in va/.env}@va-postgres:5432/defectdojo
+  DD_CELERY_BROKER_URL: redis://va-valkey:6379/0
+  DD_CACHE_URL: redis://va-valkey:6379/1
+  DD_SECRET_KEY: ${VA_DOJO_SECRET_KEY:?set VA_DOJO_SECRET_KEY in va/.env}
+  DD_CREDENTIAL_AES_256_KEY: ${VA_DOJO_AES_KEY:?set VA_DOJO_AES_KEY in va/.env}
+  DD_DATABASE_READINESS_TIMEOUT: "60"
+  DD_DEBUG: "False"
+  # va-dojo-nginx is the name the launcher uses on va-internal.
+  DD_ALLOWED_HOSTS: ${VA_DOJO_DOMAIN:?set VA_DOJO_DOMAIN in va/.env},va-dojo-nginx
+  DD_SITE_URL: https://${VA_DOJO_DOMAIN}
+  DD_CSRF_TRUSTED_ORIGINS: https://${VA_DOJO_DOMAIN}
+  DD_SECURE_PROXY_SSL_HEADER: "True"
+  DD_TIME_ZONE: ${VA_TIME_ZONE:-Asia/Jakarta}
+  # uwsgi's request-header buffer. 5x the image default (8192): the platform SSO
+  # cookie plus the forwarded access token exceed 8 KB. Keep in step with nginx below.
+  DD_UWSGI_BUFFER_SIZE: "40960"
+  # Platform single sign-on (dojo-settings/va_sso.py): the identity header from
+  # oauth2-proxy is trusted only together with this secret, which Traefik adds.
+  VA_PROXY_SECRET: ${VA_PROXY_SECRET:?set VA_PROXY_SECRET in va/.env}
+  VA_SIGNOUT_URL: ${VA_SIGNOUT_URL:-}
+
+# DefectDojo's entrypoints copy these into dojo/settings/ at start.
+x-dojo-settings: &dojo-settings ./dojo-settings:/app/docker/extra_settings:ro
+
+# Traefik middlewares for both routers, in order: drop any client-supplied identity
+# header, SSO check (oauth2-proxy sets the identity header), then add the secret
+# that tells the apps the request came through all of that. The secret is added
+# after the SSO check so oauth2-proxy never sees it.
+
+x-dojo-image: &dojo-image ${DD_IMAGE_REGISTRY:-docker.io}/defectdojo/defectdojo-django:${VA_DOJO_VERSION:-3.5.103}
+
+x-gvm-registry: &gvm-restart
+  restart: unless-stopped
+  networks:
+    - va-internal
+
+services:
+  # ===========================================================================
+  # LAUNCHER — the front door. Web app + single scan worker in one process.
+  # Mounts the Docker socket to start scanner containers and the gvmd socket
+  # to drive OpenVAS. Admins only (oidc-auth@file).
+  # ===========================================================================
+  va-launcher:
+    build: ./launcher
+    image: va-launcher:local
+    container_name: va-launcher
+    restart: unless-stopped
+    depends_on:
+      va-db-init:
+        condition: service_completed_successfully
+    environment:
+      VA_DATABASE_URL: postgresql+psycopg://va_launcher:${VA_LAUNCHER_DB_PASSWORD:?set VA_LAUNCHER_DB_PASSWORD in va/.env}@va-postgres:5432/va_launcher
+      VA_SECRET_KEY: ${VA_SECRET_KEY:?set VA_SECRET_KEY in va/.env}
+      VA_ALLOWED_DOMAINS: ${VA_ALLOWED_DOMAINS:?set VA_ALLOWED_DOMAINS in va/.env}
+      VA_PUBLIC_URL: https://${VA_DOMAIN:?set VA_DOMAIN in va/.env}
+      VA_ORGANISATION: ${VA_ORGANISATION:-}
+      VA_RAW_RETENTION_DAYS: ${VA_RAW_RETENTION_DAYS:-30}
+      VA_REQUIRE_STORAGE_MARKER: ${VA_REQUIRE_STORAGE_MARKER:-true}
+      VA_DOJO_URL: http://va-dojo-nginx:8080
+      VA_DOJO_PUBLIC_URL: https://${VA_DOJO_DOMAIN}
+      VA_DOJO_USER: admin
+      VA_DOJO_PASSWORD: ${VA_DOJO_ADMIN_PASSWORD:?set VA_DOJO_ADMIN_PASSWORD in va/.env}
+      VA_PROXY_SECRET: ${VA_PROXY_SECRET:?set VA_PROXY_SECRET in va/.env}
+      VA_GVM_USER: admin
+      VA_GVM_PASSWORD: ${VA_GVM_PASSWORD:?set VA_GVM_PASSWORD in va/.env}
+      VA_GVM_TIMEOUT_MIN: ${VA_GVM_TIMEOUT_MIN:-180}
+      VA_ZAP_IMAGE: ${VA_ZAP_IMAGE:-zaproxy/zap-stable:latest}
+      VA_NUCLEI_IMAGE: ${VA_NUCLEI_IMAGE:-projectdiscovery/nuclei:latest}
+      VA_TESTSSL_IMAGE: ${VA_TESTSSL_IMAGE:-ghcr.io/testssl/testssl.sh:3.2}
+      VA_TRIVY_IMAGE: ${VA_TRIVY_IMAGE:-aquasec/trivy:latest}
+      VA_TRIVY_USERNAME: ${VA_TRIVY_USERNAME:-}
+      VA_TRIVY_PASSWORD: ${VA_TRIVY_PASSWORD:-}
+      VA_SCANNER_MEM_LIMIT: ${VA_SCANNER_MEM_LIMIT:-4g}
+      VA_SCANNER_CPUS: ${VA_SCANNER_CPUS:-2}
+      VA_INGRESS_NETWORK: ${DOCKER_NETWORK:-devops-network}
+      VA_SCAN_NETWORK: va-internal
+      VA_TRAEFIK_CONTAINER: traefik
+      TZ: ${VA_TIME_ZONE:-Asia/Jakarta}
+    volumes:
+      - ${VA_VOLS_DIR:-./.vols}/launcher:/data
+      - /var/run/docker.sock:/var/run/docker.sock
+      - gvmd_socket_vol:/run/gvmd
+      - ../__DOCS__/04_va:/app/manual:ro
+    mem_limit: 1g
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.va-launcher.rule: "Host(`${VA_DOMAIN}`)"
+      traefik.http.routers.va-launcher.entrypoints: "websecure"
+      traefik.http.routers.va-launcher.tls.certresolver: "letsencrypt"
+      traefik.http.routers.va-launcher.middlewares: "va-launcher-strip,oidc-auth@file,va-launcher-secret"
+      traefik.http.middlewares.va-launcher-strip.headers.customrequestheaders.X-Auth-Request-Email: ""
+      traefik.http.middlewares.va-launcher-strip.headers.customrequestheaders.X-VA-Proxy-Secret: ""
+      traefik.http.middlewares.va-launcher-secret.headers.customrequestheaders.X-VA-Proxy-Secret: "${VA_PROXY_SECRET}"
+      traefik.http.services.va-launcher.loadbalancer.server.port: "8000"
+    networks:
+      - devops-network
+      - va-internal
+
+  # ===========================================================================
+  # DATA — Postgres for DefectDojo and the launcher, Valkey for DefectDojo's queue
+  # ===========================================================================
+  va-postgres:
+    image: postgres:17-alpine
+    container_name: va-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: defectdojo
+      POSTGRES_USER: defectdojo
+      POSTGRES_PASSWORD: ${VA_DOJO_DB_PASSWORD}
+    volumes:
+      - va-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U defectdojo -d defectdojo"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    mem_limit: 2g
+    networks:
+      - va-internal
+
+  # One-shot: launcher role + database (safe to re-run).
+  va-db-init:
+    image: postgres:17-alpine
+    container_name: va-db-init
+    restart: "no"
+    depends_on:
+      va-postgres:
+        condition: service_healthy
+    environment:
+      PGHOST: va-postgres
+      PGUSER: defectdojo
+      PGPASSWORD: ${VA_DOJO_DB_PASSWORD}
+      PGDATABASE: defectdojo
+      VA_LAUNCHER_DB_PASSWORD: ${VA_LAUNCHER_DB_PASSWORD}
+    volumes:
+      - ./db-init/ensure-db.sh:/ensure-db.sh:ro
+    entrypoint: ["/bin/sh", "/ensure-db.sh"]
+    networks:
+      - va-internal
+
+  va-valkey:
+    image: valkey/valkey:8-alpine
+    container_name: va-valkey
+    restart: unless-stopped
+    volumes:
+      - va-valkey-data:/data
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    mem_limit: 512m
+    networks:
+      - va-internal
+
+  # ===========================================================================
+  # DEFECTDOJO — findings store. Images come from Docker Hub, not DefectDojo's
+  # own registry, which logs who pulls. Behind oidc-auth@file (admins), then
+  # DefectDojo's own login (user admin, VA_DOJO_ADMIN_PASSWORD).
+  # ===========================================================================
+  va-dojo-initializer:
+    image: *dojo-image
+    container_name: va-dojo-initializer
+    restart: "no"
+    depends_on:
+      va-postgres:
+        condition: service_healthy
+    entrypoint: ["/wait-for-it.sh", "va-postgres:5432", "--", "/entrypoint-initializer.sh"]
+    environment:
+      <<: *dojo-env
+      DD_ADMIN_USER: admin
+      DD_ADMIN_MAIL: ${VA_DOJO_ADMIN_MAIL:-admin@defectdojo.local}
+      DD_ADMIN_PASSWORD: ${VA_DOJO_ADMIN_PASSWORD}
+      DD_ADMIN_FIRST_NAME: VA
+      DD_ADMIN_LAST_NAME: Admin
+      DD_INITIALIZE: "true"
+    volumes:
+      - *dojo-settings
+    networks:
+      - va-internal
+
+  va-dojo-uwsgi:
+    image: *dojo-image
+    container_name: va-dojo-uwsgi
+    restart: unless-stopped
+    depends_on:
+      va-dojo-initializer:
+        condition: service_completed_successfully
+      va-valkey:
+        condition: service_healthy
+    entrypoint: ["/wait-for-it.sh", "va-postgres:5432", "-t", "30", "--", "/entrypoint-uwsgi.sh"]
+    environment:
+      <<: *dojo-env
+    volumes:
+      - *dojo-settings
+      - va-dojo-media:/app/media
+    mem_limit: 3g
+    networks:
+      - va-internal
+
+  va-dojo-celeryworker:
+    image: *dojo-image
+    container_name: va-dojo-celeryworker
+    restart: unless-stopped
+    depends_on:
+      va-dojo-initializer:
+        condition: service_completed_successfully
+      va-valkey:
+        condition: service_healthy
+    entrypoint: ["/wait-for-it.sh", "va-postgres:5432", "-t", "30", "--", "/entrypoint-celery-worker.sh"]
+    environment:
+      <<: *dojo-env
+    volumes:
+      - *dojo-settings
+      - va-dojo-media:/app/media
+    mem_limit: 3g
+    networks:
+      - va-internal
+
+  va-dojo-celerybeat:
+    image: *dojo-image
+    container_name: va-dojo-celerybeat
+    restart: unless-stopped
+    depends_on:
+      va-dojo-initializer:
+        condition: service_completed_successfully
+      va-valkey:
+        condition: service_healthy
+    entrypoint: ["/wait-for-it.sh", "va-postgres:5432", "-t", "30", "--", "/entrypoint-celery-beat.sh"]
+    environment:
+      <<: *dojo-env
+    mem_limit: 512m
+    volumes:
+      - *dojo-settings
+    networks:
+      - va-internal
+
+  va-dojo-nginx:
+    image: ${DD_IMAGE_REGISTRY:-docker.io}/defectdojo/defectdojo-nginx:${VA_DOJO_VERSION:-3.5.103}
+    container_name: va-dojo-nginx
+    restart: unless-stopped
+    depends_on:
+      - va-dojo-uwsgi
+    # Header limits 5x nginx's defaults (1k / 4 x 8k): the platform SSO cookie plus
+    # the forwarded access token caused "400 Request Header Or Cookie Too Large".
+    # The image's entrypoint already edits nginx.conf at start; this adds two
+    # directives the same way, once (grep guard for container restarts).
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        grep -q large_client_header_buffers /etc/nginx/nginx.conf ||
+          sed -i '/client_max_body_size/a\  client_header_buffer_size 5k;\n  large_client_header_buffers 4 40k;' /etc/nginx/nginx.conf
+        exec /entrypoint-nginx.sh
+    environment:
+      NGINX_METRICS_ENABLED: "false"
+      DD_UWSGI_HOST: va-dojo-uwsgi
+      DD_UWSGI_PORT: "3031"
+    volumes:
+      - va-dojo-media:/usr/share/nginx/html/media
+    mem_limit: 256m
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.va-dojo.rule: "Host(`${VA_DOJO_DOMAIN}`)"
+      traefik.http.routers.va-dojo.entrypoints: "websecure"
+      traefik.http.routers.va-dojo.tls.certresolver: "letsencrypt"
+      traefik.http.routers.va-dojo.middlewares: "va-dojo-strip,oidc-auth@file,va-dojo-secret"
+      traefik.http.middlewares.va-dojo-strip.headers.customrequestheaders.X-Auth-Request-Email: ""
+      traefik.http.middlewares.va-dojo-strip.headers.customrequestheaders.X-VA-Proxy-Secret: ""
+      traefik.http.middlewares.va-dojo-secret.headers.customrequestheaders.X-VA-Proxy-Secret: "${VA_PROXY_SECRET}"
+      traefik.http.services.va-dojo.loadbalancer.server.port: "8080"
+    networks:
+      - devops-network
+      - va-internal
+
+  # ===========================================================================
+  # OPENVAS / GVM — Greenbone Community Containers, adapted from the official
+  # compose file (https://greenbone.github.io/docs/latest/_static/compose.yaml).
+  # The web UI (gsa, gsad, nginx) is left out: the launcher is the only client,
+  # over the gvmd socket. Service names are kept so Greenbone's docs still apply.
+  #
+  # The *-data services copy feed content from their image into a volume at
+  # start. Updating feeds = pulling newer images (make va-feed-update).
+  # ===========================================================================
+  vulnerability-tests:
+    image: registry.community.greenbone.net/community/vulnerability-tests
+    container_name: va-gvm-vulnerability-tests
+    environment:
+      FEED_RELEASE: "24.10"
+      KEEP_ALIVE: 1
+    volumes:
+      - vt_data_vol:/mnt
+    <<: *gvm-restart
+
+  notus-data:
+    image: registry.community.greenbone.net/community/notus-data
+    container_name: va-gvm-notus-data
+    environment:
+      KEEP_ALIVE: 1
+    volumes:
+      - notus_data_vol:/mnt
+    <<: *gvm-restart
+
+  scap-data:
+    image: registry.community.greenbone.net/community/scap-data
+    container_name: va-gvm-scap-data
+    environment:
+      KEEP_ALIVE: 1
+    volumes:
+      - scap_data_vol:/mnt
+    <<: *gvm-restart
+
+  cert-bund-data:
+    image: registry.community.greenbone.net/community/cert-bund-data
+    container_name: va-gvm-cert-bund-data
+    environment:
+      KEEP_ALIVE: 1
+    volumes:
+      - cert_data_vol:/mnt
+    <<: *gvm-restart
+
+  dfn-cert-data:
+    image: registry.community.greenbone.net/community/dfn-cert-data
+    container_name: va-gvm-dfn-cert-data
+    environment:
+      KEEP_ALIVE: 1
+    volumes:
+      - cert_data_vol:/mnt
+    depends_on:
+      cert-bund-data:
+        condition: service_healthy
+    <<: *gvm-restart
+
+  data-objects:
+    image: registry.community.greenbone.net/community/data-objects
+    container_name: va-gvm-data-objects
+    environment:
+      FEED_RELEASE: "24.10"
+      KEEP_ALIVE: 1
+    volumes:
+      - data_objects_vol:/mnt
+    <<: *gvm-restart
+
+  report-formats:
+    image: registry.community.greenbone.net/community/report-formats
+    container_name: va-gvm-report-formats
+    environment:
+      FEED_RELEASE: "24.10"
+      KEEP_ALIVE: 1
+    volumes:
+      - data_objects_vol:/mnt
+    depends_on:
+      data-objects:
+        condition: service_healthy
+    <<: *gvm-restart
+
+  gpg-data:
+    image: registry.community.greenbone.net/community/gpg-data
+    container_name: va-gvm-gpg-data
+    restart: "no"
+    volumes:
+      - gpg_data_vol:/mnt
+    networks:
+      - va-internal
+
+  redis-server:
+    image: registry.community.greenbone.net/community/redis-server
+    container_name: va-gvm-redis
+    volumes:
+      - redis_socket_vol:/run/redis/
+    mem_limit: 3g
+    <<: *gvm-restart
+
+  pg-gvm-migrator:
+    image: registry.community.greenbone.net/community/pg-gvm-migrator:stable
+    container_name: va-gvm-pg-migrator
+    restart: "no"
+    volumes:
+      - psql_data_vol:/var/lib/postgresql
+      - psql_socket_vol:/var/run/postgresql
+    networks:
+      - va-internal
+
+  pg-gvm:
+    image: registry.community.greenbone.net/community/pg-gvm:stable
+    container_name: va-gvm-pg
+    volumes:
+      - psql_data_vol:/var/lib/postgresql
+      - psql_socket_vol:/var/run/postgresql
+    depends_on:
+      pg-gvm-migrator:
+        condition: service_completed_successfully
+    mem_limit: 4g
+    <<: *gvm-restart
+
+  gvmd:
+    image: registry.community.greenbone.net/community/gvmd:stable
+    container_name: va-gvm-gvmd
+    volumes:
+      - gvmd_data_vol:/var/lib/gvm
+      - scap_data_vol:/var/lib/gvm/scap-data/
+      - cert_data_vol:/var/lib/gvm/cert-data
+      - data_objects_vol:/var/lib/gvm/data-objects/gvmd
+      - vt_data_vol:/var/lib/openvas/plugins
+      - psql_data_vol:/var/lib/postgresql
+      - gvmd_socket_vol:/run/gvmd
+      - ospd_openvas_socket_vol:/run/ospd
+      - psql_socket_vol:/var/run/postgresql
+    depends_on:
+      pg-gvm:
+        condition: service_started
+      scap-data:
+        condition: service_healthy
+      cert-bund-data:
+        condition: service_healthy
+      dfn-cert-data:
+        condition: service_healthy
+      data-objects:
+        condition: service_healthy
+      report-formats:
+        condition: service_healthy
+    mem_limit: 6g
+    <<: *gvm-restart
+
+  # One-shot: gvmd creates admin/admin on first start; replace that password.
+  # Retries until gvmd has finished creating the user. Safe to re-run.
+  gvmd-set-password:
+    image: registry.community.greenbone.net/community/gvmd:stable
+    container_name: va-gvm-set-password
+    restart: "no"
+    user: gvmd
+    depends_on:
+      gvmd:
+        condition: service_started
+    environment:
+      VA_GVM_PASSWORD: ${VA_GVM_PASSWORD}
+    volumes:
+      - gvmd_data_vol:/var/lib/gvm
+      - psql_data_vol:/var/lib/postgresql
+      - psql_socket_vol:/var/run/postgresql
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        i=0
+        until gvmd --user=admin --new-password="$$VA_GVM_PASSWORD" 2>/dev/null; do
+          i=$$((i+1))
+          if [ "$$i" -ge 80 ]; then echo "gvmd admin user still missing after 20 minutes"; exit 1; fi
+          sleep 15
+        done
+        echo "gvmd admin password set"
+    networks:
+      - va-internal
+
+  configure-openvas:
+    image: registry.community.greenbone.net/community/openvas-scanner:stable
+    container_name: va-gvm-configure-openvas
+    restart: "no"
+    volumes:
+      - openvas_data_vol:/mnt
+      - openvas_log_data_vol:/var/log/openvas
+    command:
+      - /bin/sh
+      - -c
+      - |
+        printf "table_driven_lsc = yes\nopenvasd_server = http://openvasd:80\n" > /mnt/openvas.conf
+        sed "s/127/128/" /etc/openvas/openvas_log.conf | sed 's/gvm/openvas/' > /mnt/openvas_log.conf
+        chmod 644 /mnt/openvas.conf
+        chmod 644 /mnt/openvas_log.conf
+        touch /var/log/openvas/openvas.log
+        chmod 666 /var/log/openvas/openvas.log
+    networks:
+      - va-internal
+
+  openvasd:
+    image: registry.community.greenbone.net/community/openvas-scanner:stable
+    container_name: va-gvm-openvasd
+    restart: unless-stopped
+    environment:
+      OPENVASD_MODE: service_notus
+      GNUPGHOME: /etc/openvas/gnupg
+      LISTENING: 0.0.0.0:80
+    volumes:
+      - openvas_data_vol:/etc/openvas
+      - openvas_log_data_vol:/var/log/openvas
+      - gpg_data_vol:/etc/openvas/gnupg
+      - notus_data_vol:/var/lib/notus
+    depends_on:
+      vulnerability-tests:
+        condition: service_healthy
+      notus-data:
+        condition: service_healthy
+      configure-openvas:
+        condition: service_completed_successfully
+      gpg-data:
+        condition: service_completed_successfully
+    mem_limit: 2g
+    networks:
+      va-internal:
+        aliases:
+          - openvasd
+
+  ospd-openvas:
+    image: registry.community.greenbone.net/community/ospd-openvas:stable
+    container_name: va-gvm-ospd-openvas
+    restart: unless-stopped
+    hostname: ospd-openvas.local
+    cap_add:
+      - NET_ADMIN # for capturing packages in promiscuous mode
+      - NET_RAW # for raw sockets e.g. used for the boreas alive detection
+    security_opt:
+      - seccomp=unconfined
+      - apparmor=unconfined
+    command:
+      [
+        "ospd-openvas",
+        "-f",
+        "--config",
+        "/etc/gvm/ospd-openvas.conf",
+        "--notus-feed-dir",
+        "/var/lib/notus/advisories",
+        "-m",
+        "666",
+      ]
+    volumes:
+      - gpg_data_vol:/etc/openvas/gnupg
+      - vt_data_vol:/var/lib/openvas/plugins
+      - notus_data_vol:/var/lib/notus
+      - ospd_openvas_socket_vol:/run/ospd
+      - redis_socket_vol:/run/redis/
+      - openvas_data_vol:/etc/openvas/
+      - openvas_log_data_vol:/var/log/openvas
+    depends_on:
+      redis-server:
+        condition: service_started
+      gpg-data:
+        condition: service_completed_successfully
+      configure-openvas:
+        condition: service_completed_successfully
+      vulnerability-tests:
+        condition: service_healthy
+      notus-data:
+        condition: service_healthy
+    mem_limit: 6g
+    networks:
+      - va-internal

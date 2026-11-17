@@ -15,6 +15,7 @@ Operator kit for the **vpnedge** public ingress VM. Full maintainer docs:
 | Image family               | `vpn-edge`                                                                                |
 | Instance template          | **`vpn-edge-devtools-v4`** (preferred; Spot + `canIpForward`; MIG `yada-tunnel-managed` uses this) |
 | Devtools Postgres firewall | `allow-vpnedge-devtools-pg` (`tcp:25432` → tag `wireguard-tunnel`)                        |
+| Devtools pgvector firewall | `allow-vpnedge-devtools-pgvector` (`tcp:25433`) — **not created yet**; see maintainer doc |
 | Devtools RabbitMQ firewall | `allow-vpnedge-devtools-amqp` (`tcp:25672,25682` → tag `wireguard-tunnel`)                |
 | Devtools MinIO firewall     | `allow-vpnedge-devtools-minio` (`tcp:29000` → tag `wireguard-tunnel`)                     |
 | Devtools MySQL firewall     | `allow-vpnedge-devtools-mysql` (`tcp:23306` → tag `wireguard-tunnel`)                     |
@@ -52,7 +53,7 @@ gcloud compute instances create yada-tunnel-managed-NEWID \
 Then:
 
 1. Attach the MIG / LB backend if this replaces the managed instance group member.
-2. Verify `sudo wg show` (recent handshake) and `sudo nft list table ip vpnedge` (includes `25432`, `23306`, `25672`, `25682`, `29000`).
+2. Verify `sudo wg show` (recent handshake) and `sudo nft list table ip vpnedge` (includes `25432`, `25433`, `23306`, `25672`, `25682`, `29000`).
 3. If WireGuard keys are stale, restore `/etc/wireguard/wg0.conf` from home
    `.vols/wireguard/peer_edge/peer_edge.conf` and `systemctl restart wg-quick@wg0 vpn-edge-nat`.
 
@@ -68,4 +69,4 @@ See the checklist in [`__DOCS__/99_maintainers/05_networking.md`](../../__DOCS__
 5. Rebuild image + template (new template name or delete old)
 6. Update developer docs
 
-**Exposed beyond HTTP(S) and GitLab SSH today:** shared Postgres `25432`, shared MySQL `23306`, shared RabbitMQ AMQP `25672` (vhosts `dev`/`stg`), Management UI `25682`, MinIO S3 `29000`.
+**Exposed beyond HTTP(S) and GitLab SSH today:** shared Postgres `25432`, shared MySQL `23306`, shared RabbitMQ AMQP `25672` (vhosts `dev`/`stg`), Management UI `25682`, MinIO S3 `29000`. pgvector `25433` is published on the home host and listed in `FORWARD_TCP`; the GCP firewall rule is still required before that port is reachable on the public LB.

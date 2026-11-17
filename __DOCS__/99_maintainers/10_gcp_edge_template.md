@@ -2,7 +2,7 @@
 
 ← [Back to Maintainer Guide](index.md)
 
-How the **VPN edge** VM is snapshotted into a GCP custom image and instance template so reinstantiation keeps WireGuard, nftables NAT, and shared-tool TCP forwards (**devtools Postgres `25432`**, **devtools MySQL `23306`**, **devtools RabbitMQ AMQP `25672`**, **Management UI `25682`**, **MinIO S3 `29000`**).
+How the **VPN edge** VM is snapshotted into a GCP custom image and instance template so reinstantiation keeps WireGuard, nftables NAT, and shared-tool TCP forwards (**devtools Postgres `25432`**, **devtools pgvector `25433`**, **devtools MySQL `23306`**, **devtools RabbitMQ AMQP `25672`**, **Management UI `25682`**, **MinIO S3 `29000`**).
 
 Related: [Networking — VPN edge](05_networking.md#vpn-edge-ingress-wireguard), [`edge/gcp/`](../../edge/gcp/), [Shared Postgres](../03_devs/10_shared_devtools_postgres.md), [Shared RabbitMQ](../03_devs/11_shared_devtools_rabbitmq.md).
 
@@ -23,6 +23,7 @@ Related: [Networking — VPN edge](05_networking.md#vpn-edge-ingress-wireguard),
 | Image family | `vpn-edge` |
 | Instance template | **`vpn-edge-devtools-v4`** (preferred; Spot + `canIpForward`; `v3`/`v2`/`v1` are older STANDARD global templates) |
 | Firewall (devtools PG) | `allow-vpnedge-devtools-pg` — `tcp:25432` → tag `wireguard-tunnel` |
+| Firewall (pgvector) | `allow-vpnedge-devtools-pgvector` — `tcp:25433` → tag `wireguard-tunnel`. **Not created yet.** Home publish and `FORWARD_TCP` include `25433`; the public path stays closed until this rule exists and `apply-nat.sh` is re-run on the edge VM. |
 | Firewall (RabbitMQ) | `allow-vpnedge-devtools-amqp` — `tcp:25672,25682` → tag `wireguard-tunnel` |
 | Firewall (MinIO) | `allow-vpnedge-devtools-minio` — `tcp:29000` → tag `wireguard-tunnel` |
 | Firewall (MySQL) | `allow-vpnedge-devtools-mysql` — `tcp:23306` → tag `wireguard-tunnel` |
@@ -87,7 +88,7 @@ Then:
 3. Verify:
    ```bash
    sudo wg show          # recent handshake, growing transfer
-   sudo nft list table ip vpnedge | grep -E '25432|23306|25672|25682|29000'
+   sudo nft list table ip vpnedge | grep -E '25432|25433|23306|25672|25682|29000'
    systemctl is-active wg-quick@wg0 vpn-edge-nat
    ```
 4. Update DNS only if the **LB IP** changed (it should not if `yada-tunnel-pip` stays attached to the forwarding rule).
@@ -106,6 +107,6 @@ Optional future improvement: keep `wg0.conf` + `forward-ports.env` on a **persis
 
 ## Security notes
 
-- Ports **25432**, **23306**, **25672**, **25682**, and **29000** are open to `0.0.0.0/0` via the devtools firewall rules. Auth is service user/password only. Prefer rotating DevTools passwords and optionally narrowing firewall `sourceRanges`.
+- Ports **25432**, **23306**, **25672**, **25682**, and **29000** are open to `0.0.0.0/0` via the devtools firewall rules. **25433** (pgvector) is in the home Traefik publish list and in `FORWARD_TCP`, and **MUST** get its own firewall rule before the public LB path works. Auth is service user/password only. Prefer rotating DevTools passwords and optionally narrowing firewall `sourceRanges`.
 - The custom image embeds the WireGuard private key — limit who can `compute.images.get` / create instances from the template.
 - Do not commit live `forward-ports.env` or `wg0.conf` (already gitignored under `edge/vpn-edge/`).

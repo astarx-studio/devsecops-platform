@@ -1,0 +1,184 @@
+{
+  "$id": "review",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "match",
+    "regression",
+    "blockers",
+    "potentialBugs",
+    "recommendations"
+  ],
+  "properties": {
+    "match": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "items",
+        "explanation"
+      ],
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "public_id",
+              "status",
+              "explanation"
+            ],
+            "properties": {
+              "public_id": {
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  "done",
+                  "partial",
+                  "missing"
+                ]
+              },
+              "explanation": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "explanation": {
+          "type": "string"
+        }
+      }
+    },
+    "regression": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "risk",
+        "explanation",
+        "affected"
+      ],
+      "properties": {
+        "risk": {
+          "enum": [
+            "none",
+            "low",
+            "medium",
+            "high"
+          ]
+        },
+        "explanation": {
+          "type": "string"
+        },
+        "affected": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "repo",
+              "file",
+              "line",
+              "detail"
+            ],
+            "properties": {
+              "file": {
+                "type": "string"
+              },
+              "line": {
+                "type": "integer"
+              },
+              "detail": {
+                "type": "string"
+              },
+              "repo": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "blockers": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/finding"
+      }
+    },
+    "potentialBugs": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/finding"
+      }
+    },
+    "recommendations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "repo",
+          "text",
+          "file",
+          "line",
+          "diff"
+        ],
+        "properties": {
+          "text": {
+            "type": "string"
+          },
+          "file": {
+            "type": "string"
+          },
+          "line": {
+            "type": "integer"
+          },
+          "diff": {
+            "type": "string"
+          },
+          "repo": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repo",
+        "title",
+        "file",
+        "line",
+        "detail",
+        "suggestion",
+        "diff"
+      ],
+      "properties": {
+        "title": {
+          "type": "string"
+        },
+        "file": {
+          "type": "string"
+        },
+        "line": {
+          "type": "integer"
+        },
+        "detail": {
+          "type": "string"
+        },
+        "suggestion": {
+          "type": "string"
+        },
+        "diff": {
+          "type": "string"
+        },
+        "repo": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}Scans{% endblock %}
+{% block body %}
+<h1>Scans</h1>
+{% if not feeds.ready %}<div class="msg warn">Scans are blocked: {{ feeds.detail }}. The first feed download takes 30 to 90 minutes.</div>{% endif %}
+{% if not dojo_ready %}<div class="msg warn">Scans are blocked: DefectDojo is not reachable yet.</div>{% endif %}
+<div class="card">
+  <div class="row"><a class="btn" href="/scans/new">New scan</a><a class="btn secondary" href="/targets/new">Add target</a></div>
+</div>
+<div class="card scroll">
+  {% if scans %}
+  <table>
+    <tr><th>Scan</th><th>Target</th><th>Profile</th><th>Status</th><th>Risk</th><th>Started</th><th>Run by</th><th>Report</th></tr>
+    {% for sc in scans %}
+    <tr>
+      <td><a href="/scans/{{ sc.id }}">{{ sc.code }}</a></td>
+      <td>{{ sc.target.name }}</td>
+      <td>{{ PROFILES[sc.profile][0] }}</td>
+      <td><span class="pill {{ sc.status }}">{{ sc.status }}</span>{% if sc.status == "done" and sc.error %} <span class="pill failed">incomplete</span>{% endif %}</td>
+      <td>{{ (sc.details or {}).get("rating", "-") }}</td>
+      <td>{{ fmt(sc.started_at or sc.created_at) }}</td>
+      <td>{{ sc.requested_by or "-" }}</td>
+      <td>{% if (sc.details or {}).get("report", {}).get("pdf") %}<a href="/scans/{{ sc.id }}/report.pdf">PDF</a> · {% endif %}{% if (sc.details or {}).get("report", {}).get("html") %}<a href="/scans/{{ sc.id }}/report.html" target="_blank">HTML</a>{% else %}-{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}<p>No scans yet. {% if targets %}<a href="/scans/new">Start the first one.</a>{% else %}<a href="/targets/new">Add a target first.</a>{% endif %}</p>{% endif %}
+</div>
+{% endblock %}

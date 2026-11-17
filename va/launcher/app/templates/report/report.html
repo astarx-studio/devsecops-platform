@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Vulnerability Assessment Report {{ scan.code }} - {{ scan.target_name }}</title>
+<style>
+  @page { size: A4; margin: 18mm 15mm 18mm 15mm;
+          @bottom-left { content: "{{ scan.code }} · {{ scan.target_name }} · Confidential"; font-size: 8pt; color: #666; }
+          @bottom-right { content: "Page " counter(page) " of " counter(pages); font-size: 8pt; color: #666; } }
+  @page :first { @bottom-left { content: ""; } @bottom-right { content: ""; } }
+  * { box-sizing: border-box; }
+  body { font-family: "DejaVu Sans", Arial, Helvetica, sans-serif; font-size: 10pt; line-height: 1.45; color: #1c2430; background: #fff; margin: 0 auto; max-width: 190mm; padding: 0 4mm; }
+  h1 { font-size: 22pt; margin: 0 0 4mm; }
+  h2 { font-size: 14pt; margin: 9mm 0 3mm; padding-bottom: 1.5mm; border-bottom: 2px solid #1c2430; page-break-after: avoid; }
+  h3 { font-size: 11pt; margin: 5mm 0 2mm; page-break-after: avoid; }
+  p { margin: 0 0 2.5mm; }
+  table { border-collapse: collapse; width: 100%; margin: 2mm 0 4mm; font-size: 9pt; }
+  th, td { border: 1px solid #c9d0d9; padding: 1.5mm 2mm; text-align: left; vertical-align: top; word-break: break-word; }
+  th { background: #eef1f5; font-weight: 600; }
+  td.num, th.num { text-align: right; white-space: nowrap; }
+  .cover { page-break-after: always; padding-top: 45mm; }
+  .cover .kicker { font-size: 10pt; letter-spacing: .12em; text-transform: uppercase; color: #5a6675; }
+  .cover table { width: 75%; margin-top: 14mm; }
+  .cover th { width: 38%; }
+  html { background: #fff; }
+  .sev { display: inline-block; min-width: 17mm; white-space: nowrap; padding: .6mm 2mm; border-radius: 2px; font-weight: 600; font-size: 8.5pt; text-align: center; color: #fff; }
+  .sev-Critical { background: #7a1028; } .sev-High { background: #c0392b; } .sev-Medium { background: #b9770e; }
+  .sev-Low { background: #2c6e9b; } .sev-Info { background: #6b7785; } .sev-None { background: #2e7d4f; }
+  .tiles { display: flex; gap: 2mm; margin: 3mm 0 4mm; }
+  .tile { flex: 1; border: 1px solid #c9d0d9; padding: 2.5mm; text-align: center; }
+  .tile .n { font-size: 17pt; font-weight: 700; display: block; }
+  .tile .l { font-size: 8.5pt; color: #5a6675; }
+  .notice { border: 1px solid #b9770e; background: #fdf6e7; padding: 2.5mm 3mm; margin: 3mm 0; }
+  .notice.bad { border-color: #c0392b; background: #fdeeec; }
+  .finding { border: 1px solid #c9d0d9; margin: 0 0 5mm; page-break-inside: avoid; }
+  .finding .head { background: #eef1f5; padding: 2mm 3mm; border-bottom: 1px solid #c9d0d9; }
+  .finding .head .t { font-weight: 700; font-size: 10.5pt; }
+  .finding .body { padding: 2.5mm 3mm; }
+  .finding dl { margin: 0; display: grid; grid-template-columns: 30mm 1fr; row-gap: 1.2mm; column-gap: 3mm; }
+  .finding dt { font-weight: 600; color: #5a6675; }
+  .finding dd { margin: 0; word-break: break-word; white-space: pre-wrap; }
+  pre, code { font-family: "DejaVu Sans Mono", Consolas, monospace; font-size: 8.5pt; }
+  pre { background: #f5f6f8; border: 1px solid #dfe3e8; padding: 2mm; white-space: pre-wrap; word-break: break-all; margin: 0; }
+  .muted { color: #5a6675; } .small { font-size: 8.5pt; }
+  ul { margin: 0 0 2.5mm 5mm; padding: 0; }
+  @media screen { body { padding: 8mm 4mm 20mm; } .cover { padding-top: 16mm; } }
+</style>
+</head>
+<body>
+
+{# ------------------------------------------------------------------ 1. Cover #}
+<section class="cover" id="cover">
+  <div class="kicker">{{ scan.organisation or "Vulnerability assessment" }}</div>
+  <h1>Vulnerability Assessment Report</h1>
+  <p style="font-size:13pt">{{ scan.target_name }}</p>
+  <p><span class="sev sev-{{ rating if rating in severities else ('Info' if rating == 'Informational' else 'None') }}">Overall risk: {{ rating }}</span>
+     {% if not complete %}<span class="sev sev-Medium">Incomplete scan</span>{% endif %}</p>
+  <table>
+    <tr><th>Scan ID</th><td>{{ scan.code }}</td></tr>
+    <tr><th>Target</th><td>{{ scan.target_url }}</td></tr>
+    <tr><th>Environment</th><td>{{ scan.environment_label }}</td></tr>
+    <tr><th>Scan profile</th><td>{{ scan.profile_label }}</td></tr>
+    <tr><th>Scan date</th><td>{{ scan.started }}</td></tr>
+    <tr><th>Run by</th><td>{{ scan.requested_by or "not recorded" }}</td></tr>
+    <tr><th>Report generated</th><td>{{ generated }}</td></tr>
+  </table>
+  <p class="muted small" style="margin-top:20mm">Confidential. This report lists security weaknesses of the system named above and must only be shared with people who need it to fix them.</p>
+</section>
+
+{# ------------------------------------------------------------------ 2. Executive summary #}
+<h2 id="summary">1. Executive summary</h2>
+<p>The assessment of <strong>{{ scan.target_name }}</strong> ({{ scan.target_url }}) found
+<strong>{{ total }}</strong> distinct open issue{{ "" if total == 1 else "s" }}. The overall risk rating is
+<strong>{{ rating }}</strong>, which is the severity of the most serious open issue.</p>
+<div class="tiles">
+  {% for s in severities %}<div class="tile"><span class="n">{{ counts[s] }}</span><span class="sev sev-{{ s }}">{{ s }}</span></div>{% endfor %}
+</div>
+{% if not complete %}
+<div class="notice bad"><strong>This scan is incomplete.</strong> {{ failed_steps|length }} of {{ scan.steps|length }} tools did not finish
+({% for s in failed_steps %}{{ s.name }}{{ ", " if not loop.last }}{% endfor %}). Their checks are missing from this report, so the absence of findings in those areas does not mean the target is free of them. See section 3.</div>
+{% endif %}
+{% if scan.login_check.state == "failed" %}
+<div class="notice bad"><strong>The login did not work.</strong> {{ scan.login_check.detail }} Pages and API endpoints behind the login were not tested.</div>
+{% elif scan.login_check.state == "unconfirmed" %}
+<div class="notice"><strong>The login could not be confirmed.</strong> {{ scan.login_check.detail }} Treat coverage of pages behind the login as uncertain.</div>
+{% endif %}
+<h3>Most important issues</h3>
+{% if top5 %}
+<table>
+  <tr><th style="width:17mm">Ref</th><th style="width:26mm">Severity</th><th>Issue</th><th style="width:24mm">Fix within</th></tr>
+  {% for g in top5 %}<tr><td>{{ g.ref }}</td><td><span class="sev sev-{{ g.severity }}">{{ g.severity }}</span></td><td>{{ g.title }}</td><td>{{ g.fix_within }}</td></tr>{% endfor %}
+</table>
+{% else %}<p>No open issues were found by the checks that ran.</p>{% endif %}
+
+{# ------------------------------------------------------------------ 3. Scope and method #}
+<h2 id="scope">2. Scope and method</h2>
+<table>
+  <tr><th style="width:42mm">In scope</th><td>{{ scan.target_url }} and every page and endpoint on the same host. Other hosts were not tested, including hosts the target redirects to.</td></tr>
+  <tr><th>Environment</th><td>{{ scan.environment_label }}</td></tr>
+  <tr><th>Scan profile</th><td>{{ scan.profile_label }}: {{ scan.profile_description }}</td></tr>
+  <tr><th>Login used</th><td>{{ scan.auth_label }}</td></tr>
+  <tr><th>API definition</th><td>{% if scan.apidef %}{{ scan.apidef.kind_label }} "{{ scan.apidef.title }}" (version {{ scan.apidef.version }}): {{ scan.apidef.scanned }} of {{ scan.apidef.total }} endpoints scanned{% if scan.apidef.excluded %}, {{ scan.apidef.excluded }} excluded{% endif %}{% else %}None; the application was explored by crawling{% endif %}</td></tr>
+  <tr><th>Network route</th><td>{{ scan.route_label }}</td></tr>
+  <tr><th>Started / finished</th><td>{{ scan.started }} / {{ scan.finished }} ({{ scan.duration }})</td></tr>
+</table>
+<h3>Tools</h3>
+<table>
+  <tr><th style="width:26mm">Tool</th><th>What it checks</th><th style="width:60mm">Version</th></tr>
+  {% for t in scan.steps %}<tr><td>{{ t.name }}</td><td>{{ t.purpose }}</td><td class="small">{{ t.version }}</td></tr>{% endfor %}
+</table>
+{% if scan.feeds %}<p class="small muted">OpenVAS feed versions: {% for f in scan.feeds %}{{ f.type }} {{ f.version }}{{ ", " if not loop.last }}{% endfor %}.</p>{% endif %}
+<p class="small muted">Automated scanning finds known weakness patterns. It does not find flaws in business rules, and it cannot prove a system is secure. Severity follows the scale of the findings database (DefectDojo), so results from different tools are comparable.</p>
+
+{# ------------------------------------------------------------------ 4. Coverage #}
+<h2 id="coverage">3. Coverage</h2>
+<table>
+  <tr><th style="width:26mm">Tool</th><th style="width:24mm">Result</th><th>Detail</th></tr>
+  {% for t in scan.steps %}<tr><td>{{ t.name }}</td><td>{{ t.status_label }}</td><td>{{ t.message }}</td></tr>{% endfor %}
+</table>
+<table>
+  <tr><th style="width:42mm">Login check</th><td>{{ scan.login_check.label }}{% if scan.login_check.detail %}: {{ scan.login_check.detail }}{% endif %}</td></tr>
+  <tr><th>Pages and URLs reached</th><td>{{ scan.coverage.urls }} distinct URLs requested before the attack phase{% if scan.coverage.urls == 0 %} (no request history was recorded){% endif %}</td></tr>
+</table>
+<h3>API endpoints</h3>
+{% if scan.coverage.api %}
+<p>{% for label, n in scan.coverage.api_counts.items() %}{{ n }} {{ label }}{{ ", " if not loop.last }}{% endfor %}.
+Only endpoints marked "reached" were fully tested.</p>
+<table>
+  <tr><th style="width:22mm">Method</th><th>Endpoint</th><th style="width:18mm" class="num">Response</th><th style="width:34mm">Result</th></tr>
+  {% for r in scan.coverage.api %}<tr><td>{{ r.method }}</td><td>{{ r.path }}{% if r.name %} <span class="muted small">({{ r.name }})</span>{% endif %}</td><td class="num">{{ r.status if r.status is not none else "-" }}</td><td>{{ r.result }}</td></tr>{% endfor %}
+</table>
+{% else %}<p>No API definition was supplied for this scan, so there is no endpoint list to compare against.</p>{% endif %}
+
+{# ------------------------------------------------------------------ 5. Findings summary #}
+<h2 id="findings-summary">4. Findings summary</h2>
+{% if issues %}
+<table>
+  <tr><th style="width:17mm">Ref</th><th style="width:26mm">Severity</th><th>Issue</th><th style="width:14mm" class="num">CVSS</th><th style="width:16mm" class="num">Places</th><th style="width:30mm">Found by</th></tr>
+  {% for g in issues %}<tr><td>{{ g.ref }}</td><td><span class="sev sev-{{ g.severity }}">{{ g.severity }}</span></td><td>{{ g.title }}</td><td class="num">{{ "%.1f"|format(g.cvss) if g.cvss is not none else "-" }}</td><td class="num">{{ g.urls|length or 1 }}</td><td>{{ g.tools|join(", ") }}</td></tr>{% endfor %}
+</table>
+{% else %}<p>No open issues were found by the checks that ran.</p>{% endif %}
+
+{# ------------------------------------------------------------------ 6. OWASP mapping #}
+<h2 id="owasp">5. OWASP mapping</h2>
+<h3>OWASP Top 10 (2021)</h3>
+<table>
+  <tr><th style="width:17mm">ID</th><th>Category</th><th style="width:16mm" class="num">Issues</th><th style="width:60mm">References</th></tr>
+  {% for c in top10 %}<tr><td>{{ c.key }}</td><td>{{ c.name }}</td><td class="num">{{ c.issues|length }}</td><td class="small">{{ c.issues|map(attribute="ref")|join(", ") or "-" }}</td></tr>{% endfor %}
+</table>
+<h3>OWASP API Security Top 10 (2023)</h3>
+<table>
+  <tr><th style="width:17mm">ID</th><th>Category</th><th style="width:16mm" class="num">Issues</th><th style="width:60mm">References</th></tr>
+  {% for c in api10 %}<tr><td>{{ c.key }}</td><td>{{ c.name }}</td><td class="num">{{ c.issues|length }}</td><td class="small">{{ c.issues|map(attribute="ref")|join(", ") or "-" }}</td></tr>{% endfor %}
+</table>
+<p class="small muted">Issues are assigned by their weakness type (CWE). {{ unmapped|length }} issue{{ "" if unmapped|length == 1 else "s" }} could not be assigned to a category{% if unmapped %} ({{ unmapped|map(attribute="ref")|join(", ") }}){% endif %}. The API mapping is a guide: OWASP does not publish an official weakness list for it. A category with zero issues was not necessarily tested in depth; access-control and business-flow categories need manual testing.</p>
+
+{# ------------------------------------------------------------------ 7. Finding details #}
+<h2 id="details">6. Finding details</h2>
+{% set real = issues|rejectattr("severity", "equalto", "Info")|list %}
+{% set info = issues|selectattr("severity", "equalto", "Info")|list %}
+{% for g in real %}
+<div class="finding" id="{{ g.ref }}">
+  <div class="head"><span class="sev sev-{{ g.severity }}">{{ g.severity }}</span> <span class="t">{{ g.ref }} · {{ g.title }}</span></div>
+  <div class="body"><dl>
+    <dt>Rating</dt><dd>CVSS {{ "%.1f"|format(g.cvss) if g.cvss is not none else "not scored" }}{% if g.cwe %} · CWE-{{ g.cwe }}{% endif %}{% if g.cves %} · {{ g.cves|join(", ") }}{% endif %}{% if g.owasp %} · OWASP {{ g.owasp }}{% endif %}{% if g.owasp_api %} · {{ g.owasp_api }}{% endif %}</dd>
+    <dt>Fix within</dt><dd>{{ g.fix_within }}</dd>
+    <dt>Found by</dt><dd>{{ g.tools|join(", ") }}</dd>
+    <dt>Affected</dt><dd>{% if g.urls %}{% for u in g.urls[:15] %}{{ u }}
+{% endfor %}{% if g.urls|length > 15 %}… and {{ g.urls|length - 15 }} more (full list in the findings database){% endif %}{% else %}{{ scan.target_url }}{% endif %}</dd>
+    <dt>Description</dt><dd>{{ g.description or "No description supplied by the tool." }}</dd>
+    {% if g.impact %}<dt>Impact</dt><dd>{{ g.impact }}</dd>{% endif %}
+    {% if g.evidence %}<dt>Evidence</dt><dd><pre>{{ g.evidence }}</pre></dd>{% endif %}
+    <dt>How to fix</dt><dd>{{ g.mitigation or "No fix guidance supplied by the tool; see the references." }}</dd>
+    {% if g.references %}<dt>References</dt><dd class="small">{{ g.references }}</dd>{% endif %}
+  </dl></div>
+</div>
+{% else %}<p>{{ "No issues above Info severity were found by the checks that ran." if info else "No open issues were found by the checks that ran." }}</p>
+{% endfor %}
+{% if info %}
+<h3>Informational observations ({{ info|length }})</h3>
+<p class="small muted">Facts the tools recorded that are not weaknesses by themselves, for example detected services and certificate details. They are listed for completeness, without the full detail blocks above.</p>
+<table>
+  <tr><th style="width:17mm">Ref</th><th>Observation</th><th style="width:34mm">Found by</th><th style="width:52mm">Where</th></tr>
+  {% for g in info %}<tr><td>{{ g.ref }}</td><td>{{ g.title }}</td><td>{{ g.tools|join(", ") }}</td><td class="small">{% for u in g.urls[:3] %}{{ u }}{{ ", " if not loop.last }}{% endfor %}{% if g.urls|length > 3 %} and {{ g.urls|length - 3 }} more{% endif %}</td></tr>{% endfor %}
+</table>
+{% endif %}
+
+{# ------------------------------------------------------------------ 8. Change since previous scan #}
+<h2 id="changes">7. Change since the previous scan</h2>
+{% if changes.has_previous %}
+<p>Compared with scan {{ changes.previous_code }} of {{ changes.previous_date }}:
+<strong>{{ changes.new|length }}</strong> new, <strong>{{ changes.fixed|length }}</strong> no longer found, <strong>{{ changes.open|length }}</strong> still open.</p>
+<table>
+  <tr><th style="width:26mm">Change</th><th style="width:26mm">Severity</th><th>Issue</th></tr>
+  {% for g in changes.new %}<tr><td>New</td><td><span class="sev sev-{{ g.severity }}">{{ g.severity }}</span></td><td>{{ g.ref }} · {{ g.title }}</td></tr>{% endfor %}
+  {% for g in changes.fixed %}<tr><td>No longer found</td><td><span class="sev sev-{{ g.severity }}">{{ g.severity }}</span></td><td>{{ g.title }}</td></tr>{% endfor %}
+  {% for g in changes.open %}<tr><td>Still open</td><td><span class="sev sev-{{ g.severity }}">{{ g.severity }}</span></td><td>{{ g.ref }} · {{ g.title }}</td></tr>{% endfor %}
+  {% if not (changes.new or changes.fixed or changes.open) %}<tr><td colspan="3">No issues in either scan.</td></tr>{% endif %}
+</table>
+<p class="small muted">"No longer found" means this scan did not report the issue. If the two scans used different profiles, logins or API definitions, an issue can disappear without having been fixed.</p>
+{% else %}<p>This is the first completed scan of this target, so there is nothing to compare with.</p>{% endif %}
+
+{# ------------------------------------------------------------------ 9. Appendix #}
+<h2 id="appendix">8. Appendix</h2>
+<h3>A. Scan settings</h3>
+<table>
+  {% for k, v in scan.settings.items() %}<tr><th style="width:55mm">{{ k }}</th><td>{{ v }}</td></tr>{% endfor %}
+</table>
+<h3>B. Issues set aside</h3>
+{% if aside %}
+<table>
+  <tr><th style="width:30mm">Status</th><th style="width:26mm">Severity</th><th>Issue</th></tr>
+  {% for g in aside %}<tr><td>{{ g.state }}</td><td><span class="sev sev-{{ g.severity }}">{{ g.severity }}</span></td><td>{{ g.title }}</td></tr>{% endfor %}
+</table>
+{% else %}<p>No issue is marked as a false positive, an accepted risk or out of scope.</p>{% endif %}
+<h3>C. Severity scale</h3>
+<table>
+  <tr><th style="width:24mm">Severity</th><th>Meaning</th><th style="width:30mm">Suggested fix time</th></tr>
+  <tr><td><span class="sev sev-Critical">Critical</span></td><td>Can be exploited remotely with little effort to take over the system or read all its data.</td><td>{{ fix_within.Critical }}</td></tr>
+  <tr><td><span class="sev sev-High">High</span></td><td>Serious weakness that exposes sensitive data or functions, usually needing some precondition.</td><td>{{ fix_within.High }}</td></tr>
+  <tr><td><span class="sev sev-Medium">Medium</span></td><td>Weakness that helps an attacker or exposes limited data; often needs user interaction.</td><td>{{ fix_within.Medium }}</td></tr>
+  <tr><td><span class="sev sev-Low">Low</span></td><td>Minor weakness or missing hardening with little direct impact.</td><td>{{ fix_within.Low }}</td></tr>
+  <tr><td><span class="sev sev-Info">Info</span></td><td>Observation with no direct security impact.</td><td>{{ fix_within.Info }}</td></tr>
+</table>
+{% if scan.dojo_url %}<p class="small muted">Full finding records, including every affected URL and the raw tool output: {{ scan.dojo_url }}</p>{% endif %}
+</body>
+</html>

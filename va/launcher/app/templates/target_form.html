@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}Add target{% endblock %}
+{% block body %}
+<h1>Add target</h1>
+{% if error %}<div class="msg error">{{ error }}</div>{% endif %}
+<form class="card" method="post" action="/targets/new">
+  <label for="name">Name</label>
+  <input type="text" id="name" name="name" required maxlength="120" placeholder="Customer portal (staging)">
+  <label for="base_url">Base URL</label>
+  <input type="url" id="base_url" name="base_url" required placeholder="https://portal.stg.apps.{{ cfg.allowed_domains[0] if cfg.allowed_domains else 'example.com' }}">
+  <p class="hint">Must be under {{ cfg.allowed_domains|join(", ") }}. Everything on this host is in scope.</p>
+  <label for="environment">Environment</label>
+  <select id="environment" name="environment">{% for k, v in ENVS.items() %}<option value="{{ k }}">{{ v }}</option>{% endfor %}</select>
+  <p class="hint">Production targets default to the Passive profile and exclude state-changing API requests.</p>
+  <label for="image_ref">Container image (optional)</label>
+  <input type="text" id="image_ref" name="image_ref" placeholder="registry.devops.example.com/group/app:tag">
+  <p class="hint">If set, the image's packages are checked for known vulnerabilities.</p>
+  <label for="graphql_path">GraphQL endpoint path (optional)</label>
+  <input type="text" id="graphql_path" name="graphql_path" placeholder="/graphql">
+  <p style="margin-top:14px"><button type="submit">Add target</button> <a class="btn secondary" href="/targets">Cancel</a></p>
+  <p class="hint">Login and API definition are set on the next page.</p>
+</form>
+{% endblock %}

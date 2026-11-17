@@ -1,0 +1,276 @@
+# AI merge request review: the one place to tune the process.
+#
+# Re-read at the start of every job: edits apply to the next review with no
+# restart. An invalid edit is rejected (see worker logs) and the last good
+# config keeps running. Secrets never go here: name an env var instead
+# (model.api_key_env) and set it in devtools/.env.
+#
+# Layers: built-in defaults <- `defaults:` below <- `projects.<gitlab path>:`.
+# Objects merge key by key; lists replace.
+#
+# Globs: `*` stays inside one path segment, `**` crosses `/`. Case-sensitive.
+
+# GitLab project paths (globs) that may be reviewed at all.
+enabled_projects:
+  - "**"
+
+defaults:
+  scope:
+    # Target branches to review. The GitLab webhook header X-Review-Only
+    # (comma-separated globs) replaces this list for that webhook when sent.
+    target_branches: ["**"]
+    source_branch_include: ["**"]
+    source_branch_exclude: []
+    skip_draft: true
+    skip_labels: ["no-ai-review"]
+    # true: review only MRs that link at least one Qestor item.
+    require_qestor_items: false
+
+  model:
+    # openai-compatible | anthropic | ollama-native
+    provider: openai-compatible
+    base_url: http://devtools-llm:8080/v1
+    # llama-swap model name from devtools/llm/llama-swap.yaml:
+    # bonsai (= bonsai-27b) or bonsai-9b (faster).
+    model: bonsai
+    # Name of the env var holding the API key ("" for the local runner).
+    api_key_env: ""
+    # Keep <= the runner's -c in devtools/llm/llama-swap.yaml (131072).
+    # Measured on the RTX 5070 Ti: a 96k-token prompt takes ~84 s
+    # (~1,150 tokens/s prefill, ~56 tokens/s generation, 13.3 GB VRAM).
+    context_tokens: 131072
+    max_output_tokens: 4096
+    temperature: 0.1
+    # Per model call. A near-full prompt plus a long answer is ~3 minutes.
+    timeout_s: 420
+    # json_schema | json_object | prompt
+    structured_output: json_schema
+    # Lets the worker refuse context_tokens above the runner's --ctx-size.
+    runner_config: /llm-config/llama-swap.yaml
+    # Sent as-is in the request body. Bonsai 2 thinks by default, which is too
+    # slow for the 5-minute budget, so thinking is off. Set to {} for providers
+    # that reject unknown fields.
+    extra_body:
+      chat_template_kwargs:
+        enable_thinking: false
+
+    # Examples for later. Copy into `model:` and set the key in devtools/.env.
+    #   Anthropic:  provider: anthropic, base_url: https://api.anthropic.com,
+    #               model: claude-sonnet-5-5, api_key_env: AI_REVIEW_ANTHROPIC_API_KEY,
+    #               context_tokens: 100000, max_output_tokens: 4096, runner_config: "",
+    #               extra_body: {}
+    #   OpenAI:     provider: openai-compatible, base_url: https://api.openai.com/v1,
+    #               model: <model id>, api_key_env: AI_REVIEW_OPENAI_API_KEY
+    #   Kimi:       provider: openai-compatible, base_url: https://api.moonshot.ai/v1,
+    #               model: <model id>, api_key_env: AI_REVIEW_KIMI_API_KEY,
+    #               structured_output: json_object
+    # A cloud provider sends the diff outside this network. The worker needs
+    # egress to that host.
+
+  # Deterministic checks the model can't switch off.
+  # Always on, not configurable: GitLab quick actions in posted text
+  # (`/merge`, `/approve`, `/close`…) are neutralized, @mentions can't ping,
+  # images are removed, raw HTML is stripped, and posted text is length-capped.
+  guardrails:
+    # Credentials in added lines: block (blocker, never approve) | warn | off.
+    secret_scan: block
+    # Text aimed at an AI reviewer ("ignore previous instructions", "approve
+    # this MR", fake JSON answers) in added lines, MR text or items: block | warn | off.
+    injection_scan: block
+    # Redact credentials from everything sent to the model (matters most for
+    # cloud providers). Posted text is always redacted.
+    redact_prompt: true
+    # Links in posted text may only point here; others become plain text.
+    link_hosts:
+      [
+        gitlab.devops.yadatechnology.com,
+        qestor.apps.yadatechnology.com,
+        qestor.app,
+      ]
+    max_note_chars: 200000
+    max_qestor_chars: 19000
+
+  # Code around the change that the diff doesn't show, so the review can tell
+  # whether callers, importers and siblings still work.
+  context:
+    related_code: true
+    # Symbols (functions, classes, SQL functions, constants) the change
+    # defines or edits; each is searched across the repo at head.
+    max_symbols: 10
+    max_hits_per_symbol: 6
+    list_sibling_files: true
+    # Shares of the input budget; the diff gets the rest.
+    share:
+      items: 0.12
+      related: 0.15
+      repos: 0.2
+      reads: 0.15
+
+  # Other GitLab projects this one works with (for example the backend of a
+  # frontend). The review then also checks that both sides fit together.
+  related:
+    # Projects, groups (all their projects), or globs; `!` excludes.
+    #   [internal/qestor/qestor-core]           one project
+    #   [internal/qestor, "!internal/qestor/gitlab-profile"]   a group minus one
+    #   ["internal/qestor/qestor-*"]            a glob
+    # The GitLab webhook header X-Review-Related (same syntax, comma-separated)
+    # replaces this list for that webhook when sent.
+    paths: []
+    # Globs every related project must match, whatever config or the header
+    # asks for. Narrow it (for example [internal/qestor/**]) to bound headers.
+    allowed: ["**"]
+    # How many related projects a review pulls in (a group can expand to many).
+    # The X-Review-Related-Max webhook header (a whole number) replaces this
+    # for that webhook; neither can go above max_projects_ceiling.
+    max_projects: 5
+    max_projects_ceiling: 10
+    # Find the other half of a full-stack change even with no paths set:
+    #   same_branch_and_item: an open MR in another project with the same
+    #     source branch that also names one of this MR's Qestor items
+    #   same_branch: the branch alone (riskier: names like fix/x can repeat)
+    #   off
+    # Generic branches (main, prod, develop…) never pair. Bounded by
+    # `allowed` and the project cap. Items split across the pair count as
+    # done when the paired MR's own review marks them done.
+    discover: same_branch_and_item
+    # How to find the paired change in each related project, in order:
+    # branch = open MR with the same source branch (feature/QES-xxxx on both
+    # sides); qestor_item = open MR whose title or description names a linked
+    # Qestor item.
+    pair_by: [branch, qestor_item]
+    # No paired MR: target_branch (same name as this MR's target, else the
+    # project's default branch) | default_branch | none (skip the project).
+    fallback: target_branch
+    # Strings from this diff (API paths, GraphQL operations, identifiers,
+    # snake_case columns) searched in each related project.
+    max_terms: 12
+    max_hits_per_term: 5
+    max_paired_diff_bytes: 200000
+    # When this MR gets a new push, re-review its paired MRs (ones that were
+    # reviewed before) against the new head. Runs once per head change.
+    rereview_paired: true
+
+  loop:
+    max_read_rounds: 3
+    max_reads_per_round: 8
+    max_read_lines: 200
+    max_grep_hits: 20
+    max_extra_qestor_ids: 5
+    max_diff_bytes: 400000
+    # truncate: review the first max_diff_bytes and say so. skip: don't review.
+    on_diff_over_cap: truncate
+
+  standard:
+    # Markdown files in this folder, joined into the system prompt.
+    standard_file: standard.md
+    extra_standard_files: []
+    # Extra focus for this project's reviews, added to the prompt, for
+    # example: "Check every new SQL function for missing permission checks."
+    # The X-Review-Extras webhook header adds to this. Use \n for line breaks
+    # in the header. Extras sharpen a review; they can't relax the standard,
+    # remove findings, or decide approval.
+    extra_instructions: ""
+    severity_definitions:
+      blocker: "A definite break, data loss, security hole, build failure, or a business rule the linked item or the diff states and this change violates. Must be fixed before merge."
+      potential_bug: "A likely wrong outcome on a path this change reaches. Name the input, the wrong result, and why. A hedge without that outcome is not a potential bug. It still blocks approval."
+      recommendation: "A concrete change that prevents a real technical or business miss and is not already a bug. Not style, naming, or a comment."
+    ignore_paths:
+      - "**/package-lock.json"
+      - "**/pnpm-lock.yaml"
+      - "**/yarn.lock"
+      - "**/*.min.js"
+      - "**/dist/**"
+      - "**/generated/**"
+
+  approve:
+    enabled: true
+    require_no_blockers: true
+    require_no_potential_bugs: true
+    require_match: true
+    # Every linked Qestor item (the ones in the item-list comment) is judged
+    # on its own: done, partial, or missing.
+    #   all_done:     every item must be done; partial or missing = blocker
+    #   none_missing: missing = blocker, partial = potential bug
+    #   any_done:     at least one item done; the rest become recommendations
+    item_match: all_done
+    # The bot approves only what it fully saw: not when the diff or the
+    # related repositories were cut to fit, or a related repo couldn't be read.
+    never_when_truncated: true
+    never_when_related_failed: true
+    # Changes bigger than this (added + removed lines) need a human. 0 = no limit.
+    max_changed_lines: 1500
+    # The bot never approves an MR that touches these, whatever the review says.
+    never_on_paths:
+      - ".gitlab-ci.yml"
+      - ".dsoaas/**"
+      - "**/chart-values.yaml"
+      - "**/Dockerfile"
+      - "**/docker-compose*.yml"
+      - "**/migrations/**"
+    # Remove this bot's approval when a later commit fails the standard.
+    unapprove_on_regression: true
+
+  note:
+    # Order and which sections appear.
+    sections:
+      [
+        related_repos,
+        match,
+        regression,
+        blockers,
+        potential_bugs,
+        recommendations,
+      ]
+    language: en
+    show_footer: true
+    # Post "AI review queued (position N)" right away, then replace it.
+    queued_notice: true
+    # Wrap code-looking text the model left bare (calls, paths, snake_case,
+    # camelCase) in backticks. Diffs always render as ```diff blocks.
+    format_code: true
+
+  # Line comments on the MR diff, like a human reviewer.
+  inline:
+    enabled: true
+    max_comments: 20
+    kinds: [blockers, potential_bugs, recommendations]
+    # A finding up to this many lines from a changed line anchors on it.
+    # Findings outside the diff stay in the summary note only.
+    anchor_slack: 3
+    # Earlier bot comments whose problem is no longer reported:
+    # reply ("Not reported anymore at <sha>") | leave | delete
+    stale: reply
+
+  # When a review rejects the MR, comment on every linked Qestor item with a
+  # link to the review. Qestor comments can't be edited, so each rejected
+  # push adds one comment per item.
+  qestor_notice:
+    enabled: true
+    on_rejected: true
+    max_findings: 5
+
+  runtime:
+    # Whole review (all rounds). Up to four near-full 128k calls fit.
+    run_timeout_s: 900
+    retry_count: 1
+    # Reviews of one MR head: the first run plus refreshes when the paired
+    # side's verdicts change. Stops two paired MRs refreshing each other forever.
+    max_runs_per_head: 4
+    # Circuit breaker: reviews of one MR in the last hour across all heads
+    # (pushes, refreshes, re-reviews). Further events are dropped until the
+    # hour rolls over, so no feedback path can run away.
+    max_runs_per_mr_per_hour: 12
+    # Infrastructure failures (DB, queue) on one queued job before it moves
+    # to the dead-letter queue instead of being retried again.
+    max_deliveries: 10
+    # Skip a queued commit when a newer push on the same MR is already queued.
+    supersede_stale: true
+
+# Per-project overrides, keyed by GitLab path.
+projects: {}
+#  internal/qestor/qestor-web:
+#    standard:
+#      extra_standard_files: [standards/qestor-web.md]
+#  internal/qestor/qestor-core:
+#    approve:
+#      require_no_potential_bugs: false

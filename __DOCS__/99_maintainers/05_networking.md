@@ -45,6 +45,7 @@ graph LR
 | `10443` | traefik | HTTPS entry |
 | `18080` | traefik | Dashboard (no TLS on host) |
 | `25432` | traefik (TCP passthrough) | devtools shared Postgres — see [devtools stack](02_services.md#devtools-stack-shared-postgres) |
+| `25433` | traefik (TCP passthrough) | devtools pgvector Postgres — see [Shared pgvector](../03_devs/16_shared_devtools_pgvector.md) |
 | `23306` | traefik (TCP passthrough) | devtools shared MySQL |
 | `25672` | traefik (TCP passthrough) | devtools shared RabbitMQ AMQP (vhosts `dev`/`stg`) |
 | `25682` | traefik (TCP passthrough) | devtools shared RabbitMQ Management UI |
@@ -265,7 +266,7 @@ Use this when a **cloud edge VM** (for example Ubuntu on GCP) holds your public 
 3. **Edge VM:** Install **`wireguard-tools`** and **`nftables`**. Copy `peer_edge.conf` from the home volume to `/etc/wireguard/wg0.conf` (or merge keys with `edge/vpn-edge/wg0.client.conf.sample`). Enable **`net.ipv4.ip_forward=1`** (see `edge/vpn-edge/sysctl-ip-forward.conf`). Run `wg-quick up wg0`.
 4. **Edge NAT:** From the repo, use **`edge/vpn-edge/apply-nat.sh`** with a **`forward-ports.env`** derived from **`edge/vpn-edge/forward-ports.sample.env`**. Set **`HOME_TRAFFIC_IP`** to the **IPv4 of the Docker host on the LAN** where Traefik publishes **`10080`/`10443`** and GitLab SSH **`12222`**. The script DNATs public ports to that IP and SNATs out **`wg0`** so return traffic works. Traefik and GitLab will see the **edge’s WireGuard IP** as the client address (double SNAT: internet → edge → tunnel).
 
-**Default TCP map (edge public → home host port):** `80→10080`, `443→10443`, `12222→12222`, `25432→25432` (devtools Postgres), `25672` (devtools RabbitMQ AMQP), `25682` (Management UI). Add more `public:dest` pairs in **`FORWARD_TCP`** if you expose extra services.
+**Default TCP map (edge public → home host port):** `80→10080`, `443→10443`, `12222→12222`, `25432→25432` (devtools Postgres), `25433→25433` (devtools pgvector), `25672` (devtools RabbitMQ AMQP), `25682` (Management UI). Add more `public:dest` pairs in **`FORWARD_TCP`** if you expose extra services.
 
 **Git over SSH:** Use port **12222** on the edge as well (do not steal **TCP 22** on the edge VM unless you move admin `sshd` to another port). Example: `ssh -p 12222 git@<GITLAB_DOMAIN>`.
 
@@ -380,7 +381,7 @@ sudo nft list table ip vpnedge
 
 ### Adding a shared-tool TCP forward
 
-Repeatable checklist when exposing another home Traefik TCP service through the VPN edge (today: **devtools Postgres `25432`**, **devtools MySQL `23306`**, **devtools RabbitMQ AMQP `25672`**, **Management UI `25682`**):
+Repeatable checklist when exposing another home Traefik TCP service through the VPN edge (today: **devtools Postgres `25432`**, **devtools pgvector `25433`**, **devtools MySQL `23306`**, **devtools RabbitMQ AMQP `25672`**, **Management UI `25682`**):
 
 1. **Home:** publish the port on Traefik (`traefik/traefik.yml` entrypoint + `traefik/dynamic/tcp-passthrough.yml` + compose `ports:`) if it is not already exposed.
 2. **Edge:** add `public:dest` to `FORWARD_TCP` in `edge/vpn-edge/forward-ports.env` (and update `forward-ports.sample.env`).

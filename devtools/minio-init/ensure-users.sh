@@ -39,6 +39,20 @@ for b in cfa-dev cfa-stg; do
   mc mb --ignore-existing "local/${b}"
 done
 
+# AI MR reviewer audit artifacts: user ai-review, bucket ai-review only, 90-day
+# expiry. Skipped when the password is unset.
+if [ -n "${AI_REVIEW_MINIO_PASSWORD:-}" ]; then
+  log "Ensuring bucket 'ai-review' and user 'ai-review'..."
+  mc mb --ignore-existing local/ai-review
+  mc ilm rule add --expire-days "${AI_REVIEW_MINIO_EXPIRE_DAYS:-90}" local/ai-review >/dev/null 2>&1 || true
+  cat > /tmp/ai-review-policy.json <<'JSON'
+{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3:GetObject","s3:PutObject","s3:ListBucket","s3:GetBucketLocation"],"Resource":["arn:aws:s3:::ai-review","arn:aws:s3:::ai-review/*"]}]}
+JSON
+  mc admin policy create local ai-review-rw /tmp/ai-review-policy.json >/dev/null 2>&1 || true
+  mc admin user add local ai-review "${AI_REVIEW_MINIO_PASSWORD}" >/dev/null
+  mc admin policy attach local ai-review-rw --user ai-review >/dev/null 2>&1 || true
+fi
+
 log "Users:"
 mc admin user list local
 log "Buckets:"

@@ -1,7 +1,7 @@
 # =============================================================================
 # devtools k8s bridge
 #
-# devtools-postgres, devtools-mysql, devtools-rabbitmq, and devtools-minio run as plain Docker containers
+# devtools-postgres, devtools-pgvector, devtools-mysql, devtools-rabbitmq, and devtools-minio run as plain Docker containers
 # (devtools/docker-compose.yml), not as k8s workloads. Pods can't reliably
 # resolve a Docker container name across the node/pod network-namespace
 # boundary, so this Namespace + selector-less Services + manual Endpoints
@@ -9,6 +9,7 @@
 #
 # After applying, any pod in any namespace (dev, stg, prod) can reach:
 #   devtools-postgres.devtools.svc.cluster.local:5432
+#   devtools-pgvector.devtools.svc.cluster.local:5432
 #   devtools-rabbitmq.devtools.svc.cluster.local:5672   (AMQP)
 #   devtools-rabbitmq.devtools.svc.cluster.local:15672  (Management UI)
 #   devtools-minio.devtools.svc.cluster.local:9000      (S3 API)
@@ -150,3 +151,26 @@ subsets:
     ports:
       - name: mysql
         port: 3306
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: devtools-pgvector
+  namespace: devtools
+spec:
+  ports:
+    - name: pg
+      port: 5432
+---
+apiVersion: v1
+kind: Endpoints
+metadata:
+  name: devtools-pgvector
+  namespace: devtools
+subsets:
+  - addresses:
+      # Must match DEVTOOLS_PGVECTOR_STATIC_IP in devtools/.env.
+      - ip: 172.19.0.106
+    ports:
+      - name: pg
+        port: 5432

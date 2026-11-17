@@ -26,5 +26,8 @@ if [[ -n "${running}" ]]; then
 fi
 
 log "Extracting ${ARCHIVE} into ${ROOT}..."
-tar -xzf "${ARCHIVE}" -C "${ROOT}"
+# --keep-directory-symlink: when a .vols/<name> on this host is a junction to
+# another drive, extract through it instead of replacing it with a real dir
+# (which would silently move that volume back onto the repo drive).
+tar -xzf "${ARCHIVE}" -C "${ROOT}" --keep-directory-symlink
 log "Done. Next: docker compose up -d (and profiles as needed), then ./bootstrap/bootstrap.sh if k3d/Vault must be rebuilt."

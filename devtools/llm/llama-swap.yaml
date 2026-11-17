@@ -1,0 +1,48 @@
+# llama-swap: loads a model on the first request and unloads it after `ttl`
+# idle seconds, so the GPU and RAM are free between reviews. Only one model is
+# loaded at a time. Reloaded automatically on change (-watch-config).
+#
+# The worker picks a chat model by name in ai-review-worker/config/review.yaml
+# (model.model). Keep model.context_tokens <= the chat -c value below; the worker
+# reads this file and refuses a larger context. The estimator calls `bonsai`
+# for chat and `nomic-embed` for embeddings.
+#
+# Files come from devtools-llm-pull into the llm-models volume (/models).
+
+healthCheckTimeout: 300
+startPort: 10001
+logLevel: info
+
+macros:
+  # Shared llama-server flags. -t 6 matches the container's cpus: 6 (half of
+  # the Docker VM's 12), so a review never takes the whole machine.
+  # Sampling suits JSON answers (Bonsai 2 instruct values, lower temperature,
+  # no presence penalty so repeated JSON keys aren't penalized).
+  server: >-
+    /opt/llama/llama-server --host 127.0.0.1 --port ${PORT}
+    -c 131072 --parallel 1 -ngl 99 -fa on -ctk q8_0 -ctv q8_0 -t 6 --jinja
+    --temp 0.2 --top-p 0.8 --top-k 20 --min-p 0 --presence-penalty 0 --repeat-penalty 1.0
+
+models:
+  # Default reviewer. 6.7 GiB file. At -c 131072 with an 8-bit KV cache
+  # (-ctk/-ctv q8_0) it holds 13.3 GB VRAM on the RTX 5070 Ti; without the
+  # 8-bit cache 128k does not fit in 16 GB.
+  bonsai-27b:
+    cmd: ${server} -m /models/Ternary-Bonsai-2-27B-PQ2_0.gguf
+    aliases: [bonsai]
+    ttl: 300
+
+  # Faster fallback when bonsai-27b runs over the 5-minute budget. 2.3 GiB.
+  bonsai-9b:
+    cmd: ${server} -m /models/Ternary-Bonsai-2-9B-PQ2_0.gguf
+    ttl: 300
+
+  # Estimator embeddings. 768 dimensions, matching estimation_example.embedding.
+  # Own command: the chat macro's 128k context does not fit this model.
+  # nomic-embed-text v1.5 max context is 8192.
+  nomic-embed:
+    cmd: >-
+      /opt/llama/llama-server --host 127.0.0.1 --port ${PORT}
+      -m /models/nomic-embed-text-v1.5.Q8_0.gguf
+      -c 8192 --embeddings --parallel 1 -ngl 99 -t 6
+    ttl: 300

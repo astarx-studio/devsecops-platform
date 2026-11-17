@@ -2,7 +2,7 @@
 # =============================================================================
 # devtools/apply-k8s-bridge.sh
 # =============================================================================
-# Bridges shared Postgres + MySQL + RabbitMQ + Loki Docker containers into the k3d
+# Bridges shared Postgres + pgvector + MySQL + RabbitMQ + Loki Docker containers into the k3d
 # cluster so pods in dev/stg/prod namespaces can reach them via k8s DNS.
 # Idempotent.
 #
@@ -23,7 +23,7 @@ command -v kubectl >/dev/null || die "kubectl is not installed."
 
 COMPOSE='docker compose -p devtools -f devtools/docker-compose.yml'
 
-for c in devtools-postgres devtools-mysql devtools-rabbitmq devtools-loki devtools-minio; do
+for c in devtools-postgres devtools-pgvector devtools-mysql devtools-rabbitmq devtools-loki devtools-minio; do
   log "Checking ${c} container is running..."
   if ! docker inspect -f '{{.State.Running}}' "${c}" 2>/dev/null | grep -q true; then
     die "${c} is not running. Start it first: ${COMPOSE} up -d"
@@ -36,6 +36,7 @@ cat "${SCRIPT_DIR}/k8s-bridge.yaml" | kubectl apply -f -
 
 info "Bridge applied."
 info "  Postgres:  devtools-postgres.devtools.svc.cluster.local:5432"
+info "  pgvector:  devtools-pgvector.devtools.svc.cluster.local:5432"
 info "  RabbitMQ:  devtools-rabbitmq.devtools.svc.cluster.local:5672  (vhosts: dev, stg)"
 info "  Mgmt UI:   devtools-rabbitmq.devtools.svc.cluster.local:15672"
 info "  Loki:      devtools-loki.devtools.svc.cluster.local:3100"

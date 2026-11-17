@@ -1,0 +1,27 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["action"],
+  "properties": {
+    "action": { "enum": ["read", "review"] },
+    "reads": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind"],
+        "properties": {
+          "kind": { "enum": ["file", "grep", "qestor"] },
+          "repo": { "type": "string" },
+          "path": { "type": "string" },
+          "start_line": { "type": "integer" },
+          "end_line": { "type": "integer" },
+          "pattern": { "type": "string" },
+          "path_glob": { "type": "string" },
+          "ids": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    "review": "__REVIEW__"
+  }
+}

@@ -25,6 +25,9 @@ entryPoints:
   # CFA in-cluster brokers use separate host ports (cfa-amqp-dev/stg).
   devtools-pg:
     address: ":25432"
+  # pgvector Postgres (separate from shared app Postgres on :25432)
+  devtools-pgvector:
+    address: ":25433"
   devtools-amqp:
     address: ":25672"
   # RabbitMQ Management UI (HTTP :15672 on shared broker)

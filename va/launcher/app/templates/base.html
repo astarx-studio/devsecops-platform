@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}VA{% endblock %} · Vulnerability Assessment</title>
+{% block head %}{% endblock %}
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --ink:#1c2430; --muted:#5a6675; --line:#d5dbe3; --accent:#1f5fa8; --bad:#b3261e; --warn:#8a5a00; --ok:#1e6b43; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#12161c; --card:#1b2129; --ink:#e6eaf0; --muted:#9aa6b5; --line:#313a46; --accent:#6aa9f0; --bad:#f08a82; --warn:#e0b060; --ok:#6fcf9b; } }
+  * { box-sizing: border-box; }
+  body { margin:0; font: 15px/1.5 system-ui, "Segoe UI", Arial, sans-serif; background:var(--bg); color:var(--ink); }
+  header { background:var(--card); border-bottom:1px solid var(--line); padding:10px 16px; display:flex; gap:18px; align-items:center; flex-wrap:wrap; }
+  header .brand { font-weight:700; }
+  header nav { display:flex; gap:14px; flex-wrap:wrap; }
+  header .who { margin-left:auto; color:var(--muted); font-size:13px; }
+  a { color:var(--accent); }
+  main { max-width:1100px; margin:0 auto; padding:16px; }
+  h1 { font-size:22px; margin:6px 0 14px; } h2 { font-size:17px; margin:0 0 10px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:6px; padding:14px 16px; margin:0 0 16px; }
+  .scroll { overflow-x:auto; }
+  table { border-collapse:collapse; width:100%; font-size:14px; }
+  th, td { text-align:left; padding:7px 9px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { color:var(--muted); font-weight:600; }
+  label { display:block; font-weight:600; margin:10px 0 3px; }
+  label.inline { display:flex; gap:8px; font-weight:400; align-items:flex-start; }
+  input[type=text], input[type=url], input[type=password], select, textarea { width:100%; max-width:640px; padding:7px 9px; border:1px solid var(--line); border-radius:4px; background:var(--card); color:var(--ink); font:inherit; }
+  textarea { min-height:80px; font-family:ui-monospace, Consolas, monospace; font-size:13px; }
+  button, .btn { display:inline-block; padding:7px 14px; border:1px solid var(--accent); background:var(--accent); color:#fff; border-radius:4px; font:inherit; cursor:pointer; text-decoration:none; }
+  button.secondary, .btn.secondary { background:transparent; color:var(--accent); }
+  button.danger { background:transparent; color:var(--bad); border-color:var(--bad); }
+  .hint { color:var(--muted); font-size:13px; margin:2px 0 0; }
+  .msg { padding:9px 12px; border-radius:4px; margin:0 0 14px; border:1px solid; }
+  .msg.error { border-color:var(--bad); color:var(--bad); } .msg.notice { border-color:var(--ok); color:var(--ok); } .msg.warn { border-color:var(--warn); color:var(--warn); }
+  .pill { display:inline-block; padding:1px 8px; border-radius:10px; font-size:12px; border:1px solid var(--line); white-space:nowrap; }
+  .pill.done, .pill.passed { color:var(--ok); border-color:var(--ok); } .pill.failed, .pill.cancelled { color:var(--bad); border-color:var(--bad); }
+  .pill.running, .pill.queued, .pill.unconfirmed { color:var(--warn); border-color:var(--warn); }
+  .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+  .authfields { display:none; } .authfields.on { display:block; }
+  .manual table { margin:10px 0; } .manual code { background:var(--bg); padding:1px 4px; border-radius:3px; } .manual pre { background:var(--bg); padding:10px; overflow-x:auto; }
+</style>
+</head>
+<body>
+<header>
+  <span class="brand">Vulnerability Assessment</span>
+  <nav><a href="/">Scans</a><a href="/targets">Targets</a><a href="/scans/new">New scan</a>{% if cfg.dojo_public_url %}<a href="{{ cfg.dojo_public_url }}" target="_blank" rel="noopener">Findings (DefectDojo)</a>{% endif %}<a href="/help">Help</a></nav>
+  <span class="who">{{ user or "not signed in" }}</span>
+</header>
+<main>
+{% if storage_problem %}<div class="msg error">{{ storage_problem }}</div>{% endif %}
+{% block body %}{% endblock %}
+</main>
+</body>
+</html>

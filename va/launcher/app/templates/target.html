@@ -1,0 +1,104 @@
+{% extends "base.html" %}
+{% block title %}{{ target.name }}{% endblock %}
+{% block body %}
+<h1>{{ target.name }}</h1>
+{% if error %}<div class="msg error">{{ error }}</div>{% endif %}
+{% if notice %}<div class="msg notice">{{ notice }}</div>{% endif %}
+<div class="card"><a class="btn" href="/scans/new?target_id={{ target.id }}">Scan this target</a></div>
+
+<form class="card" method="post" action="/targets/{{ target.id }}">
+  <h2>Target</h2>
+  <label for="base_url">Base URL</label>
+  <input type="url" id="base_url" name="base_url" required value="{{ target.base_url }}">
+  <label for="environment">Environment</label>
+  <select id="environment" name="environment">{% for k, v in ENVS.items() %}<option value="{{ k }}" {{ "selected" if target.environment == k }}>{{ v }}</option>{% endfor %}</select>
+  <label for="image_ref">Container image (optional)</label>
+  <input type="text" id="image_ref" name="image_ref" value="{{ target.image_ref }}">
+  <label for="graphql_path">GraphQL endpoint path (optional)</label>
+  <input type="text" id="graphql_path" name="graphql_path" value="{{ target.graphql_path }}">
+  <label for="gvm_host">OpenVAS address (optional)</label>
+  <input type="text" id="gvm_host" name="gvm_host" value="{{ target.gvm_host }}" placeholder="203.0.113.10">
+  <p class="hint">OpenVAS scans the server behind the hostname. If the hostname sits behind a CDN such as Cloudflare, its address belongs to the CDN and the host scan is skipped. Enter your server's public IP here to scan it instead.</p>
+  <p style="margin-top:14px"><button type="submit">Save target</button></p>
+</form>
+
+<form class="card" method="post" action="/targets/{{ target.id }}/auth" enctype="multipart/form-data">
+  <h2>Login</h2>
+  <label for="auth_type">Login type</label>
+  <select id="auth_type" name="auth_type" onchange="document.querySelectorAll('.authfields').forEach(function(e){e.classList.toggle('on', e.dataset.type === this.value)}, this)">
+    {% for k, v in AUTH_TYPES.items() %}<option value="{{ k }}" {{ "selected" if target.auth_type == k }}>{{ v }}</option>{% endfor %}
+  </select>
+  {% for kind, fields in AUTH_FIELDS.items() %}
+  <div class="authfields {{ 'on' if target.auth_type == kind }}" data-type="{{ kind }}">
+    {% for field, (label, secret) in fields.items() %}
+      <label for="{{ kind }}__{{ field }}">{{ label }}</label>
+      {% if field == "headers" %}
+        <textarea id="{{ kind }}__{{ field }}" name="{{ kind }}__{{ field }}" placeholder="{{ 'Stored. Leave empty to keep it.' if auth_set and target.auth_type == kind else 'Authorization: Bearer eyJ...' }}" autocomplete="off"></textarea>
+      {% else %}
+        <input type="{{ 'password' if secret else 'text' }}" id="{{ kind }}__{{ field }}" name="{{ kind }}__{{ field }}" autocomplete="off"
+               value="{{ '' if secret else (auth_cfg.get(field, '') if target.auth_type == kind else '') }}"
+               placeholder="{{ 'Stored. Leave empty to keep it.' if secret and auth_set and target.auth_type == kind else '' }}">
+      {% endif %}
+    {% endfor %}
+    {% if kind == "script" %}<label for="script">ZAP authentication script file</label><input type="file" id="script" name="script">{% endif %}
+    {% if kind in ("header", "oauth2") %}<p class="hint">The scanners send the same header for the whole scan. Use a token that stays valid longer than the scan (Passive about 30 minutes, Standard up to 2 hours, Deep up to 5 hours), otherwise the report marks the login as failed.</p>{% endif %}
+    {% if kind in ("form", "browser", "script") %}<p class="hint">Use a dedicated test user, never a real person's account. Set the logged-in text so the report can confirm the login worked.</p>{% endif %}
+  </div>
+  {% endfor %}
+  <p style="margin-top:14px"><button type="submit">Save login</button></p>
+  <p class="hint">Secrets are stored encrypted and are never shown again, in logs or in reports.</p>
+</form>
+
+<div class="card">
+  <h2>API definition</h2>
+  {% if target.apidef_kind %}
+    <p><strong>{{ "OpenAPI / Swagger" if target.apidef_kind == "openapi" else "Postman collection" }}</strong>
+       "{{ summary.title }}" (version {{ summary.version }}) · {{ summary.endpoints|length }} endpoints
+       {% if summary.servers %}· servers in file: {{ summary.servers|join(", ") }} (replaced by {{ target.base_url }}){% endif %}</p>
+    {% for n in summary.notes %}<p class="hint">{{ n }}</p>{% endfor %}
+    {% if summary.unresolved %}<div class="msg error">Variables without a value: {{ summary.unresolved|join(", ") }}. A scan cannot start until they are set below.</div>{% endif %}
+    <form method="post" action="/targets/{{ target.id }}/apidef/settings">
+      {% if summary.variables %}
+      <h2 style="margin-top:14px">Variables</h2>
+      <div class="scroll"><table>
+        <tr><th>Name</th><th>Value from file</th><th>Your value</th></tr>
+        {% for name, has_value in summary.variables.items() %}
+        <tr><td><code>{{ name }}</code></td>
+            <td>{{ "set" if has_value else "none" }}</td>
+            <td><input type="text" name="var__{{ name }}" autocomplete="off" placeholder="{{ 'Stored. Leave empty to keep it.' if name in overrides else '' }}">
+                {% if name in overrides %}<label class="inline"><input type="checkbox" name="clear__{{ name }}" value="1"> remove my value</label>{% endif %}</td></tr>
+        {% endfor %}
+      </table></div>
+      <p class="hint">Values are stored encrypted and not shown again.</p>
+      {% endif %}
+      <h2 style="margin-top:14px">Endpoints to scan</h2>
+      <p class="hint">Untick requests that must not be sent, for example ones that delete data or send email. {% if target.environment == "prod" %}Production: state-changing requests are unticked by default.{% endif %}</p>
+      <div class="scroll"><table>
+        <tr><th>Scan</th><th>Method</th><th>Endpoint</th><th>Name</th></tr>
+        {% for e in summary.endpoints %}
+        {% set key = e.method ~ " " ~ e.path %}
+        <tr><td><input type="checkbox" name="include" value="{{ key }}" {{ "" if key in excluded else "checked" }} aria-label="Scan {{ key }}"></td>
+            <td>{{ e.method }}</td><td><code>{{ e.path }}</code></td><td>{{ e.name }}</td></tr>
+        {% endfor %}
+      </table></div>
+      <p style="margin-top:14px"><button type="submit">Save variables and selection</button></p>
+    </form>
+    <form method="post" action="/targets/{{ target.id }}/apidef/delete" style="margin-top:10px"><button class="danger" type="submit">Remove API definition</button></form>
+    <hr style="border:0;border-top:1px solid var(--line);margin:16px 0">
+    <p><strong>Replace with a new file</strong></p>
+  {% else %}
+    <p>None. The scan explores the target by crawling. Upload a definition to test every API endpoint.</p>
+  {% endif %}
+  <form method="post" action="/targets/{{ target.id }}/apidef" enctype="multipart/form-data">
+    <label for="definition">OpenAPI / Swagger file (JSON or YAML) or Postman collection (v2.0 / v2.1)</label>
+    <input type="file" id="definition" name="definition" required accept=".json,.yaml,.yml">
+    <label for="environment_file">Postman environment file (optional)</label>
+    <input type="file" id="environment_file" name="environment_file" accept=".json">
+    <p style="margin-top:14px"><button type="submit">Upload and check</button></p>
+  </form>
+</div>
+
+<form class="card" method="post" action="/targets/{{ target.id }}/delete" onsubmit="return confirm('Delete this target and its scan history in the launcher? Findings in DefectDojo are kept.')">
+  <button class="danger" type="submit">Delete target</button>
+</form>
+{% endblock %}

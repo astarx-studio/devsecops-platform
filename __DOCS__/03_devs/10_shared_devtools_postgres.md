@@ -60,4 +60,5 @@ On the platform host itself (or LAN), you can also use `localhost:25432` / the D
 ## Related
 
 - [Shared devtools RabbitMQ](11_shared_devtools_rabbitmq.md)
+- [Shared DevTools pgvector](16_shared_devtools_pgvector.md)
 - Maintainer checklist for new TCP tools: [Adding a shared-tool TCP forward](../99_maintainers/05_networking.md#adding-a-shared-tool-tcp-forward)

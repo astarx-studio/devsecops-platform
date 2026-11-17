@@ -66,6 +66,7 @@ services:
       - "10443:443"
       - "18080:8080"
       - "25432:25432" # devtools shared Postgres (TCP passthrough, see traefik/dynamic/tcp-passthrough.yml)
+      - "25433:25433" # devtools pgvector Postgres (TCP passthrough)
       - "25672:25672" # devtools shared RabbitMQ AMQP (vhosts dev/stg)
       - "25682:25682" # devtools shared RabbitMQ Management UI
       - "26572:26572" # CFA infra RabbitMQ AMQP (k3d NodePort 30572 / ns=dev)
@@ -697,6 +698,12 @@ services:
       - ./.vols/gitlab/config:/etc/gitlab
       - ./.vols/gitlab/logs:/var/log/gitlab
       - ./.vols/gitlab/data:/var/opt/gitlab
+      # Container registry storage as its own mount so it can live on another
+      # host volume. A junction *inside* the data mount is not followed by
+      # Docker Desktop (it surfaces as a dangling symlink), so relocate by
+      # pointing GITLAB_REGISTRY_HOST_DIR at the new path (or at a junction
+      # under .vols/). Default re-mounts the in-tree path — no behaviour change.
+      - ${GITLAB_REGISTRY_HOST_DIR:-./.vols/gitlab/data/gitlab-rails/shared/registry}:/var/opt/gitlab/gitlab-rails/shared/registry
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost/-/health || exit 1"]
       interval: 30s

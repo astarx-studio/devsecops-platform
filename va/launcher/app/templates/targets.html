@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}Targets{% endblock %}
+{% block body %}
+<h1>Targets</h1>
+<div class="card"><a class="btn" href="/targets/new">Add target</a>
+  <p class="hint">Only hosts under {{ cfg.allowed_domains|join(", ") }} can be added.</p></div>
+<div class="card scroll">
+  {% if targets %}
+  <table>
+    <tr><th>Name</th><th>Base URL</th><th>Environment</th><th>Login</th><th>API definition</th><th></th></tr>
+    {% for t in targets %}
+    <tr><td><a href="/targets/{{ t.id }}">{{ t.name }}</a></td><td>{{ t.base_url }}</td><td>{{ ENVS[t.environment] }}</td>
+        <td>{{ AUTH_TYPES[t.auth_type].split(" (")[0] }}</td>
+        <td>{% if t.apidef_kind %}{{ "OpenAPI" if t.apidef_kind == "openapi" else "Postman" }} · {{ (t.apidef_summary.endpoints or [])|length }} endpoints{% else %}-{% endif %}</td>
+        <td><a href="/scans/new?target_id={{ t.id }}">Scan</a></td></tr>
+    {% endfor %}
+  </table>
+  {% else %}<p>No targets yet.</p>{% endif %}
+</div>
+{% endblock %}

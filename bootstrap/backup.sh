@@ -76,7 +76,25 @@ log "Creating ${ARCHIVE}..."
 
 members=()
 [[ -f "${ROOT}/.env" ]] && members+=(".env") || log "WARN  No .env at repo root — archive will contain .vols only"
-[[ -d "${ROOT}/.vols" ]] && members+=(".vols") || { log "WARN  No .vols directory — nothing to archive"; exit 1; }
+[[ -d "${ROOT}/.vols" ]] || { log "WARN  No .vols directory — nothing to archive"; exit 1; }
+
+# Archive .vols child by child so a child that is a junction/symlink to another
+# drive (e.g. .vols/minio → C:\dsoaas-vols\minio) is archived by content, not as
+# a bare link. `<link>/.` makes tar descend through that one link only; a global
+# -h would also chase the container-side symlinks under .vols/gitlab/data
+# (gitaly git-exec, nginx/logs) that dangle on the host and fail the run.
+# The --transform below strips the resulting "/./" so names stay .vols/<name>/…
+shopt -s nullglob dotglob
+for child in "${ROOT}"/.vols/*; do
+  rel=".vols/${child##*/}"
+  if [[ -L "${child}" && -d "${child}" ]]; then
+    log "Following linked volume ${rel} → $(readlink -f "${child}" || echo '?')"
+    members+=("${rel}/.")
+  else
+    members+=("${rel}")
+  fi
+done
+shopt -u nullglob dotglob
 
 # GNU tar exit codes: 0 = ok, 1 = "some files differ" (non-fatal — e.g. a live
 # container mutated a file mid-read, such as mongo's diagnostic.data metrics
@@ -91,6 +109,7 @@ tar -czf "${ARCHIVE}" \
   --exclude='node_modules' \
   --exclude='api/node_modules' \
   --exclude='api/dist' \
+  --transform='s,^\(\.vols/[^/]*\)/\.\(/\|$\),\1\2,S' \
   -C "${ROOT}" "${members[@]}"
 TAR_STATUS=$?
 set -e

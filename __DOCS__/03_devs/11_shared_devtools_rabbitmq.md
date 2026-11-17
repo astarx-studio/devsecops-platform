@@ -14,7 +14,7 @@ Maintainer internals: [devtools stack](../99_maintainers/02_services.md#devtools
 | -------------- | --------------------------------------------------------------------------------------- |
 | Purpose        | One shared RabbitMQ for app teams (CFA and others) on the platform host                 |
 | Container      | `devtools-rabbitmq` (`devtools/docker-compose.yml`)                                     |
-| Vhosts         | **`dev`**, **`stg`** (plus `/`)                                                         |
+| Vhosts         | **`dev`**, **`stg`** (plus `/`). **`qestor`** and **`ai-review`** are internal and are not app-team environments. |
 | User           | Generic **`admin`** (not app-specific)                                                  |
 | Password       | From platform `devtools/.env` (`DEVTOOLS_RMQ_PASSWORD`) — sample default is `change-me` |
 | In-cluster DNS | `devtools-rabbitmq.devtools.svc.cluster.local:5672`                                     |
@@ -58,6 +58,8 @@ amqp://admin:<password>@devtools-rabbitmq.devtools.svc.cluster.local:5672/stg
 - Auth is RabbitMQ user/password only — no oauth2-proxy / Keycloak gate.
 - Rotate `DEVTOOLS_RMQ_PASSWORD` for anything beyond a personal sandbox; update any Vault RUNTIME `RABBITMQ_URL` values that embed the password.
 - Do not put production secrets in queues on this broker.
+
+`ai-review` is the merge-request reviewer vhost. `qestor` holds one durable queue, `qestor-ai-estimate-v2`. User `qestor-estimator` can declare, publish, and consume only that queue. The AI review n8n user stays limited to `ai-review.results` and cannot declare the estimator queue. Both vhosts are created by `devtools/rabbitmq-init/ensure-vhosts.sh` when their passwords are set.
 
 ---
 

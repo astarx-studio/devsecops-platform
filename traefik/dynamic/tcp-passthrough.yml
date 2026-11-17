@@ -19,6 +19,12 @@ tcp:
         - devtools-pg
       service: devtools-pg
 
+    devtools-pgvector:
+      rule: "HostSNI(`*`)"
+      entryPoints:
+        - devtools-pgvector
+      service: devtools-pgvector
+
     devtools-amqp:
       rule: "HostSNI(`*`)"
       entryPoints:
@@ -60,6 +66,11 @@ tcp:
       loadBalancer:
         servers:
           - address: "devtools-postgres:5432"
+
+    devtools-pgvector:
+      loadBalancer:
+        servers:
+          - address: "devtools-pgvector:5432"
 
     devtools-amqp:
       loadBalancer:

@@ -70,4 +70,5 @@ devtools-mysql.devtools.svc.cluster.local:3306
 ## Related
 
 - [Shared DevTools Postgres](10_shared_devtools_postgres.md)
+- [Shared DevTools pgvector](16_shared_devtools_pgvector.md)
 - Maintainer checklist for new TCP tools: [Adding a shared-tool TCP forward](../99_maintainers/05_networking.md#adding-a-shared-tool-tcp-forward)

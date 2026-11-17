@@ -51,12 +51,15 @@ docker compose -p devtools -f devtools/docker-compose.yml up -d
 | `DEVTOOLS_PG_STATIC_IP`                       | k8s bridge target (default `172.19.0.100`)           |
 | `DEVTOOLS_PG_IDLE_SESSION_TIMEOUT`            | Drop idle sessions (default `10min`)                 |
 | `DEVTOOLS_PG_IDLE_IN_TX_TIMEOUT`              | Drop idle-in-transaction (default `5min`)            |
+| `DEVTOOLS_PGVECTOR_USER` / `DEVTOOLS_PGVECTOR_PASSWORD` | pgvector bootstrap superuser (database `vectors`) |
+| `DEVTOOLS_PGVECTOR_DB`                        | pgvector database name (default `vectors`)           |
+| `DEVTOOLS_PGVECTOR_STATIC_IP`                 | k8s bridge target (default `172.19.0.106`)           |
 | `DEVTOOLS_RMQ_USER` / `DEVTOOLS_RMQ_PASSWORD` | RabbitMQ admin (sample `admin` / `change-me`)        |
 | `DEVTOOLS_RMQ_STATIC_IP`                      | k8s bridge target (default `172.19.0.101`)           |
 
-Laptop / LAN: `psql -h <platform-host> -p 25432 -d cfa_dev`; MySQL `localhost:23306` db `esa_dev`; AMQP `localhost:25672` vhost `dev`/`stg`; Management UI `http://localhost:25682/`.
+Laptop / LAN: `psql -h <platform-host> -p 25432 -d cfa_dev`; pgvector `localhost:25433` db `vectors`; MySQL `localhost:23306` db `esa_dev`; AMQP `localhost:25672` vhost `dev`/`stg`; Management UI `http://localhost:25682/`.
 
-External (vpnedge LB): Postgres `25432`, MySQL `23306`, RabbitMQ AMQP `25672`, Management UI `25682`. Guides: [Shared Postgres](10_shared_devtools_postgres.md), [Shared MySQL](14_shared_devtools_mysql.md), [Shared RabbitMQ](11_shared_devtools_rabbitmq.md). Maintainer: [devtools stack](../99_maintainers/02_services.md#devtools-stack-shared-postgres).
+External (vpnedge LB): Postgres `25432`, pgvector `25433`, MySQL `23306`, RabbitMQ AMQP `25672`, Management UI `25682`. Guides: [Shared Postgres](10_shared_devtools_postgres.md), [Shared pgvector](16_shared_devtools_pgvector.md), [Shared MySQL](14_shared_devtools_mysql.md), [Shared RabbitMQ](11_shared_devtools_rabbitmq.md). Maintainer: [devtools stack](../99_maintainers/02_services.md#devtools-stack-shared-postgres).
 
 **Password rotation:** Postgres — use `ALTER USER` inside the running container (editing `.env` alone does not change an existing password). RabbitMQ — change the user password via `rabbitmqctl` / Management UI, then update `devtools/.env` for next recreate. After either rotation, update console RUNTIME profiles that embed the password and redeploy affected k8s releases.
 

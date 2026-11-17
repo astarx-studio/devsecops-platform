@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}{{ scan.code }}{% endblock %}
+{% block head %}{% if active %}<meta http-equiv="refresh" content="15">{% endif %}{% endblock %}
+{% block body %}
+<h1>{{ scan.code }} · {{ scan.target.name }} <span class="pill {{ scan.status }}">{{ scan.status }}</span></h1>
+{% if scan.status == "queued" %}<div class="msg warn">Waiting in the queue. Scans run one at a time. This page refreshes every 15 seconds.</div>{% endif %}
+{% if scan.status == "running" %}<div class="msg warn">Running. This page refreshes every 15 seconds; you can close it and come back.</div>{% endif %}
+{% if scan.error %}<div class="msg error">{{ scan.error }}</div>{% endif %}
+
+<div class="card">
+  <p>{{ scan.target.base_url }} · {{ PROFILES[scan.profile][0] }} profile · {{ scan.route }} route · run by {{ scan.requested_by or "unknown" }}<br>
+     Started {{ fmt(scan.started_at) }} · finished {{ fmt(scan.finished_at) }}</p>
+  <div class="row">
+    {% if details.get("report", {}).get("pdf") %}<a class="btn" href="/scans/{{ scan.id }}/report.pdf">Download report (PDF)</a>{% endif %}
+    {% if details.get("report", {}).get("html") %}<a class="btn secondary" href="/scans/{{ scan.id }}/report.html" target="_blank">Open report (HTML)</a>{% endif %}
+    {% if cfg.dojo_public_url and scan.dojo_engagement_id %}<a class="btn secondary" href="{{ cfg.dojo_public_url }}/engagement/{{ scan.dojo_engagement_id }}" target="_blank" rel="noopener">Findings in DefectDojo</a>{% endif %}
+    {% if scan.status == "done" %}<form method="post" action="/scans/{{ scan.id }}/report"><button class="secondary" type="submit">Regenerate report</button></form>{% endif %}
+    {% if active %}<form method="post" action="/scans/{{ scan.id }}/cancel" onsubmit="return confirm('Cancel this scan?')"><button class="danger" type="submit">Cancel scan</button></form>{% endif %}
+  </div>
+  {% if details.get("report", {}).get("pdf_error") %}<p class="msg error" style="margin-top:12px">The PDF could not be created ({{ details.report.pdf_error }}). The HTML report is complete; print it to PDF from the browser.</p>{% endif %}
+  {% if scan.status == "done" %}<p class="hint">After marking false positives or accepted risks in DefectDojo, use Regenerate report to get an updated report.</p>{% endif %}
+</div>
+
+{% if details.get("counts") %}
+<div class="card">
+  <h2>Result: overall risk {{ details.rating }}</h2>
+  <p>{% for sev, n in details.counts.items() %}{{ n }} {{ sev }}{{ " · " if not loop.last }}{% endfor %} (distinct open issues)</p>
+  {% set lc = details.get("login_check", {}) %}
+  {% if lc.get("state") and lc.state != "none" %}<p>Login check: <span class="pill {{ lc.state }}">{{ lc.state }}</span> {{ lc.detail }}</p>{% endif %}
+</div>
+{% endif %}
+
+<div class="card scroll">
+  <h2>Tools</h2>
+  <table>
+    <tr><th>Tool</th><th>Status</th><th>Detail</th></tr>
+    {% for key, meta in TOOLS.items() %}
+    {% set st = (scan.steps or {}).get(key, {}) %}
+    <tr><td>{{ meta.name }}</td><td><span class="pill {{ st.get('status', 'pending') }}">{{ STATUS.get(st.get("status", "pending"), st.get("status", "")) }}</span></td><td>{{ st.get("message", "") }}</td></tr>
+    {% endfor %}
+  </table>
+</div>
+
+{% if logs %}
+<div class="card">
+  <h2>Tool logs</h2>
+  <p>{% for l in logs %}<a href="/scans/{{ scan.id }}/log/{{ l }}" target="_blank">{{ l }}</a>{{ " · " if not loop.last }}{% endfor %}</p>
+  <p class="hint">Raw tool output is deleted after {{ cfg.raw_retention_days }} days. Reports are kept.</p>
+</div>
+{% endif %}
+{% endblock %}
