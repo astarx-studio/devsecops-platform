@@ -1,0 +1,112 @@
+# =============================================================================
+# DSOaaS Auto DevOps Pipeline (tag deploys)
+# =============================================================================
+# Same jobs as /.gitlab-ci.yml, but deploy runs on Git tags instead of branches.
+# Branch pushes still build and test. They do not deploy.
+#
+# Switch an app by changing only the include file:
+#
+#   include:
+#     - project: "system/devsecops-platform/configs/auto-devops-pipeline"
+#       file: "/.gitlab-ci.tags.yml"
+#
+# Default tag → environment (GitLab regex variables use /pattern/):
+#   v1.2.3-dev.1   dev    auto      DEPLOY_DEV_TAG_PATTERN
+#   v1.2.3-rc.1    stg    auto      DEPLOY_STG_TAG_PATTERN
+#   v1.2.3         prod   manual    DEPLOY_PROD_TAG_PATTERN
+#
+# Override a pattern in GitLab CI/CD variables (no env scope). Example:
+#   DEPLOY_PROD_TAG_PATTERN = /^v[0-9]+\.[0-9]+\.[0-9]+$/
+# Set a pattern to "none" to disable that target.
+#
+# Single-app projects (built-in build + deploy:dev|stg|prod) work as-is.
+# API-generated .dsoaas/* fragments are still branch-gated. Multi-app / custom
+# targets need a hand-written fragment — see ci/deploy-targets.tags.example.yml.
+# =============================================================================
+
+include:
+  - local: ci/auto-devops-shared.yml
+
+workflow:
+  rules:
+    - if: '$CI_PROJECT_PATH == "system/devsecops-platform/configs/auto-devops-pipeline"'
+      when: never
+    - when: always
+
+variables:
+  # $$ becomes a single $ so the regex end-anchor survives CI variable expansion.
+  # In the GitLab UI, type one $ (the UI does not use $$).
+  DEPLOY_DEV_TAG_PATTERN: '/^v[0-9]+\.[0-9]+\.[0-9]+-dev/'
+  DEPLOY_STG_TAG_PATTERN: '/^v[0-9]+\.[0-9]+\.[0-9]+-rc/'
+  DEPLOY_PROD_TAG_PATTERN: '/^v[0-9]+\.[0-9]+\.[0-9]+$$/'
+
+# Build and test on branch pushes and on tag pushes. Deploy stays tag-only.
+prepare-build-env:
+  rules:
+    - if: "$CI_COMMIT_BRANCH"
+    - if: "$CI_COMMIT_TAG"
+
+.build-kaniko:
+  rules:
+    - if: "$CI_COMMIT_BRANCH"
+    - if: "$CI_COMMIT_TAG"
+
+build:
+  rules:
+    - if: "$CI_COMMIT_BRANCH"
+    - if: "$CI_COMMIT_TAG"
+
+test:
+  rules:
+    - if: "$CI_COMMIT_BRANCH"
+    - if: "$CI_COMMIT_TAG"
+
+.sonar-scan:
+  rules:
+    - if: "$CI_COMMIT_BRANCH"
+    - if: "$CI_COMMIT_TAG"
+
+sonar:scan:
+  rules:
+    - if: "$CI_COMMIT_BRANCH"
+    - if: "$CI_COMMIT_TAG"
+
+deploy:dev:
+  extends: .deploy-helm
+  variables:
+    DEPLOY_ENV: dev
+  environment:
+    name: dev
+    url: https://$APP_HOST
+  rules:
+    - if: '$DEPLOY_DEV_TAG_PATTERN == "none"'
+      when: never
+    - if: "$CI_COMMIT_TAG =~ $DEPLOY_DEV_TAG_PATTERN"
+      when: on_success
+
+deploy:stg:
+  extends: .deploy-helm
+  variables:
+    DEPLOY_ENV: stg
+  environment:
+    name: stg
+    url: https://$APP_HOST
+  rules:
+    - if: '$DEPLOY_STG_TAG_PATTERN == "none"'
+      when: never
+    - if: "$CI_COMMIT_TAG =~ $DEPLOY_STG_TAG_PATTERN"
+      when: on_success
+
+deploy:prod:
+  extends: .deploy-helm
+  variables:
+    DEPLOY_ENV: prod
+  environment:
+    name: prod
+    url: https://$APP_HOST
+  rules:
+    - if: '$DEPLOY_PROD_TAG_PATTERN == "none"'
+      when: never
+    - if: "$CI_COMMIT_TAG =~ $DEPLOY_PROD_TAG_PATTERN"
+      when: manual
+      allow_failure: false

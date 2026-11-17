@@ -11,7 +11,7 @@ Here's what's covered:
 - **[Merge request approvals](15_merge_request_approvals.md)** — Require approvals before merging, set per repo in `.gitlab/approvals.yml`.
 - **[Container registry and packages](03_registry_and_packages.md)** — Pushing and pulling Docker images.
 - **[Secrets](04_secrets.md)** — How to access environment variables and sensitive values in your pipelines.
-- **[Deployments](05_deployments.md)** — What happens after a successful build and what's supported today.
+- **[Deployments](05_deployments.md)** — What happens after a successful build, and how to convert a console project from branch deploy to tag deploy.
 - **[Manual onboarding](06_manual_onboarding.md)** — Opt an existing repository into deployment without going through the Management API.
 - **[Monorepo / multi-app CI](07_monorepo_multi_app_ci.md)** — Multiple Docker images and shared test/Sonar in one GitLab project (e.g. portal + reports).
 - **[Env & lifecycle cheat sheet](09_env_lifecycle_cheatsheet.md)** — Where config lives (console vs `.env`), password rotation, common operator tasks.

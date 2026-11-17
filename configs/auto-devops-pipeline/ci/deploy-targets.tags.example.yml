@@ -1,0 +1,35 @@
+# Example only — not included by the platform.
+#
+# Console projects already include .dsoaas/build-jobs.gitlab-ci.yml and
+# .dsoaas/deploy-targets.gitlab-ci.yml. Those files disable the stock build
+# and deploy:dev|stg|prod jobs and gate the per-app jobs on branch names.
+# Conversion steps (keep environment.name, re-apply after every console save):
+# __DOCS__/03_devs/05_deployments.md
+#
+# Patterns must be GitLab regex variables (/pattern/). "none" skips the job.
+
+# build:portal:
+#   extends: .build-kaniko
+#   variables:
+#     KANIKO_DOCKERFILE: "portal.Dockerfile"
+#     KANIKO_IMAGE_NAME: "portal"
+#   rules:
+#     - if: '$CI_COMMIT_BRANCH'
+#     - if: '$CI_COMMIT_TAG =~ $DEPLOY_DEV_TAG_PATTERN'
+#     - if: '$CI_COMMIT_TAG =~ $DEPLOY_STG_TAG_PATTERN'
+#     - if: '$CI_COMMIT_TAG =~ $DEPLOY_PROD_TAG_PATTERN'
+
+# deploy:prod-portal:
+#   extends: .deploy-helm
+#   resource_group: deploy-prod
+#   variables:
+#     DEPLOY_ENV: prod
+#   environment:
+#     name: prod-portal
+#     url: https://$APP_HOST
+#   rules:
+#     - if: '$DEPLOY_PROD_TAG_PATTERN == "none"'
+#       when: never
+#     - if: '$CI_COMMIT_TAG =~ $DEPLOY_PROD_TAG_PATTERN'
+#       when: manual
+#       allow_failure: false

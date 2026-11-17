@@ -237,6 +237,32 @@ DEPLOY_PROD_REF = release/prod
 
 Now pushing to `trunk` deploys to dev, and so on.
 
+### Tag-based deploy (opt-in)
+
+**Console project** (root `.gitlab-ci.yml` also includes `.dsoaas/build-jobs.gitlab-ci.yml` and `.dsoaas/deploy-targets.gitlab-ci.yml`): follow [Convert a console project to tag deploys](./05_deployments.md#convert-a-console-project-to-tag-deploys). Changing only the include file is not enough. Those fragments disable the stock deploy jobs and still wait for a branch name, and a later console save writes the branch include back.
+
+**Repo with no `.dsoaas` fragments** (this page's minimal include): change the file path.
+
+```yaml
+include:
+  - project: "system/devsecops-platform/configs/auto-devops-pipeline"
+    file: "/.gitlab-ci.tags.yml"
+```
+
+Branch pushes still build and test. Deploy jobs run only when the tag matches a pattern (GitLab regex form `/pattern/`):
+
+| Tag | Environment | Trigger | Variable |
+|---|---|---|---|
+| `v1.2.3-dev.1` | dev | auto | `DEPLOY_DEV_TAG_PATTERN` (default `/^v[0-9]+\.[0-9]+\.[0-9]+-dev/`) |
+| `v1.2.3-rc.1` | stg | auto | `DEPLOY_STG_TAG_PATTERN` (default `/^v[0-9]+\.[0-9]+\.[0-9]+-rc/`) |
+| `v1.2.3` | prod | **manual** | `DEPLOY_PROD_TAG_PATTERN` (default `/^v[0-9]+\.[0-9]+\.[0-9]+$/`) |
+
+Override a pattern under **Settings → CI/CD → Variables** (no environment scope). Set the value to `none` to disable that target. In the GitLab UI type a single `$` at the end of the prod pattern. The YAML default writes `$$` so CI expansion keeps the end anchor.
+
+The image tag on a tag pipeline is the Git tag (`v1.2.3`). Branch builds stay `$CI_COMMIT_SHORT_SHA-$CI_COMMIT_REF_SLUG`.
+
+Sonar on tags is off until you set `SONAR_TOKEN` and `SONAR_ALLOWED_TAGS` (a comma-separated list of tag names, or `*` for every tag).
+
 ### Disable a specific environment
 
 Set that target’s `DEPLOY_*_REF` CI variable to **`none`** (the only supported disable keyword). The shared pipeline and generated `.dsoaas/deploy-targets.gitlab-ci.yml` jobs skip deploy when the ref is `none`.

@@ -1,0 +1,632 @@
+# =============================================================================
+# DSOaaS Auto DevOps — shared job bodies
+# =============================================================================
+# Included by /.gitlab-ci.yml (branch deploys) and /.gitlab-ci.tags.yml (tag deploys).
+# Do not include this file from app repos. Trigger rules live on the entry files.
+#
+# Pipeline stages:
+#   build  → Kaniko image build + push to GitLab Container Registry
+#   test   → (placeholder; extend per-app as needed)
+#   deploy → helm upgrade --install into the target k3d namespace
+#
+# Required CI variables (set by Management API at project creation):
+#   KUBE_NAMESPACE        Kubernetes namespace  (dev | stg | prod)
+#   APP_HOST              Ingress hostname       (e.g. myapp.dev.apps.<D>)
+#   VAULT_PROJECT_PATH    Vault secret path      (e.g. external/kai/esa/myapp)
+#   VAULT_ADDR            Vault API URL (global; set by Management API)
+#   VAULT_TOKEN           Read token for env profiles (global; masked)
+#   KUBECONFIG_B64        Base64-encoded kubeconfig scoped to $KUBE_NAMESPACE
+#
+# Optional overrides (project-level CI variables):
+#   KANIKO_DOCKERFILE     Dockerfile path relative to repo root (default: Dockerfile)
+#   KANIKO_IMAGE_NAME     Optional registry path suffix for monorepos, e.g. "admin"
+#                         → pushes to $CI_REGISTRY_IMAGE/admin:$CI_COMMIT_SHORT_SHA-$CI_COMMIT_REF_SLUG
+#   KANIKO_CACHE          "true" (default) | "false" — disable remote cache repo to limit registry growth
+#   CHART_VERSION         Pin a chart version  (default: latest stable)
+#   CHART_REGISTRY_HOST   Helm OCI host (default gitlab:5000 in-stack; external: GITLAB_REGISTRY_DOMAIN)
+#   CHART_REGISTRY_PLAIN_HTTP  auto | true | false
+#   CHART_REGISTRY_USER / CHART_REGISTRY_PASSWORD  Deploy token on auto-devops-chart (instance CI)
+#   EXTRA_HELM_ARGS       Pass extra helm flags after the upgrade command
+#   HELM_TIMEOUT          helm --timeout duration (default: 5m). Prefer this over EXTRA_HELM_ARGS
+#                         --timeout — helm keeps the first --timeout on the command line.
+#   HELM_RELEASE_NAME     Helm release name (default CI_PROJECT_NAME; set per-app by Management API)
+#   DEPLOY_DEV_REF        Branch that triggers dev deploy (branch entry; default: develop)
+#   DEPLOY_STG_REF        Branch that triggers stg deploy (branch entry; default: staging)
+#   DEPLOY_PROD_REF       Branch that triggers prod deploy (branch entry; default: main)
+#   DEPLOY_<KEY>_REF      Per-target refs for custom targets (e.g. DEPLOY_PROD_ALT_REF)
+#   DEPLOY_*_TAG_PATTERN  Tag-entry regex (see /.gitlab-ci.tags.yml). "none" disables that target.
+#
+#   Set any DEPLOY_*_REF or DEPLOY_*_TAG_PATTERN to "none" to disable deploy jobs for that target.
+#   The Management API sets DEPLOY_*_REF to "none" when a target is disabled.
+#
+# Optional SonarQube (opt-in per project — set via Management API or GitLab CI variables):
+#   SONAR_ALLOWED_BRANCHES   Comma-separated branch names (empty = skip Sonar on branches)
+#   SONAR_ALLOWED_TAGS       Comma-separated tag names, or * / .* for every tag (empty = skip on tags)
+#   SONAR_TOKEN              Masked analysis token
+#   SONAR_HOST_URL           Public Sonar URL (dashboard links; scanner fallback on external runners)
+#   SONAR_HOST_URL_INTERNAL  Scanner URL in-stack (default http://sonarqube:9000 on devops-network)
+#   SONAR_GATE_POLICY_JSON   {"dev":"optional","stg":"required","prod":"required","other":"optional"}
+#   SONAR_SCANNER_WORK_DIR   Scanner temp dir (default /tmp/scannerwork) — avoids .scannerwork permission
+#                            errors when prior jobs run as root and sonar-scanner-cli runs non-root
+# =============================================================================
+
+# =============================================================================
+# Security scan templates (Option C — cherry-pick)
+# =============================================================================
+# SAST, Secret Detection, and Container Scanning cover the highest-value
+# automated security coverage available on GitLab Free / self-hosted CE.
+# Findings surface in the project's Security & Compliance → Vulnerability
+# Report.  Scans are advisory by default; they do not block deploys unless
+# explicitly configured.
+# =============================================================================
+include:
+  - local: ci/load-vault-env.yml
+  - template: Jobs/SAST.gitlab-ci.yml
+  - template: Jobs/Secret-Detection.gitlab-ci.yml
+  - template: Jobs/Container-Scanning.gitlab-ci.yml
+
+# Workflow guards live on the entry files (/.gitlab-ci.yml and /.gitlab-ci.tags.yml).
+
+variables:
+  # Disable Auto DevOps built-in Kubernetes deploy (we handle it ourselves)
+  AUTO_DEVOPS_PLATFORM_TARGET: ""
+  # Helm OCI chart registry host (override at instance level for external runners).
+  # In-stack default: gitlab:5000 (registry daemon on devops-network).
+  # External runners: set CHART_REGISTRY_HOST to GITLAB_REGISTRY_DOMAIN (HTTPS via Traefik).
+  CHART_REGISTRY_HOST: "gitlab:5000"
+  # auto | true | false — auto uses plain HTTP only for gitlab:5000
+  CHART_REGISTRY_PLAIN_HTTP: "auto"
+  CHART_VERSION: "0.2.4"
+  # Kaniko cache bucket inside GitLab registry (set KANIKO_CACHE=false to skip)
+  KANIKO_CACHE: "true"
+  DOCKER_DRIVER: overlay2
+  # Container-Scanning target — the image built and pushed by Kaniko.
+  # Without this, the template defaults to Auto DevOps vars that are not set
+  # in this pipeline and the scan would error or scan nothing.
+  # Include ref slug so tip-mirrored branches (same SHA, different BUILD env) do not
+  # overwrite each other's registry tags / baked Vite args.
+  CS_IMAGE: "$CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA-$CI_COMMIT_REF_SLUG"
+  # Branch refs controlling auto-deploys (can be overridden per project)
+  DEPLOY_DEV_REF: "develop"
+  DEPLOY_STG_REF: "staging"
+  DEPLOY_PROD_REF: "main"
+  SONAR_HOST_URL_INTERNAL: "http://sonarqube:9000"
+  SONAR_SCANNER_IMAGE: "sonarsource/sonar-scanner-cli:11"
+
+stages:
+  - build
+  - test
+  - deploy
+
+# Vault env loader: see ci/load-vault-env.yml (embedded script; no cross-project API fetch).
+
+# =============================================================================
+# prepare-build-env — load Vault BUILD profiles (Debian; avoids Alpine CDN issues on runners).
+# =============================================================================
+prepare-build-env:
+  stage: build
+  image: debian:bookworm-slim
+  variables:
+    DSOAAS_LOAD_ALL_BUILD_PROFILES: "true"
+  before_script:
+    - !reference [.load-vault-env, before_script]
+  script:
+    - echo "prepare-build-env done (${CI_PROJECT_DIR})"
+  artifacts:
+    when: always
+    expire_in: 1 day
+    paths:
+      - .dsoaas/
+
+# =============================================================================
+# .build-kaniko — Kaniko executor (native image). Env files come from prepare-build-env.
+# Trigger rules are set by the entry file so branch and tag modes can differ.
+# Jobs that extend this template inherit those rules unless they set their own.
+# =============================================================================
+.build-kaniko:
+  stage: build
+  image:
+    name: gcr.io/kaniko-project/executor:v1.23.2-debug
+    entrypoint: [""]
+  needs:
+    - job: prepare-build-env
+      artifacts: true
+  variables:
+    KANIKO_DOCKERFILE: "Dockerfile"
+    KANIKO_IMAGE_NAME: ""
+  script:
+    - |
+      set -eu
+      mkdir -p /kaniko/.docker
+      echo "{\"auths\":{\"${CI_REGISTRY}\":{\"auth\":\"$(echo -n "${CI_REGISTRY_USER}:${CI_REGISTRY_PASSWORD}" | base64 | tr -d '\n')\"}}}" \
+        > /kaniko/.docker/config.json
+      IMAGE_BASE="${CI_REGISTRY_IMAGE}"
+      if [ -n "${KANIKO_IMAGE_NAME:-}" ]; then
+        IMAGE_BASE="${CI_REGISTRY_IMAGE}/${KANIKO_IMAGE_NAME}"
+      fi
+      # Git tag pipelines publish the tag itself (v1.2.3). Branch pipelines keep
+      # SHORT_SHA-REF_SLUG so tip-mirrored branches (identical SHORT_SHA) stay distinct
+      # when BUILD dotenv differs per branch.
+      if [ -n "${CI_COMMIT_TAG:-}" ]; then
+        IMAGE_TAG="${CI_COMMIT_TAG}"
+      else
+        IMAGE_TAG="${CI_COMMIT_SHORT_SHA}-${CI_COMMIT_REF_SLUG}"
+      fi
+      KANIKO_DEST_SHA="${IMAGE_BASE}:${IMAGE_TAG}"
+      KANIKO_DEST_LATEST="${IMAGE_BASE}:latest-${CI_COMMIT_REF_SLUG}"
+      KANIKO_CACHE_REPO="${IMAGE_BASE}/cache"
+      echo "Kaniko image base: ${IMAGE_BASE} tag=${IMAGE_TAG} (dockerfile=${KANIKO_DOCKERFILE})"
+      KANIKO_ARGS_SUFFIX=""
+      if [ -n "${KANIKO_IMAGE_NAME:-}" ]; then
+        KANIKO_ARGS_SUFFIX="-${KANIKO_IMAGE_NAME}"
+      fi
+      KANIKO_BUILD_ARGS_FILE="${CI_PROJECT_DIR}/.dsoaas/kaniko-extra-build-args${KANIKO_ARGS_SUFFIX}"
+      # Profiles with empty jobSelector write the unsuffixed file; prefer the
+      # per-image file when present, otherwise fall back so single-app builds
+      # with KANIKO_IMAGE_NAME still receive dotenv_build_args.
+      if [ ! -f "${KANIKO_BUILD_ARGS_FILE}" ] && [ -n "${KANIKO_ARGS_SUFFIX}" ]; then
+        _fallback="${CI_PROJECT_DIR}/.dsoaas/kaniko-extra-build-args"
+        if [ -f "${_fallback}" ]; then
+          echo "kaniko: suffixed build-args file missing; falling back to ${_fallback}"
+          KANIKO_BUILD_ARGS_FILE="${_fallback}"
+        fi
+      fi
+      # Load per-app build args from file; each line is a single flag
+      # (--build-arg=KEY=VALUE) and is passed as one positional arg to Kaniko.
+      set --
+      if [ -f "${KANIKO_BUILD_ARGS_FILE}" ]; then
+        while IFS= read -r _arg; do
+          [ -n "${_arg}" ] || continue
+          set -- "$@" "${_arg}"
+        done < "${KANIKO_BUILD_ARGS_FILE}"
+        echo "kaniko: loaded $# build arg(s) from ${KANIKO_BUILD_ARGS_FILE}"
+      else
+        echo "kaniko: no build-args file at ${KANIKO_BUILD_ARGS_FILE}${KANIKO_ARGS_SUFFIX:+ (or unsuffixed fallback)}"
+      fi
+      STAGED_WS="${CI_PROJECT_DIR}/.dsoaas/staged-workspace"
+      if [ -d "${STAGED_WS}" ]; then
+        cp -a "${STAGED_WS}/." "${CI_PROJECT_DIR}/"
+        echo "Applied BUILD raw_file profile(s) from prepare-build-env artifacts"
+      fi
+      CACHE_ARGS=""
+      case "${KANIKO_CACHE:-true}" in
+        true|TRUE|yes|YES|1) CACHE_ARGS="--cache=true --cache-copy-layers=false --cache-repo=${KANIKO_CACHE_REPO}" ;;
+        *) echo "kaniko: KANIKO_CACHE=${KANIKO_CACHE:-} — remote cache disabled" ;;
+      esac
+      # shellcheck disable=SC2086
+      /kaniko/executor \
+        --context="${CI_PROJECT_DIR}" \
+        --dockerfile="${KANIKO_DOCKERFILE}" \
+        --destination="${KANIKO_DEST_SHA}" \
+        --destination="${KANIKO_DEST_LATEST}" \
+        --digest-file=/tmp/kaniko-digest.txt \
+        ${CACHE_ARGS} \
+        "$@"
+      DIGEST="$(tr -d '[:space:]' < /tmp/kaniko-digest.txt)"
+      mkdir -p "${CI_PROJECT_DIR}/.dsoaas/image-digests"
+      # Per-app filename so monorepo builds do not overwrite each other when a
+      # deploy job downloads artifacts from every build:* job in the pipeline.
+      if [ -n "${KANIKO_IMAGE_NAME:-}" ]; then
+        DIGEST_ENV_FILE="${CI_PROJECT_DIR}/.dsoaas/image-digests/${KANIKO_IMAGE_NAME}.env"
+      else
+        DIGEST_ENV_FILE="${CI_PROJECT_DIR}/.dsoaas/image-digests/default.env"
+      fi
+      {
+        echo "DSOAAS_IMAGE_REPOSITORY=${IMAGE_BASE}"
+        echo "DSOAAS_IMAGE_TAG=${IMAGE_TAG}"
+        echo "DSOAAS_IMAGE_DIGEST=${DIGEST}"
+      } > "${DIGEST_ENV_FILE}"
+      echo "kaniko: wrote image digest ${DIGEST} for ${KANIKO_DEST_SHA} -> ${DIGEST_ENV_FILE}"
+  artifacts:
+    when: on_success
+    expire_in: 1 day
+    paths:
+      - .dsoaas/image-digests/
+    # Dotenv intentionally omitted: identical DSOAAS_IMAGE_* keys from parallel
+    # monorepo builds collide when GitLab merges reports. Deploy sources the
+    # matching file under .dsoaas/image-digests/ instead.
+
+# Concrete build job. Entry files attach rules (branch-only, or branch + tag).
+build:
+  extends: .build-kaniko
+
+# =============================================================================
+# .test-placeholder — override in your .gitlab-ci.yml to add real tests.
+# =============================================================================
+test:
+  stage: test
+  image: alpine:3.20
+  before_script:
+    - !reference [.load-vault-env, before_script]
+  script:
+    - echo "No tests defined — override this job in your .gitlab-ci.yml"
+
+# =============================================================================
+# SonarQube — static analysis (opt-in via SONAR_TOKEN plus an allowlist)
+#   branches: SONAR_ALLOWED_BRANCHES (comma-separated names; empty = skip)
+#   tags:     SONAR_ALLOWED_TAGS (comma-separated names, or * for every tag; empty = skip)
+#
+# Runs in the test stage with no job dependencies so it is not skipped when a
+# project's `test` job fails. Do not add `needs: [test]` unless you also set
+# optional: true on that need, or Sonar will be skipped on test failure.
+#
+# Uses a writable work dir under /tmp (not $CI_PROJECT_DIR/.scannerwork) because
+# sonarsource/sonar-scanner-cli runs non-root while test/build jobs often leave a
+# root-owned workspace. Override SONAR_SCANNER_WORK_DIR if needed.
+# The script passes -Dsonar.working.directory (the correct sonar-scanner-engine property;
+# older sonar.scanner.workDir is not recognised by scanner >= 5.x).
+# When extending this job with a custom before_script, prepend:
+#   - !reference [.sonar-scan, before_script]
+# =============================================================================
+.sonar-scan:
+  stage: test
+  # Sonar does not consume test job artifacts; skip them (avoids minio direct URL on external runners).
+  dependencies: []
+  image:
+    name: ${SONAR_SCANNER_IMAGE}
+    entrypoint: [""]
+  variables:
+    GIT_DEPTH: "0"
+    SONAR_SCANNER_WORK_DIR: "/tmp/scannerwork"
+  before_script:
+    - |
+      set -eu
+      SONAR_WORK_DIR="${SONAR_SCANNER_WORK_DIR:-/tmp/scannerwork}"
+      rm -rf "${SONAR_WORK_DIR}" .scannerwork 2>/dev/null || true
+      mkdir -p "${SONAR_WORK_DIR}"
+      chmod 777 "${SONAR_WORK_DIR}"
+  script:
+    - |
+      set -euo pipefail
+      SONAR_WORK_DIR="${SONAR_SCANNER_WORK_DIR:-/tmp/scannerwork}"
+      # sonar.working.directory is the correct property recognised by sonar-scanner-engine
+      # (sonar.scanner.workDir is a legacy alias that newer scanner versions ignore).
+      case " ${SONAR_SCANNER_OPTS:-} " in
+        *"sonar.working.directory="*) ;;
+        *) export SONAR_SCANNER_OPTS="-Dsonar.working.directory=${SONAR_WORK_DIR} ${SONAR_SCANNER_OPTS:-}" ;;
+      esac
+      if [ -n "${CI_COMMIT_TAG:-}" ]; then
+        if [ -z "${SONAR_ALLOWED_TAGS:-}" ] || [ -z "${SONAR_TOKEN:-}" ]; then
+          echo "Sonar skipped: set SONAR_ALLOWED_TAGS and SONAR_TOKEN to enable analysis on tags."
+          echo "SONAR_ALLOWED_TAGS is a comma-separated list of tag names, or * to scan every tag."
+          exit 0
+        fi
+        _sonar_tag_ok=0
+        _sonar_tags_rest="${SONAR_ALLOWED_TAGS}"
+        while [ -n "${_sonar_tags_rest}" ]; do
+          _sonar_part="${_sonar_tags_rest%%,*}"
+          case "${_sonar_tags_rest}" in
+            *,*) _sonar_tags_rest="${_sonar_tags_rest#*,}" ;;
+            *) _sonar_tags_rest="" ;;
+          esac
+          _sonar_part=$(printf '%s' "${_sonar_part}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+          if [ "${_sonar_part}" = "*" ] || [ "${_sonar_part}" = ".*" ]; then
+            _sonar_tag_ok=1
+            break
+          fi
+          if [ "${_sonar_part}" = "${CI_COMMIT_TAG}" ]; then
+            _sonar_tag_ok=1
+            break
+          fi
+        done
+        if [ "${_sonar_tag_ok}" != "1" ]; then
+          echo "Sonar skipped: tag ${CI_COMMIT_TAG} not in SONAR_ALLOWED_TAGS."
+          exit 0
+        fi
+      else
+        if [ -z "${SONAR_ALLOWED_BRANCHES:-}" ] || [ -z "${SONAR_TOKEN:-}" ]; then
+          echo "Sonar skipped: set SONAR_ALLOWED_BRANCHES and SONAR_TOKEN to enable analysis."
+          exit 0
+        fi
+        ALLOWED=",$SONAR_ALLOWED_BRANCHES,"
+        if ! echo "$ALLOWED" | grep -q ",${CI_COMMIT_REF_NAME},"; then
+          echo "Sonar skipped: branch ${CI_COMMIT_REF_NAME} not in SONAR_ALLOWED_BRANCHES."
+          exit 0
+        fi
+      fi
+      SONAR_PUBLIC_URL="${SONAR_HOST_URL:-}"
+      SCAN_URL="${SONAR_HOST_URL_INTERNAL:-http://sonarqube:9000}"
+      # External runners: in-cluster sonarqube is unreachable. Use public URL; map the hostname
+      # on the runner via extra_hosts (host-gateway), not inside this non-root scanner image.
+      if ! curl -sf --max-time 5 "${SCAN_URL}/api/system/status" >/dev/null 2>&1; then
+        if [ -n "${SONAR_PUBLIC_URL}" ]; then
+          SCAN_URL="${SONAR_PUBLIC_URL}"
+          echo "Sonar scanner: using public URL ${SCAN_URL} (in-cluster endpoint unreachable)"
+        fi
+      fi
+      if ! curl -sf --max-time 15 "${SCAN_URL}/api/system/status" >/dev/null 2>&1; then
+        echo "Sonar scanner: cannot reach ${SCAN_URL}. On external runners, add the Sonar hostname to runner extra_hosts (host-gateway). See gitlab-runner/config.external-runner.toml.example" >&2
+        exit 1
+      fi
+      PROJECT_KEY="${CI_PROJECT_PATH_SLUG}_${CI_COMMIT_REF_SLUG}"
+      # printf avoids echo's trailing newline (was turned into a stray '_' by tr)
+      PROJECT_KEY=$(printf '%s' "$PROJECT_KEY" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9._-' '_' | sed 's/^_\+//;s/_\+$//')
+      export SONAR_HOST_URL="$SCAN_URL"
+      export SONAR_TOKEN
+      # GitLab stores tag-rule regexes as /pattern/. Strip the slashes for grep -E.
+      _dsoaas_re() {
+        _p="$1"
+        case "${_p}" in
+          /*/) _p="${_p#/}"; _p="${_p%/}" ;;
+        esac
+        printf '%s' "${_p}"
+      }
+      _dsoaas_tag_tier() {
+        _pat="$1"
+        [ -n "${_pat}" ] || return 1
+        [ "${_pat}" = "none" ] && return 1
+        echo "${CI_COMMIT_TAG}" | grep -Eq -- "$(_dsoaas_re "${_pat}")"
+      }
+      TIER=other
+      if [ -n "${CI_COMMIT_TAG:-}" ]; then
+        if _dsoaas_tag_tier "${DEPLOY_DEV_TAG_PATTERN:-}"; then TIER=dev
+        elif _dsoaas_tag_tier "${DEPLOY_STG_TAG_PATTERN:-}"; then TIER=stg
+        elif _dsoaas_tag_tier "${DEPLOY_PROD_TAG_PATTERN:-}"; then TIER=prod
+        fi
+      elif [ "${CI_COMMIT_REF_NAME}" = "${DEPLOY_DEV_REF}" ]; then TIER=dev
+      elif [ "${CI_COMMIT_REF_NAME}" = "${DEPLOY_STG_REF}" ]; then TIER=stg
+      elif [ "${CI_COMMIT_REF_NAME}" = "${DEPLOY_PROD_REF}" ]; then TIER=prod
+      fi
+      GATE_MODE=optional
+      if [ -n "${SONAR_GATE_POLICY_JSON:-}" ]; then
+        GATE_MODE=$(echo "$SONAR_GATE_POLICY_JSON" | tr -d ' ' | sed -n "s/.*\"${TIER}\":\"\([^\"]*\)\".*/\1/p")
+        [ -z "$GATE_MODE" ] && GATE_MODE=optional
+      fi
+      echo "Sonar tier=${TIER} gate=${GATE_MODE} projectKey=${PROJECT_KEY}"
+      SCANNER_EXTRA="-Dsonar.sources=."
+      [ -f sonar-project.properties ] && SCANNER_EXTRA=""
+      sonar-scanner \
+        -Dsonar.projectKey="${PROJECT_KEY}" \
+        -Dsonar.projectName="${CI_PROJECT_NAME} (${CI_COMMIT_REF_NAME})" \
+        -Dsonar.qualitygate.wait=false \
+        ${SCANNER_EXTRA}
+      DASHBOARD="${SONAR_PUBLIC_URL:-$SCAN_URL}/dashboard?id=${PROJECT_KEY}"
+      STATUS=success
+      DESCRIPTION="Sonar Quality Gate passed (${TIER}, ${GATE_MODE})"
+      if [ "$GATE_MODE" = "required" ]; then
+        if ! curl -sf -u "${SONAR_TOKEN}:" \
+          "${SCAN_URL}/api/qualitygates/project_status?projectKey=${PROJECT_KEY}" \
+          | grep -q '"status":"OK"'; then
+          STATUS=failed
+          DESCRIPTION="Sonar Quality Gate failed (${TIER}, required)"
+        fi
+      else
+        if ! curl -sf -u "${SONAR_TOKEN}:" \
+          "${SCAN_URL}/api/qualitygates/project_status?projectKey=${PROJECT_KEY}" \
+          | grep -q '"status":"OK"'; then
+          DESCRIPTION="Sonar Quality Gate failed (${TIER}, optional — pipeline continues)"
+        fi
+      fi
+      curl -sf --request POST \
+        --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
+        --data "state=${STATUS}" \
+        --data "name=sonarqube/quality-gate" \
+        --data-urlencode "description=${DESCRIPTION}" \
+        --data-urlencode "target_url=${DASHBOARD}" \
+        "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/statuses/${CI_COMMIT_SHA}" || true
+      if [ "$STATUS" = "failed" ]; then
+        echo "Sonar Quality Gate failed and tier ${TIER} requires a passing gate."
+        exit 1
+      fi
+
+sonar:scan:
+  extends: .sonar-scan
+  allow_failure: false
+
+# Container Scanning (GitLab template) expects one CS_IMAGE at $CI_REGISTRY_IMAGE:tag.
+# Monorepo / API-generated builds push $CI_REGISTRY_IMAGE/<name>:tag instead, so the
+# default job always fails to pull and only burns a runner slot. Disabled here
+# (job does not enter the pipeline). Re-enable per image with an explicit CS_IMAGE
+# when you add custom scan jobs — see __DOCS__/03_devs/07_monorepo_multi_app_ci.md.
+container_scanning:
+  rules:
+    - when: never
+
+# =============================================================================
+# .deploy-helm — base hidden job for all environment deployments.
+#
+# Writes KUBECONFIG_B64 to a temp file, then runs:
+#   helm upgrade --install <release> <chart-repo>/dsoaas-app
+#     --version $CHART_VERSION
+#     --namespace $KUBE_NAMESPACE
+#     --set image.repository=$CI_REGISTRY_IMAGE
+#     --set image.tag=$CI_COMMIT_SHORT_SHA
+#     --set ingress.host=$APP_HOST
+#     --set project.path=$VAULT_PROJECT_PATH
+#     --set project.env=<env>
+#     [--values chart-values.yaml if present]
+# =============================================================================
+.deploy-helm:
+  stage: deploy
+  image:
+    name: alpine/helm:3.17.3
+    entrypoint: [""]
+  before_script:
+    - apk add --no-cache curl jq bash kubectl
+    # RUNTIME env profiles are injected into pods via Vault + ExternalSecret, not CI shell.
+    # Write kubeconfig from base64-encoded CI variable
+    - mkdir -p /tmp/kube
+    - echo "${KUBECONFIG_B64}" | base64 -d > /tmp/kube/config
+    - chmod 600 /tmp/kube/config
+    - export KUBECONFIG=/tmp/kube/config
+    # In-stack runners share devops-network with k3d-*-serverlb. host.docker.internal:16443
+    # often TLS-times-out on Docker Desktop Windows; prefer the compose DNS name :6443.
+    # Prefer curl: alpine wget treats k3s /livez HTTP 401 as failure (exit 6) even when
+    # the API is up, which skips the rewrite and then kubectl OpenAPI-times-out.
+    - |
+      set -eu
+      _kc=/tmp/kube/config
+      _server="$(grep -E '^\s*server:' "${_kc}" | awk '{print $2; exit}')"
+      _in_stack_api="https://k3d-dsoaas-serverlb:6443"
+      if [ -n "${KUBE_API_INTERNAL_URL:-}" ]; then
+        _in_stack_api="${KUBE_API_INTERNAL_URL}"
+      fi
+      _probe() {
+        if command -v curl >/dev/null 2>&1; then
+          curl -sk --connect-timeout 3 -o /dev/null "$1"
+        else
+          wget -q -O /dev/null --timeout=3 --no-check-certificate "$1"
+        fi
+      }
+      if _probe "${_in_stack_api}/livez" || _probe "${_in_stack_api}/version" || _probe "${_in_stack_api}/"; then
+        if [ "${_server}" != "${_in_stack_api}" ]; then
+          echo "Rewriting kubeconfig server ${_server:-<empty>} -> ${_in_stack_api} (in-stack k3d)"
+          sed -i "s|server: .*|server: ${_in_stack_api}|" "${_kc}"
+        fi
+      else
+        echo "kubeconfig server remains ${_server:-<empty>} (in-stack API ${_in_stack_api} not reachable)"
+      fi
+    # CHART_REGISTRY_USER / CHART_REGISTRY_PASSWORD: instance CI variables (deploy token on auto-devops-chart).
+    - |
+      set -eu
+      CHART_REGISTRY_HOST="${CHART_REGISTRY_HOST:-gitlab:5000}"
+      if [ -z "${CHART_REGISTRY_PLAIN_HTTP:-}" ] || [ "${CHART_REGISTRY_PLAIN_HTTP}" = "auto" ]; then
+        case "${CHART_REGISTRY_HOST}" in
+          gitlab:5000 | gitlab) CHART_REGISTRY_PLAIN_HTTP=true ;;
+          *) CHART_REGISTRY_PLAIN_HTTP=false ;;
+        esac
+      fi
+      export CHART_OCI_REF="oci://${CHART_REGISTRY_HOST}/system/devsecops-platform/configs/auto-devops-chart/dsoaas-app"
+      HELM_PLAIN_HTTP_FLAG=""
+      HELM_LOGIN_EXTRA=""
+      CHART_REGISTRY_HOST_GATEWAY_MAPPED=0
+      if [ "${CHART_REGISTRY_PLAIN_HTTP}" = "true" ]; then
+        HELM_PLAIN_HTTP_FLAG="--plain-http"
+        HELM_LOGIN_EXTRA="--insecure"
+      fi
+      # External runners on the Docker host cannot hairpin to the public registry URL.
+      # Map the registry hostname to host.docker.internal (same effect as runner extra_hosts).
+      if [ "${CHART_REGISTRY_HOST}" != "gitlab:5000" ] && [ "${CHART_REGISTRY_HOST}" != "gitlab" ]; then
+        if command -v getent >/dev/null 2>&1 && getent ahostsv4 host.docker.internal >/dev/null 2>&1; then
+          _gw="$(getent ahostsv4 host.docker.internal | awk '{print $1; exit}')"
+          echo "${_gw} ${CHART_REGISTRY_HOST}" >> /etc/hosts
+          CHART_REGISTRY_HOST_GATEWAY_MAPPED=1
+          echo "Mapped ${CHART_REGISTRY_HOST} -> host.docker.internal (${_gw})"
+        fi
+      fi
+      if [ "${CHART_REGISTRY_HOST_GATEWAY_MAPPED}" = "1" ] && [ -z "${HELM_LOGIN_EXTRA}" ]; then
+        HELM_LOGIN_EXTRA="--insecure"
+      fi
+      export HELM_PLAIN_HTTP_FLAG HELM_LOGIN_EXTRA CHART_REGISTRY_HOST_GATEWAY_MAPPED
+      HELM_LOGIN_HOST="${CHART_REGISTRY_HOST}"
+      case "${HELM_LOGIN_HOST}" in
+        http://*|https://*) ;;
+        gitlab:5000 | gitlab)
+          HELM_LOGIN_HOST="http://${HELM_LOGIN_HOST}"
+          ;;
+        *)
+          if [ "${CHART_REGISTRY_PLAIN_HTTP}" = "true" ]; then
+            HELM_LOGIN_HOST="http://${HELM_LOGIN_HOST}"
+          else
+            HELM_LOGIN_HOST="https://${HELM_LOGIN_HOST}"
+          fi
+          ;;
+      esac
+      echo "Helm chart registry: ${CHART_REGISTRY_HOST} (login=${HELM_LOGIN_HOST}, oci=${CHART_OCI_REF}, plain_http=${CHART_REGISTRY_PLAIN_HTTP})"
+      echo "${CHART_REGISTRY_PASSWORD}" | helm registry login "${HELM_LOGIN_HOST}" \
+        --username "${CHART_REGISTRY_USER}" --password-stdin ${HELM_LOGIN_EXTRA}
+    # Create / refresh a Kubernetes docker-registry pull secret.
+    # Prefer durable instance vars K8S_REGISTRY_PULL_USER / K8S_REGISTRY_PULL_PASSWORD
+    # (read_registry PAT or deploy token). Fall back to the job token so greenfield
+    # deploys still work; job tokens expire, so Always pulls after deploy need the
+    # durable credentials.
+    - |
+      set -eu
+      PULL_USER="${K8S_REGISTRY_PULL_USER:-${CI_REGISTRY_USER}}"
+      PULL_PASS="${K8S_REGISTRY_PULL_PASSWORD:-${CI_REGISTRY_PASSWORD}}"
+      if [ -n "${K8S_REGISTRY_PULL_USER:-}" ]; then
+        echo "Using durable K8S_REGISTRY_PULL_* credentials for gitlab-registry-secret"
+      else
+        echo "WARN: K8S_REGISTRY_PULL_* unset — using job token (expires; set instance CI vars for Always pulls)"
+      fi
+      kubectl create secret docker-registry gitlab-registry-secret \
+        --docker-server="${CI_REGISTRY}" \
+        --docker-username="${PULL_USER}" \
+        --docker-password="${PULL_PASS}" \
+        --namespace="${KUBE_NAMESPACE:-$DEPLOY_ENV}" \
+        --dry-run=client -o yaml | kubectl apply -f -
+  script:
+    - |
+      # Pre-flight: if a previous run left the release in a pending-* state
+      # (pending-install / pending-upgrade / pending-rollback), helm upgrade
+      # refuses to proceed.  Roll back to the last good revision so the next
+      # upgrade can start cleanly.
+      RELEASE_NAME="${HELM_RELEASE_NAME:-$CI_PROJECT_NAME}"
+      RELEASE_STATUS=$(helm status "${RELEASE_NAME}" \
+        --namespace "${KUBE_NAMESPACE:-$DEPLOY_ENV}" 2>/dev/null | grep "^STATUS:" | awk '{print $2}' || true)
+      if echo "${RELEASE_STATUS}" | grep -qE "^pending-"; then
+        echo "Release ${RELEASE_NAME} is stuck in ${RELEASE_STATUS}; rolling back..."
+        helm rollback "${RELEASE_NAME}" 0 \
+          --namespace "${KUBE_NAMESPACE:-$DEPLOY_ENV}" \
+          --wait || helm uninstall "${RELEASE_NAME}" \
+          --namespace "${KUBE_NAMESPACE:-$DEPLOY_ENV}" || true
+      fi
+    - |
+      EXTRA_VALUES=""
+      if [ -f chart-values.yaml ]; then
+        EXTRA_VALUES="--values chart-values.yaml"
+      fi
+      # Fall back to DEPLOY_ENV if KUBE_NAMESPACE is not env-scoped by the API,
+      # so the deploy always lands in the correct namespace.
+      RELEASE_NAME="${HELM_RELEASE_NAME:-$CI_PROJECT_NAME}"
+      # Load Kaniko digest for THIS app. Multi-app deploy jobs are named
+      # deploy:<DEPLOY_ENV>-<KANIKO_IMAGE_NAME> (override with DSOAAS_IMAGE_NAME).
+      # Prefer per-app files under .dsoaas/image-digests/ so parallel builds cannot
+      # clobber a shared image-digest.env / dotenv report.
+      _dsoaas_image_name="${DSOAAS_IMAGE_NAME:-}"
+      if [ -z "${_dsoaas_image_name}" ] && [ -n "${CI_JOB_NAME:-}" ] && [ -n "${DEPLOY_ENV:-}" ]; then
+        _job_suffix="${CI_JOB_NAME#deploy:}"
+        case "${_job_suffix}" in
+          "${DEPLOY_ENV}-"*) _dsoaas_image_name="${_job_suffix#${DEPLOY_ENV}-}" ;;
+        esac
+      fi
+      _digest_file=""
+      if [ -n "${_dsoaas_image_name}" ] && [ -f "${CI_PROJECT_DIR}/.dsoaas/image-digests/${_dsoaas_image_name}.env" ]; then
+        _digest_file="${CI_PROJECT_DIR}/.dsoaas/image-digests/${_dsoaas_image_name}.env"
+      elif [ -f "${CI_PROJECT_DIR}/.dsoaas/image-digests/default.env" ]; then
+        _digest_file="${CI_PROJECT_DIR}/.dsoaas/image-digests/default.env"
+      elif [ -f "${CI_PROJECT_DIR}/.dsoaas/image-digest.env" ]; then
+        _digest_file="${CI_PROJECT_DIR}/.dsoaas/image-digest.env"
+      fi
+      if [ -n "${_digest_file}" ]; then
+        echo "Loading image digest from ${_digest_file}"
+        set -a
+        # shellcheck disable=SC1090
+        . "${_digest_file}"
+        set +a
+      fi
+      # Prefer digest from Kaniko when present — immutable ref forces a
+      # pod-template change even if the tag string is reused. Always + deploy-id
+      # remain as belt-and-suspenders for tag-only deploys / older charts.
+      IMAGE_REPO="${DSOAAS_IMAGE_REPOSITORY:-${CI_REGISTRY_IMAGE}}"
+      if [ -n "${DSOAAS_IMAGE_TAG:-}" ]; then
+        IMAGE_TAG="${DSOAAS_IMAGE_TAG}"
+      elif [ -n "${CI_COMMIT_TAG:-}" ]; then
+        IMAGE_TAG="${CI_COMMIT_TAG}"
+      else
+        IMAGE_TAG="${CI_COMMIT_SHORT_SHA}-${CI_COMMIT_REF_SLUG}"
+      fi
+      DIGEST_ARGS=""
+      if [ -n "${DSOAAS_IMAGE_DIGEST:-}" ]; then
+        echo "Deploying immutable digest ${DSOAAS_IMAGE_DIGEST} (repo=${IMAGE_REPO} tag=${IMAGE_TAG})"
+        DIGEST_ARGS="--set image.digest=${DSOAAS_IMAGE_DIGEST}"
+      fi
+      helm upgrade --install "${RELEASE_NAME}" "${CHART_OCI_REF}" \
+        --version "${CHART_VERSION}" ${HELM_PLAIN_HTTP_FLAG} \
+        --namespace "${KUBE_NAMESPACE:-$DEPLOY_ENV}" \
+        --set image.repository="${IMAGE_REPO}" \
+        --set image.tag="${IMAGE_TAG}" \
+        --set image.pullPolicy=Always \
+        ${DIGEST_ARGS} \
+        --set-string "podAnnotations.dsoaas-deploy-id=${CI_PIPELINE_ID}-${CI_JOB_ID}" \
+        --set ingress.host="${APP_HOST}" \
+        --set project.path="${VAULT_PROJECT_PATH}" \
+        --set project.env="${DEPLOY_ENV}" \
+        --set "imagePullSecrets[0].name=gitlab-registry-secret" \
+        --atomic \
+        --timeout "${HELM_TIMEOUT:-5m}" \
+        ${EXTRA_VALUES} \
+        ${EXTRA_HELM_ARGS:-}
+    - echo "Deployed ${HELM_RELEASE_NAME:-$CI_PROJECT_NAME} to ${DEPLOY_ENV} at https://${APP_HOST}"
+  after_script:
+    - rm -f /tmp/kube/config

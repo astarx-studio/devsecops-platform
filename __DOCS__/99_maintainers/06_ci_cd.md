@@ -254,13 +254,14 @@ The shared Auto DevOps template defines **`sonar:scan`** in the `test` stage (be
 
 | Variable | Purpose |
 |---|---|
-| `SONAR_ALLOWED_BRANCHES` | Comma-separated branch names; empty = job exits 0 without scanning |
+| `SONAR_ALLOWED_BRANCHES` | Comma-separated branch names; empty = job exits 0 without scanning on branches |
+| `SONAR_ALLOWED_TAGS` | Comma-separated tag names, or `*` / `.*` for every tag; empty = skip on tags |
 | `SONAR_TOKEN` | Masked analysis token |
 | `SONAR_HOST_URL` | Public URL for dashboard links in commit status |
 | `SONAR_HOST_URL_INTERNAL` | Scanner endpoint (default `http://sonarqube:9000` on `devops-network`) |
 | `SONAR_GATE_POLICY_JSON` | Per-tier gate: `optional` does not fail the job on QG failure; `required` fails |
 
-**Tier detection** uses the same refs as deploy jobs: `DEPLOY_DEV_REF`, `DEPLOY_STG_REF`, `DEPLOY_PROD_REF`. Unmatched branches use tier `other`.
+**Tier detection** on branch pipelines uses `DEPLOY_DEV_REF`, `DEPLOY_STG_REF`, `DEPLOY_PROD_REF`. On tag pipelines (`/.gitlab-ci.tags.yml`) it matches `CI_COMMIT_TAG` against `DEPLOY_DEV_TAG_PATTERN`, `DEPLOY_STG_TAG_PATTERN`, then `DEPLOY_PROD_TAG_PATTERN`. Unmatched refs use tier `other`.
 
 **Project keys:** `{CI_PROJECT_PATH_SLUG}_{CI_COMMIT_REF_SLUG}` (sanitized) — one Sonar project per branch (Community Build).
 
@@ -271,6 +272,29 @@ The shared Auto DevOps template defines **`sonar:scan`** in the `test` stage (be
 **Management API:** `updateProjectSonarConfig` syncs the variables above and stores tokens in Vault at `projects/<path>/sonar`.
 
 ---
+
+## Auto DevOps entry files (branch vs tag)
+
+Shared job bodies live in `configs/auto-devops-pipeline/ci/auto-devops-shared.yml` (Kaniko, test, Sonar, `.deploy-helm`, security templates). Apps **MUST NOT** include that file directly.
+
+| Include file | Deploy gate | Branch push |
+|---|---|---|
+| `/.gitlab-ci.yml` | `$CI_COMMIT_BRANCH == $DEPLOY_*_REF` | build, test, and deploy when the branch matches |
+| `/.gitlab-ci.tags.yml` | `$CI_COMMIT_TAG =~ $DEPLOY_*_TAG_PATTERN` | build and test only; deploy on matching tags |
+
+The Management API always writes the branch file (`AUTO_DEVOPS_PIPELINE_FILE`, default `.gitlab-ci.yml`). A project that wants tag deploys changes the `include: file` path by hand. Defaults:
+
+| Variable | Default | When |
+|---|---|---|
+| `DEPLOY_DEV_TAG_PATTERN` | `/^v[0-9]+\.[0-9]+\.[0-9]+-dev/` | auto (`v1.2.3-dev.1`) |
+| `DEPLOY_STG_TAG_PATTERN` | `/^v[0-9]+\.[0-9]+\.[0-9]+-rc/` | auto (`v1.2.3-rc.1`) |
+| `DEPLOY_PROD_TAG_PATTERN` | `/^v[0-9]+\.[0-9]+\.[0-9]+$/` | manual (`v1.2.3`) |
+
+`none` disables that target, same as `DEPLOY_*_REF`. On a tag pipeline Kaniko publishes `$CI_COMMIT_TAG` instead of `$CI_COMMIT_SHORT_SHA-$CI_COMMIT_REF_SLUG`.
+
+Generated `.dsoaas/build-jobs.gitlab-ci.yml` and `.dsoaas/deploy-targets.gitlab-ci.yml` stay branch-gated, and they disable the stock `build` and `deploy:dev|stg|prod` jobs. A console project **MUST** retarget those fragment rules (and **MUST** keep `environment.name` as `dev-<app>`) after switching the include. The next deployment-target save writes the branch include and the branch rules back, so the edits **MUST** be re-applied. Developer steps: [Convert a console project to tag deploys](../03_devs/05_deployments.md#convert-a-console-project-to-tag-deploys). `ci/deploy-targets.tags.example.yml` shows the rule shape.
+
+Pushing `configs/auto-devops-pipeline` itself does not run app jobs (`workflow: when: never` on both entry files). `bootstrap/seed-platform-projects.sh` syncs the whole directory, so the tag file is published with the branch file.
 
 ## Auto DevOps chart, pipeline, and registry (Phase 6.1)
 

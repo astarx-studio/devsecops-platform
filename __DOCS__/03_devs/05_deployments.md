@@ -26,6 +26,131 @@ Typical patterns (exact values come from your project's `appHosts` in MongoDB an
 
 ---
 
+## Convert a console project to tag deploys
+
+A project created in the operator console deploys when you push the branch stored in `deployRef` (`develop`, `staging`, and `main` unless you changed them). Tag deploys use the same cluster, Vault paths, and CI variables. You change which Git ref starts the deploy job.
+
+The console writes three CI pieces:
+
+| File | What it does today |
+|---|---|
+| Root `.gitlab-ci.yml` | Includes `configs/auto-devops-pipeline` file `/.gitlab-ci.yml` (branch gates), plus the two local files below |
+| `.dsoaas/build-jobs.gitlab-ci.yml` | Turns the stock `build` job off (`when: never`) and adds `build:<image>` when `$CI_COMMIT_BRANCH` equals `DEPLOY_*_REF` |
+| `.dsoaas/deploy-targets.gitlab-ci.yml` | Turns stock `deploy:dev`, `deploy:stg`, and `deploy:prod` off, and adds `deploy:<target>-<app>` on the same branch rule |
+
+`APP_HOST`, `KUBECONFIG_B64`, `KUBE_NAMESPACE`, `HELM_RELEASE_NAME`, and `VAULT_PROJECT_PATH` are scoped to `dev-<app>`, `stg-<app>`, and `prod-<app>`. The generated deploy job's `environment.name` matches that scope. You **MUST** keep those environment names. The stock jobs named `dev` / `stg` / `prod` do not see those variables.
+
+### 1. Confirm the tag pipeline is on GitLab
+
+The config project `configs/auto-devops-pipeline` **MUST** contain `/.gitlab-ci.tags.yml`. That file ships in this repo and is copied when the config project is seeded. If the include fails with a missing file, ask an admin to sync `configs/auto-devops-pipeline` before you change the app.
+
+### 2. Point the app at the tag pipeline
+
+In the app's root `.gitlab-ci.yml`, change only the shared-pipeline `file`. Leave the local `.dsoaas` includes and any `test:` job you added.
+
+```yaml
+include:
+  - project: "system/devsecops-platform/configs/auto-devops-pipeline"
+    file: "/.gitlab-ci.tags.yml"
+  - local: .dsoaas/deploy-targets.gitlab-ci.yml
+    rules:
+      - exists:
+          - .dsoaas/deploy-targets.gitlab-ci.yml
+  - local: .dsoaas/build-jobs.gitlab-ci.yml
+    rules:
+      - exists:
+          - .dsoaas/build-jobs.gitlab-ci.yml
+```
+
+That include alone does not deploy on tags. The `.dsoaas` files still wait for a branch and still disable the stock jobs.
+
+### 3. Retarget the generated jobs
+
+Edit the two `.dsoaas` files in the app repo. Do not change job names, `extends`, `variables`, or `environment.name`.
+
+**Builds** (`.dsoaas/build-jobs.gitlab-ci.yml`). Keep `build:` at `when: never`. On each `build:<image>` job, replace the `DEPLOY_*_REF` branch rules with branch builds plus the three tag patterns:
+
+```yaml
+build:portal:
+  extends: .build-kaniko
+  variables:
+    KANIKO_DOCKERFILE: "portal.Dockerfile"
+    KANIKO_IMAGE_NAME: "portal"
+  rules:
+    - if: '$CI_COMMIT_BRANCH'
+      when: on_success
+    - if: '$CI_COMMIT_TAG =~ $DEPLOY_DEV_TAG_PATTERN'
+      when: on_success
+    - if: '$CI_COMMIT_TAG =~ $DEPLOY_STG_TAG_PATTERN'
+      when: on_success
+    - if: '$CI_COMMIT_TAG =~ $DEPLOY_PROD_TAG_PATTERN'
+      when: on_success
+```
+
+**Deploys** (`.dsoaas/deploy-targets.gitlab-ci.yml`). Keep `deploy:dev`, `deploy:stg`, and `deploy:prod` at `when: never`. On each `deploy:<target>-<app>` job, replace the branch rule with that target's tag pattern.
+
+```yaml
+deploy:dev-portal:
+  extends: .deploy-helm
+  resource_group: deploy-dev
+  variables:
+    DEPLOY_ENV: dev
+  environment:
+    name: dev-portal
+    url: https://$APP_HOST
+  rules:
+    - if: '$DEPLOY_DEV_TAG_PATTERN == "none"'
+      when: never
+    - if: '$CI_COMMIT_TAG =~ $DEPLOY_DEV_TAG_PATTERN'
+      when: on_success
+
+deploy:prod-portal:
+  extends: .deploy-helm
+  resource_group: deploy-prod
+  variables:
+    DEPLOY_ENV: prod
+  environment:
+    name: prod-portal
+    url: https://$APP_HOST
+  rules:
+    - if: '$DEPLOY_PROD_TAG_PATTERN == "none"'
+      when: never
+    - if: '$CI_COMMIT_TAG =~ $DEPLOY_PROD_TAG_PATTERN'
+      when: manual
+      allow_failure: false
+```
+
+Use `DEPLOY_STG_TAG_PATTERN` and `when: on_success` for staging jobs. A full commented sample lives in `configs/auto-devops-pipeline/ci/deploy-targets.tags.example.yml`.
+
+Default patterns (already set by the tag pipeline; override under GitLab **Settings → CI/CD → Variables** with no environment scope):
+
+| Tag you push | Environment | Trigger | Variable |
+|---|---|---|---|
+| `v1.2.3-dev.1` | dev | automatic | `DEPLOY_DEV_TAG_PATTERN` = `/^v[0-9]+\.[0-9]+\.[0-9]+-dev/` |
+| `v1.2.3-rc.1` | stg | automatic | `DEPLOY_STG_TAG_PATTERN` = `/^v[0-9]+\.[0-9]+\.[0-9]+-rc/` |
+| `v1.2.3` | prod | manual (Play) | `DEPLOY_PROD_TAG_PATTERN` = `/^v[0-9]+\.[0-9]+\.[0-9]+$/` |
+
+Set a pattern to `none` to disable that environment. In the GitLab UI the prod pattern uses one `$`. You **MAY** leave `DEPLOY_*_REF` as the console wrote them; tag jobs do not read those variables.
+
+The image published from a tag pipeline is the Git tag (`v1.2.3`). Branch builds stay `<short-sha>-<branch>`.
+
+### 4. Push a tag and check the pipeline
+
+```bash
+git tag v0.1.0-dev.1
+git push origin v0.1.0-dev.1
+```
+
+The pipeline **MUST** show `build:<image>` and `deploy:dev-<app>`. A push to `develop` **MUST** still build and **MUST NOT** create a deploy job. `v0.1.0` **MUST** show `deploy:prod-<app>` as a manual job.
+
+Sonar on a tag stays skipped until `SONAR_TOKEN` and `SONAR_ALLOWED_TAGS` are set. `SONAR_ALLOWED_TAGS=*` scans every tag.
+
+### 5. Saving in the console puts branch rules back
+
+A deployment-target save in the operator console rewrites the root include to `/.gitlab-ci.yml` and regenerates both `.dsoaas` files with branch rules. After every console save you **MUST** repeat steps 2 and 3 before the next tag deploy. Custom `test:` jobs outside `include:` are kept.
+
+---
+
 ## Verifying a deployment
 
 1. **GitLab pipeline** — the latest pipeline for your default branch should pass build and deploy stages.

@@ -79,6 +79,8 @@ Empty `host` on an app is filled by the API using the derivation rules above.
 
 All `.dsoaas/*` fragment updates and the root `include:` merge are pushed in **one Git commit** per save (one pipeline run).
 
+That commit always uses the branch pipeline file (`/.gitlab-ci.yml`) and branch rules. A project converted to tag deploys **MUST** re-apply the include change and the `.dsoaas` rule edits after every save. Steps: [Convert a console project to tag deploys](./05_deployments.md#convert-a-console-project-to-tag-deploys).
+
 The shared pipeline (`configs/auto-devops-pipeline`) uses `HELM_RELEASE_NAME` (fallback `CI_PROJECT_NAME`) for `helm upgrade`, status, and rollback.
 
 ---
