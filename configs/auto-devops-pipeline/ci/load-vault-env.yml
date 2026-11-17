@@ -129,14 +129,61 @@
         echo "load-vault-env: no ci/index manifest at ${INDEX_PATH} — nothing to load"
         exit 0
       fi
-      BRANCH="${CI_COMMIT_REF_NAME:-}"
+      REF_NAME="${CI_COMMIT_REF_NAME:-}"
+      BRANCH="${REF_NAME}"
+      # BUILD profiles are stored against a git branch (for example "prod"), not the
+      # release tag. A matching tag uses that target's DEPLOY_*_REF so Vite args load.
+      _dsoaas_re() {
+        _p="$1"
+        case "${_p}" in
+          /*/) _p="${_p#/}"; _p="${_p%/}" ;;
+        esac
+        printf '%s' "${_p}"
+      }
+      _dsoaas_tag_matches() {
+        _pat="$1"
+        [ -n "${_pat}" ] || return 1
+        [ "${_pat}" = "none" ] && return 1
+        echo "${CI_COMMIT_TAG}" | grep -Eq -- "$(_dsoaas_re "${_pat}")"
+      }
+      if [ -n "${CI_COMMIT_TAG:-}" ]; then
+        _resolved=""
+        if _dsoaas_tag_matches "${DEPLOY_DEV_TAG_PATTERN:-}"; then
+          _resolved="${DEPLOY_DEV_REF:-}"
+        elif _dsoaas_tag_matches "${DEPLOY_STG_TAG_PATTERN:-}"; then
+          _resolved="${DEPLOY_STG_REF:-}"
+        elif _dsoaas_tag_matches "${DEPLOY_PROD_TAG_PATTERN:-}"; then
+          _resolved="${DEPLOY_PROD_REF:-}"
+        fi
+        if [ -n "${_resolved}" ] && [ "${_resolved}" != "none" ]; then
+          BRANCH="${_resolved}"
+          echo "load-vault-env: tag ${CI_COMMIT_TAG} uses build profiles for branch ${BRANCH}"
+        fi
+      fi
+      # Profile branch entries may be exact names or a shell glob such as "*-dev".
+      profile_covers_ref() {
+        _entry="$1"
+        [ "${_entry}" = "${BRANCH}" ] && return 0
+        [ "${_entry}" = "${REF_NAME}" ] && return 0
+        case "${REF_NAME}" in
+          ${_entry}) return 0 ;;
+        esac
+        return 1
+      }
       JOB_SELECTOR="${KANIKO_IMAGE_NAME:-${ENV_PROFILE_JOB_SELECTOR:-}}"
       vault_read_json "${INDEX_PATH}" | jq -c '._index_json | fromjson | .profiles[]?' | while IFS= read -r profile; do
         phase="$(echo "${profile}" | jq -r '.injectionPhase')"
         if [ "${phase}" != "build" ]; then
           continue
         fi
-        if ! echo "${profile}" | jq -e --arg b "${BRANCH}" '.branches | index($b) != null' >/dev/null; then
+        _covers=0
+        for _entry in $(echo "${profile}" | jq -r '.branches[]?'); do
+          if profile_covers_ref "${_entry}"; then
+            _covers=1
+            break
+          fi
+        done
+        if [ "${_covers}" != "1" ]; then
           continue
         fi
         profile_job="$(echo "${profile}" | jq -r '.jobSelector // ""')"
