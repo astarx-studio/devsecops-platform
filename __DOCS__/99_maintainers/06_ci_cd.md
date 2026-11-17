@@ -286,9 +286,9 @@ The Management API always writes the branch file (`AUTO_DEVOPS_PIPELINE_FILE`, d
 
 | Variable | Default | When |
 |---|---|---|
-| `DEPLOY_DEV_TAG_PATTERN` | `/^v[0-9]+\.[0-9]+\.[0-9]+-dev/` | auto (`v1.2.3-dev.1`) |
-| `DEPLOY_STG_TAG_PATTERN` | `/^v[0-9]+\.[0-9]+\.[0-9]+-rc/` | auto (`v1.2.3-rc.1`) |
-| `DEPLOY_PROD_TAG_PATTERN` | `/^v[0-9]+\.[0-9]+\.[0-9]+$/` | manual (`v1.2.3`) |
+| `DEPLOY_DEV_TAG_PATTERN` | `/^v?[0-9]+\.[0-9]+\.[0-9]+-dev/` | auto (`0.166.0-dev.1` or `v1.2.3-dev.1`) |
+| `DEPLOY_STG_TAG_PATTERN` | `/^v?[0-9]+\.[0-9]+\.[0-9]+-rc/` | auto (`0.166.0-rc.1` or `v1.2.3-rc.1`) |
+| `DEPLOY_PROD_TAG_PATTERN` | `/^v?[0-9]+\.[0-9]+\.[0-9]+$/` | manual (`0.166.0` or `v1.2.3`) |
 
 `none` disables that target, same as `DEPLOY_*_REF`. On a tag pipeline Kaniko publishes `$CI_COMMIT_TAG` instead of `$CI_COMMIT_SHORT_SHA-$CI_COMMIT_REF_SLUG`.
 

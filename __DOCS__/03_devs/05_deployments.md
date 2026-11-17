@@ -126,9 +126,9 @@ Default patterns (already set by the tag pipeline; override under GitLab **Setti
 
 | Tag you push | Environment | Trigger | Variable |
 |---|---|---|---|
-| `v1.2.3-dev.1` | dev | automatic | `DEPLOY_DEV_TAG_PATTERN` = `/^v[0-9]+\.[0-9]+\.[0-9]+-dev/` |
-| `v1.2.3-rc.1` | stg | automatic | `DEPLOY_STG_TAG_PATTERN` = `/^v[0-9]+\.[0-9]+\.[0-9]+-rc/` |
-| `v1.2.3` | prod | manual (Play) | `DEPLOY_PROD_TAG_PATTERN` = `/^v[0-9]+\.[0-9]+\.[0-9]+$/` |
+| `0.166.0-dev.1` or `v1.2.3-dev.1` | dev | automatic | `DEPLOY_DEV_TAG_PATTERN` = `/^v?[0-9]+\.[0-9]+\.[0-9]+-dev/` |
+| `0.166.0-rc.1` or `v1.2.3-rc.1` | stg | automatic | `DEPLOY_STG_TAG_PATTERN` = `/^v?[0-9]+\.[0-9]+\.[0-9]+-rc/` |
+| `0.166.0` or `v1.2.3` | prod | manual (Play) | `DEPLOY_PROD_TAG_PATTERN` = `/^v?[0-9]+\.[0-9]+\.[0-9]+$/` |
 
 Set a pattern to `none` to disable that environment. In the GitLab UI the prod pattern uses one `$`. You **MAY** leave `DEPLOY_*_REF` as the console wrote them; tag jobs do not read those variables.
 

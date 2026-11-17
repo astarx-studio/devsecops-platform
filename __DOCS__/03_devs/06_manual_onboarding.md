@@ -253,9 +253,9 @@ Branch pushes still build and test. Deploy jobs run only when the tag matches a 
 
 | Tag | Environment | Trigger | Variable |
 |---|---|---|---|
-| `v1.2.3-dev.1` | dev | auto | `DEPLOY_DEV_TAG_PATTERN` (default `/^v[0-9]+\.[0-9]+\.[0-9]+-dev/`) |
-| `v1.2.3-rc.1` | stg | auto | `DEPLOY_STG_TAG_PATTERN` (default `/^v[0-9]+\.[0-9]+\.[0-9]+-rc/`) |
-| `v1.2.3` | prod | **manual** | `DEPLOY_PROD_TAG_PATTERN` (default `/^v[0-9]+\.[0-9]+\.[0-9]+$/`) |
+| `0.166.0-dev.1` or `v1.2.3-dev.1` | dev | auto | `DEPLOY_DEV_TAG_PATTERN` (default `/^v?[0-9]+\.[0-9]+\.[0-9]+-dev/`) |
+| `0.166.0-rc.1` or `v1.2.3-rc.1` | stg | auto | `DEPLOY_STG_TAG_PATTERN` (default `/^v?[0-9]+\.[0-9]+\.[0-9]+-rc/`) |
+| `0.166.0` or `v1.2.3` | prod | **manual** | `DEPLOY_PROD_TAG_PATTERN` (default `/^v?[0-9]+\.[0-9]+\.[0-9]+$/`) |
 
 Override a pattern under **Settings → CI/CD → Variables** (no environment scope). Set the value to `none` to disable that target. In the GitLab UI type a single `$` at the end of the prod pattern. The YAML default writes `$$` so CI expansion keeps the end anchor.
 
