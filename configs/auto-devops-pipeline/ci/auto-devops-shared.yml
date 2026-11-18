@@ -35,6 +35,7 @@
 #   DEPLOY_PROD_REF       Branch that triggers prod deploy (branch entry; default: main)
 #   DEPLOY_<KEY>_REF      Per-target refs for custom targets (e.g. DEPLOY_PROD_ALT_REF)
 #   DEPLOY_*_TAG_PATTERN  Tag-entry regex (see /.gitlab-ci.tags.yml). "none" disables that target.
+#   DSOAAS_RUN_BRANCH_PIPELINES  Tag entry only: "true" runs CI on branch push (default false).
 #
 #   Set any DEPLOY_*_REF or DEPLOY_*_TAG_PATTERN to "none" to disable deploy jobs for that target.
 #   The Management API sets DEPLOY_*_REF to "none" when a target is disabled.
@@ -421,6 +422,18 @@ sonar:scan:
 container_scanning:
   rules:
     - when: never
+
+# GitLab Jobs/SAST and Jobs/Secret-Detection default rules are branch (and MR)
+# only, so tag release pipelines skip them even when the entry file runs test.
+semgrep-sast:
+  rules:
+    - if: "$CI_COMMIT_BRANCH"
+    - if: "$CI_COMMIT_TAG"
+
+secret_detection:
+  rules:
+    - if: "$CI_COMMIT_BRANCH"
+    - if: "$CI_COMMIT_TAG"
 
 # =============================================================================
 # .deploy-helm — base hidden job for all environment deployments.

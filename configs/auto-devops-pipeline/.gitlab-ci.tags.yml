@@ -2,7 +2,9 @@
 # DSOaaS Auto DevOps Pipeline (tag deploys)
 # =============================================================================
 # Same jobs as /.gitlab-ci.yml, but deploy runs on Git tags instead of branches.
-# Branch pushes still build and test. They do not deploy.
+# Branch pushes do not create a pipeline by default (no build/test burn on prod).
+# Opt in: CI/CD variable DSOAAS_RUN_BRANCH_PIPELINES=true (no env scope).
+# Merge requests, manual/API runs, and schedules always create a pipeline.
 #
 # Switch an app by changing only the include file:
 #
@@ -32,16 +34,26 @@ workflow:
   rules:
     - if: '$CI_PROJECT_PATH == "system/devsecops-platform/configs/auto-devops-pipeline"'
       when: never
-    - when: always
+    - if: "$CI_COMMIT_TAG"
+      when: always
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      when: always
+    - if: '$CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api" || $CI_PIPELINE_SOURCE == "schedule"'
+      when: always
+    - if: '$CI_COMMIT_BRANCH && $DSOAAS_RUN_BRANCH_PIPELINES == "true"'
+      when: always
+    - when: never
 
 variables:
+  DSOAAS_RUN_BRANCH_PIPELINES: "false"
   # $$ becomes a single $ so the regex end-anchor survives CI variable expansion.
   # In the GitLab UI, type one $ (the UI does not use $$).
   DEPLOY_DEV_TAG_PATTERN: '/^v?[0-9]+\.[0-9]+\.[0-9]+-dev/'
   DEPLOY_STG_TAG_PATTERN: '/^v?[0-9]+\.[0-9]+\.[0-9]+-rc/'
   DEPLOY_PROD_TAG_PATTERN: '/^v?[0-9]+\.[0-9]+\.[0-9]+$$/'
 
-# Build and test on branch pushes and on tag pushes. Deploy stays tag-only.
+# Build and test on tag pushes and on branch pipelines (MR, manual, or opt-in push).
+# Deploy stays tag-only.
 prepare-build-env:
   rules:
     - if: "$CI_COMMIT_BRANCH"

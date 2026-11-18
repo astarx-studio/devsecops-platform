@@ -32,10 +32,10 @@ A project created in the operator console deploys when you push the branch store
 
 The console writes three CI pieces:
 
-| File | What it does today |
-|---|---|
-| Root `.gitlab-ci.yml` | Includes `configs/auto-devops-pipeline` file `/.gitlab-ci.yml` (branch gates), plus the two local files below |
-| `.dsoaas/build-jobs.gitlab-ci.yml` | Turns the stock `build` job off (`when: never`) and adds `build:<image>` when `$CI_COMMIT_BRANCH` equals `DEPLOY_*_REF` |
+| File                                   | What it does today                                                                                                      |
+| -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| Root `.gitlab-ci.yml`                  | Includes `configs/auto-devops-pipeline` file `/.gitlab-ci.yml` (branch gates), plus the two local files below           |
+| `.dsoaas/build-jobs.gitlab-ci.yml`     | Turns the stock `build` job off (`when: never`) and adds `build:<image>` when `$CI_COMMIT_BRANCH` equals `DEPLOY_*_REF` |
 | `.dsoaas/deploy-targets.gitlab-ci.yml` | Turns stock `deploy:dev`, `deploy:stg`, and `deploy:prod` off, and adds `deploy:<target>-<app>` on the same branch rule |
 
 `APP_HOST`, `KUBECONFIG_B64`, `KUBE_NAMESPACE`, `HELM_RELEASE_NAME`, and `VAULT_PROJECT_PATH` are scoped to `dev-<app>`, `stg-<app>`, and `prod-<app>`. The generated deploy job's `environment.name` matches that scope. You **MUST** keep those environment names. The stock jobs named `dev` / `stg` / `prod` do not see those variables.
@@ -64,6 +64,8 @@ include:
 
 That include alone does not deploy on tags. The `.dsoaas` files still wait for a branch and still disable the stock jobs.
 
+With `/.gitlab-ci.tags.yml`, a normal **branch push does not start a pipeline** (no build/test without a tag). Release CI runs when you push a matching tag. To run build/test on every branch push again, set project variable `DSOAAS_RUN_BRANCH_PIPELINES` to `true` (no environment scope). Merge requests and **Run pipeline** in the GitLab UI still run CI without that variable.
+
 ### 3. Retarget the generated jobs
 
 Edit the two `.dsoaas` files in the app repo. Do not change job names, `extends`, `variables`, or `environment.name`.
@@ -77,13 +79,13 @@ build:portal:
     KANIKO_DOCKERFILE: "portal.Dockerfile"
     KANIKO_IMAGE_NAME: "portal"
   rules:
-    - if: '$CI_COMMIT_BRANCH'
+    - if: "$CI_COMMIT_BRANCH"
       when: on_success
-    - if: '$CI_COMMIT_TAG =~ $DEPLOY_DEV_TAG_PATTERN'
+    - if: "$CI_COMMIT_TAG =~ $DEPLOY_DEV_TAG_PATTERN"
       when: on_success
-    - if: '$CI_COMMIT_TAG =~ $DEPLOY_STG_TAG_PATTERN'
+    - if: "$CI_COMMIT_TAG =~ $DEPLOY_STG_TAG_PATTERN"
       when: on_success
-    - if: '$CI_COMMIT_TAG =~ $DEPLOY_PROD_TAG_PATTERN'
+    - if: "$CI_COMMIT_TAG =~ $DEPLOY_PROD_TAG_PATTERN"
       when: on_success
 ```
 
@@ -101,7 +103,7 @@ deploy:dev-portal:
   rules:
     - if: '$DEPLOY_DEV_TAG_PATTERN == "none"'
       when: never
-    - if: '$CI_COMMIT_TAG =~ $DEPLOY_DEV_TAG_PATTERN'
+    - if: "$CI_COMMIT_TAG =~ $DEPLOY_DEV_TAG_PATTERN"
       when: on_success
 
 deploy:prod-portal:
@@ -115,7 +117,7 @@ deploy:prod-portal:
   rules:
     - if: '$DEPLOY_PROD_TAG_PATTERN == "none"'
       when: never
-    - if: '$CI_COMMIT_TAG =~ $DEPLOY_PROD_TAG_PATTERN'
+    - if: "$CI_COMMIT_TAG =~ $DEPLOY_PROD_TAG_PATTERN"
       when: manual
       allow_failure: false
 ```
@@ -124,11 +126,11 @@ Use `DEPLOY_STG_TAG_PATTERN` and `when: on_success` for staging jobs. A full com
 
 Default patterns (already set by the tag pipeline; override under GitLab **Settings → CI/CD → Variables** with no environment scope):
 
-| Tag you push | Environment | Trigger | Variable |
-|---|---|---|---|
-| `0.166.0-dev.1` or `v1.2.3-dev.1` | dev | automatic | `DEPLOY_DEV_TAG_PATTERN` = `/^v?[0-9]+\.[0-9]+\.[0-9]+-dev/` |
-| `0.166.0-rc.1` or `v1.2.3-rc.1` | stg | automatic | `DEPLOY_STG_TAG_PATTERN` = `/^v?[0-9]+\.[0-9]+\.[0-9]+-rc/` |
-| `0.166.0` or `v1.2.3` | prod | manual (Play) | `DEPLOY_PROD_TAG_PATTERN` = `/^v?[0-9]+\.[0-9]+\.[0-9]+$/` |
+| Tag you push                      | Environment | Trigger       | Variable                                                     |
+| --------------------------------- | ----------- | ------------- | ------------------------------------------------------------ |
+| `0.166.0-dev.1` or `v1.2.3-dev.1` | dev         | automatic     | `DEPLOY_DEV_TAG_PATTERN` = `/^v?[0-9]+\.[0-9]+\.[0-9]+-dev/` |
+| `0.166.0-rc.1` or `v1.2.3-rc.1`   | stg         | automatic     | `DEPLOY_STG_TAG_PATTERN` = `/^v?[0-9]+\.[0-9]+\.[0-9]+-rc/`  |
+| `0.166.0` or `v1.2.3`             | prod        | manual (Play) | `DEPLOY_PROD_TAG_PATTERN` = `/^v?[0-9]+\.[0-9]+\.[0-9]+$/`   |
 
 Set a pattern to `none` to disable that environment. In the GitLab UI the prod pattern uses one `$`. You **MAY** leave `DEPLOY_*_REF` as the console wrote them; tag jobs do not read those variables.
 

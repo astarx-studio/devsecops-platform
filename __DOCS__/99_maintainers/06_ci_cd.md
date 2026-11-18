@@ -38,20 +38,21 @@ The generated `config.toml` is stored at `.vols/gitlab-runner/config/config.toml
 
 ### Key configuration parameters
 
-| Parameter | Value | Notes |
-|---|---|---|
-| `concurrent` | `4` | Max parallel jobs |
-| `executor` | `docker` | All jobs run in fresh containers |
-| `image` | `docker:latest` | Default job image |
-| `privileged` | `true` | Required for DinD builds |
-| `network_mode` | `${DOCKER_NETWORK}` | Jobs can reach platform services by DNS name |
-| `clone_url` | `http://gitlab` | Internal URL for git clone (avoids public DNS) |
-| `volumes` | `/cache`, `/certs/client` | Shared cache and DinD TLS certs |
-| `request_concurrency` | `4` | Max concurrent requests to GitLab per runner |
+| Parameter             | Value                     | Notes                                          |
+| --------------------- | ------------------------- | ---------------------------------------------- |
+| `concurrent`          | `4`                       | Max parallel jobs                              |
+| `executor`            | `docker`                  | All jobs run in fresh containers               |
+| `image`               | `docker:latest`           | Default job image                              |
+| `privileged`          | `true`                    | Required for DinD builds                       |
+| `network_mode`        | `${DOCKER_NETWORK}`       | Jobs can reach platform services by DNS name   |
+| `clone_url`           | `http://gitlab`           | Internal URL for git clone (avoids public DNS) |
+| `volumes`             | `/cache`, `/certs/client` | Shared cache and DinD TLS certs                |
+| `request_concurrency` | `4`                       | Max concurrent requests to GitLab per runner   |
 
 ### Why `network_mode` matters
 
 Setting `network_mode` to `devops-network` means every CI job container is automatically on the platform's internal network. This allows:
+
 - Jobs to push/pull from `${GITLAB_REGISTRY_DOMAIN}` (container registry) using the internal hostname.
 - Jobs to read Vault secrets at `http://vault:8200`.
 - Jobs to publish npm packages to `http://gitlab/api/v4/projects/...`.
@@ -90,14 +91,15 @@ graph TD
 
 Provides reusable hidden jobs for Node.js (pnpm) projects:
 
-| Job | Stage | Trigger | Description |
-|---|---|---|---|
-| `.node-lint` | `lint` | MR or default branch | `pnpm run lint` |
-| `.node-test` | `test` | MR or default branch | `pnpm run test` (with coverage regex) |
-| `.node-build` | `build` | Default branch only | `pnpm run build` — artifacts: `dist/` (1h TTL) |
-| `.node-publish` | `deploy` | Tag `v*.*.*` | Publishes to GitLab npm registry via `.npmrc` with `$CI_JOB_TOKEN` |
+| Job             | Stage    | Trigger              | Description                                                        |
+| --------------- | -------- | -------------------- | ------------------------------------------------------------------ |
+| `.node-lint`    | `lint`   | MR or default branch | `pnpm run lint`                                                    |
+| `.node-test`    | `test`   | MR or default branch | `pnpm run test` (with coverage regex)                              |
+| `.node-build`   | `build`  | Default branch only  | `pnpm run build` — artifacts: `dist/` (1h TTL)                     |
+| `.node-publish` | `deploy` | Tag `v*.*.*`         | Publishes to GitLab npm registry via `.npmrc` with `$CI_JOB_TOKEN` |
 
 The `.node-publish` job writes a `.npmrc` at job runtime:
+
 ```
 //${CI_SERVER_HOST}/api/v4/projects/${CI_PROJECT_ID}/packages/npm/:_authToken=${CI_JOB_TOKEN}
 @${CI_PROJECT_ROOT_NAMESPACE}:registry=https://${CI_SERVER_HOST}/api/v4/projects/${CI_PROJECT_ID}/packages/npm/
@@ -109,10 +111,10 @@ The `.node-publish` job writes a `.npmrc` at job runtime:
 
 Provides two Docker image build and push hidden jobs:
 
-| Job | Stage | Trigger | Description |
-|---|---|---|---|
-| `.docker-build` | `build` | Default branch only | Builds and pushes `$CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA` + `$CI_REGISTRY_IMAGE:latest`. Uses `--cache-from latest` for layer caching. |
-| `.docker-build-tagged` | `build` | Tag `v*.*.*` | Extends `.docker-build` but tags as `$CI_REGISTRY_IMAGE:$CI_COMMIT_TAG` instead of `latest`. |
+| Job                    | Stage   | Trigger             | Description                                                                                                                              |
+| ---------------------- | ------- | ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `.docker-build`        | `build` | Default branch only | Builds and pushes `$CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA` + `$CI_REGISTRY_IMAGE:latest`. Uses `--cache-from latest` for layer caching. |
+| `.docker-build-tagged` | `build` | Tag `v*.*.*`        | Extends `.docker-build` but tags as `$CI_REGISTRY_IMAGE:$CI_COMMIT_TAG` instead of `latest`.                                             |
 
 Both jobs use `docker:dind` as a service and require `DOCKER_TLS_CERTDIR="/certs"` for DinD TLS communication.
 
@@ -120,22 +122,22 @@ Both jobs use `docker:dind` as a service and require `DOCKER_TLS_CERTDIR="/certs
 
 Provides Docker Compose deployment jobs:
 
-| Job | Trigger | Description |
-|---|---|---|
-| `.deploy-compose` | Default branch — manual | Pulls image, runs `docker compose up -d` |
+| Job                    | Trigger                    | Description                              |
+| ---------------------- | -------------------------- | ---------------------------------------- |
+| `.deploy-compose`      | Default branch — manual    | Pulls image, runs `docker compose up -d` |
 | `.deploy-compose-auto` | Default branch — automatic | Same as above but triggers automatically |
 
 **Environment variables used:**
 
-| Variable | Source | Description |
-|---|---|---|
-| `CI_REGISTRY_USER` | GitLab built-in | Registry auth username |
-| `CI_REGISTRY_PASSWORD` | GitLab built-in | Registry auth password |
-| `CI_REGISTRY` | GitLab built-in | Registry hostname |
-| `CI_REGISTRY_IMAGE` | GitLab built-in | Full image path |
-| `CI_PROJECT_NAME` | GitLab built-in | Used as compose project name |
-| `COMPOSE_FILE` | Optional CI variable | Override compose file path (default: `docker-compose.yml`) |
-| `COMPOSE_PROJECT_NAME` | Optional CI variable | Override compose project name |
+| Variable               | Source               | Description                                                |
+| ---------------------- | -------------------- | ---------------------------------------------------------- |
+| `CI_REGISTRY_USER`     | GitLab built-in      | Registry auth username                                     |
+| `CI_REGISTRY_PASSWORD` | GitLab built-in      | Registry auth password                                     |
+| `CI_REGISTRY`          | GitLab built-in      | Registry hostname                                          |
+| `CI_REGISTRY_IMAGE`    | GitLab built-in      | Full image path                                            |
+| `CI_PROJECT_NAME`      | GitLab built-in      | Used as compose project name                               |
+| `COMPOSE_FILE`         | Optional CI variable | Override compose file path (default: `docker-compose.yml`) |
+| `COMPOSE_PROJECT_NAME` | Optional CI variable | Override compose project name                              |
 
 ---
 
@@ -229,20 +231,20 @@ This allows operators to specify configs at provisioning time without pre-embedd
 
 These variables are available in all jobs and are used by the shared configs:
 
-| Variable | Source | Description |
-|---|---|---|
-| `CI_SERVER_HOST` | GitLab built-in | Hostname of the GitLab instance |
-| `CI_PROJECT_ID` | GitLab built-in | Numeric project ID |
-| `CI_PROJECT_NAME` | GitLab built-in | Project name (slug) |
-| `CI_PROJECT_ROOT_NAMESPACE` | GitLab built-in | Top-level namespace |
-| `CI_COMMIT_BRANCH` | GitLab built-in | Current branch name |
-| `CI_DEFAULT_BRANCH` | GitLab built-in | Project's default branch |
-| `CI_PIPELINE_SOURCE` | GitLab built-in | `push`, `merge_request_event`, etc. |
-| `CI_COMMIT_TAG` | GitLab built-in | Tag name (if triggered by tag push) |
-| `CI_REGISTRY` | GitLab built-in | Container registry hostname |
-| `CI_REGISTRY_IMAGE` | GitLab built-in | Full image path |
-| `CI_REGISTRY_USER` / `CI_REGISTRY_PASSWORD` | GitLab built-in | Registry auth |
-| `CI_JOB_TOKEN` | GitLab built-in | Short-lived token for package/registry auth |
+| Variable                                    | Source          | Description                                 |
+| ------------------------------------------- | --------------- | ------------------------------------------- |
+| `CI_SERVER_HOST`                            | GitLab built-in | Hostname of the GitLab instance             |
+| `CI_PROJECT_ID`                             | GitLab built-in | Numeric project ID                          |
+| `CI_PROJECT_NAME`                           | GitLab built-in | Project name (slug)                         |
+| `CI_PROJECT_ROOT_NAMESPACE`                 | GitLab built-in | Top-level namespace                         |
+| `CI_COMMIT_BRANCH`                          | GitLab built-in | Current branch name                         |
+| `CI_DEFAULT_BRANCH`                         | GitLab built-in | Project's default branch                    |
+| `CI_PIPELINE_SOURCE`                        | GitLab built-in | `push`, `merge_request_event`, etc.         |
+| `CI_COMMIT_TAG`                             | GitLab built-in | Tag name (if triggered by tag push)         |
+| `CI_REGISTRY`                               | GitLab built-in | Container registry hostname                 |
+| `CI_REGISTRY_IMAGE`                         | GitLab built-in | Full image path                             |
+| `CI_REGISTRY_USER` / `CI_REGISTRY_PASSWORD` | GitLab built-in | Registry auth                               |
+| `CI_JOB_TOKEN`                              | GitLab built-in | Short-lived token for package/registry auth |
 
 Project-specific secrets (from OpenBao) are not automatically injected into CI jobs. If a project needs OpenBao secrets in CI, the pipeline must include an explicit step that reads Vault (for example via `vault` CLI in a job image) or uses another approved secret flow.
 
@@ -252,14 +254,14 @@ Project-specific secrets (from OpenBao) are not automatically injected into CI j
 
 The shared Auto DevOps template defines **`sonar:scan`** in the `test` stage (before `deploy`). It is **opt-in** per GitLab project:
 
-| Variable | Purpose |
-|---|---|
-| `SONAR_ALLOWED_BRANCHES` | Comma-separated branch names; empty = job exits 0 without scanning on branches |
-| `SONAR_ALLOWED_TAGS` | Comma-separated tag names, or `*` / `.*` for every tag; empty = skip on tags |
-| `SONAR_TOKEN` | Masked analysis token |
-| `SONAR_HOST_URL` | Public URL for dashboard links in commit status |
-| `SONAR_HOST_URL_INTERNAL` | Scanner endpoint (default `http://sonarqube:9000` on `devops-network`) |
-| `SONAR_GATE_POLICY_JSON` | Per-tier gate: `optional` does not fail the job on QG failure; `required` fails |
+| Variable                  | Purpose                                                                         |
+| ------------------------- | ------------------------------------------------------------------------------- |
+| `SONAR_ALLOWED_BRANCHES`  | Comma-separated branch names; empty = job exits 0 without scanning on branches  |
+| `SONAR_ALLOWED_TAGS`      | Comma-separated tag names, or `*` / `.*` for every tag; empty = skip on tags    |
+| `SONAR_TOKEN`             | Masked analysis token                                                           |
+| `SONAR_HOST_URL`          | Public URL for dashboard links in commit status                                 |
+| `SONAR_HOST_URL_INTERNAL` | Scanner endpoint (default `http://sonarqube:9000` on `devops-network`)          |
+| `SONAR_GATE_POLICY_JSON`  | Per-tier gate: `optional` does not fail the job on QG failure; `required` fails |
 
 **Tier detection** on branch pipelines uses `DEPLOY_DEV_REF`, `DEPLOY_STG_REF`, `DEPLOY_PROD_REF`. On tag pipelines (`/.gitlab-ci.tags.yml`) it matches `CI_COMMIT_TAG` against `DEPLOY_DEV_TAG_PATTERN`, `DEPLOY_STG_TAG_PATTERN`, then `DEPLOY_PROD_TAG_PATTERN`. Unmatched refs use tier `other`.
 
@@ -277,18 +279,22 @@ The shared Auto DevOps template defines **`sonar:scan`** in the `test` stage (be
 
 Shared job bodies live in `configs/auto-devops-pipeline/ci/auto-devops-shared.yml` (Kaniko, test, Sonar, `.deploy-helm`, security templates). Apps **MUST NOT** include that file directly.
 
-| Include file | Deploy gate | Branch push |
-|---|---|---|
-| `/.gitlab-ci.yml` | `$CI_COMMIT_BRANCH == $DEPLOY_*_REF` | build, test, and deploy when the branch matches |
-| `/.gitlab-ci.tags.yml` | `$CI_COMMIT_TAG =~ $DEPLOY_*_TAG_PATTERN` | build and test only; deploy on matching tags |
+| Include file           | Deploy gate                               | Branch push                                                                                           |
+| ---------------------- | ----------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `/.gitlab-ci.yml`      | `$CI_COMMIT_BRANCH == $DEPLOY_*_REF`      | build, test, and deploy when the branch matches                                                       |
+| `/.gitlab-ci.tags.yml` | `$CI_COMMIT_TAG =~ $DEPLOY_*_TAG_PATTERN` | deploy on matching tags; branch **push** skips the pipeline unless `DSOAAS_RUN_BRANCH_PIPELINES=true` |
+
+Tag-entry **workflow** still runs pipelines for tags, merge requests, and manual/API runs. Branch push is off by default so integration branches do not burn runners without a release tag.
+
+Stock GitLab SAST and Secret Detection jobs use branch-only rules upstream. `auto-devops-shared.yml` overrides `semgrep-sast` and `secret_detection` so tag release pipelines run the same security jobs as branch pipelines. Container Scanning stays disabled (`container_scanning: when: never`).
 
 The Management API always writes the branch file (`AUTO_DEVOPS_PIPELINE_FILE`, default `.gitlab-ci.yml`). A project that wants tag deploys changes the `include: file` path by hand. Defaults:
 
-| Variable | Default | When |
-|---|---|---|
-| `DEPLOY_DEV_TAG_PATTERN` | `/^v?[0-9]+\.[0-9]+\.[0-9]+-dev/` | auto (`0.166.0-dev.1` or `v1.2.3-dev.1`) |
-| `DEPLOY_STG_TAG_PATTERN` | `/^v?[0-9]+\.[0-9]+\.[0-9]+-rc/` | auto (`0.166.0-rc.1` or `v1.2.3-rc.1`) |
-| `DEPLOY_PROD_TAG_PATTERN` | `/^v?[0-9]+\.[0-9]+\.[0-9]+$/` | manual (`0.166.0` or `v1.2.3`) |
+| Variable                  | Default                           | When                                     |
+| ------------------------- | --------------------------------- | ---------------------------------------- |
+| `DEPLOY_DEV_TAG_PATTERN`  | `/^v?[0-9]+\.[0-9]+\.[0-9]+-dev/` | auto (`0.166.0-dev.1` or `v1.2.3-dev.1`) |
+| `DEPLOY_STG_TAG_PATTERN`  | `/^v?[0-9]+\.[0-9]+\.[0-9]+-rc/`  | auto (`0.166.0-rc.1` or `v1.2.3-rc.1`)   |
+| `DEPLOY_PROD_TAG_PATTERN` | `/^v?[0-9]+\.[0-9]+\.[0-9]+$/`    | manual (`0.166.0` or `v1.2.3`)           |
 
 `none` disables that target, same as `DEPLOY_*_REF`. On a tag pipeline Kaniko publishes `$CI_COMMIT_TAG` instead of `$CI_COMMIT_SHORT_SHA-$CI_COMMIT_REF_SLUG`.
 
